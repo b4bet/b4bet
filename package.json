@@ -9,7 +9,9 @@
     "build": "vite build --config vite.config.ts",
     "serve": "vite preview --config vite.config.ts --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build:dev": "vite build --mode development --config vite.config.ts"
+    "build:dev": "vite build --mode development --config vite.config.ts",
+    "deploy": "pnpm run build && wrangler deploy",
+    "preview": "pnpm run build && wrangler dev"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.2",
@@ -17,6 +19,7 @@
     "vaul": "^1.1.2"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.45.0",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "^1.2.4",
     "@radix-ui/react-alert-dialog": "^1.1.7",
@@ -76,6 +79,7 @@
     "tw-animate-css": "^1.4.0",
     "vite": "6.2.2",
     "wouter": "^3.1.2",
+    "wrangler": "^4.111.0",
     "zod": "^3.23.8"
   }
 }

@@ -5,6 +5,10 @@ import { defineConfig } from 'vite';
 
 
 
+import { cloudflare } from "@cloudflare/vite-plugin";
+
+
+
 const rawPort = process.env.PORT || '8080';
 const port = Number(rawPort);
 
@@ -17,10 +21,7 @@ const __dirname = import.meta.dirname;
 
 export default defineConfig({
   base: basePath,
-  plugins: [
-    react(),
-    tailwindcss(),
-  ],
+  plugins: [react(), tailwindcss(), cloudflare()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, 'src'),
