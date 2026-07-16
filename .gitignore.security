@@ -1,0 +1,98 @@
+# ============================================================================
+# SECURITY: Files that must NEVER be committed
+# ============================================================================
+# Add all these patterns to your .gitignore file
+
+# Environment variables (ALL must be ignored!)
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+.env.test
+
+# Supabase local setup
+supabase/.temp/
+supabase/seed.sql
+
+# Node modules (can be huge, use npm ci)
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Build outputs (secrets might be in here)
+.next/
+dist/
+build/
+out/
+
+# IDE secrets
+.vscode/launch.json
+.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+.env.*.swp
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Private keys and certificates
+*.pem
+*.key
+*.cert
+*.p8
+*.p12
+
+# Database dumps
+*.sql.bak
+*.dump
+*.backup
+
+# Logs that might contain secrets
+logs/
+*.log
+
+# Coverage reports (might contain test data)
+coverage/
+.nyc_output/
+
+# Secrets manager files
+.credentials
+.aws/credentials
+.aws/config
+
+# History files (might contain commands with secrets)
+.history/
+.bash_history
+.zsh_history
+
+# ============================================================================
+# DO commit these (they're safe):
+# ============================================================================
+# .env.example
+# .env.local.example
+# .env.production.example
+# 
+# These are templates showing what variables are needed, but with no real values
+
+# ============================================================================
+# VERIFY YOUR .gitignore
+# ============================================================================
+#
+# Run this command to check if any secrets are tracked:
+# git log -p --all -S "SUPABASE_SERVICE_ROLE_KEY"
+# 
+# If this finds anything, you need to:
+# 1. Remove from git history: git filter-branch or BFG
+# 2. Rotate all secrets immediately
+# 3. Change SUPABASE_SERVICE_ROLE_KEY in Supabase dashboard
+#
+# ============================================================================
