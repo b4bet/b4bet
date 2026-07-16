@@ -9,6 +9,9 @@ __v0_jsx-dev-runtime.ts
 # Environment variables
 .env*.local
 
+# Ignore bun lockfile so Cloudflare uses pnpm
+bun.lock
+
 # Common ignores
 node_modules
 .next/
