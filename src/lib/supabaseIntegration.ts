@@ -2,13 +2,6 @@ import { supabase } from '../integrations/supabase/client';
 import { cms } from './cms';
 import type { DepositRequest, WithdrawalRequest } from './cms';
 
-// Typed RPC helper – avoids `as never` casts throughout this file
-// because the generated Supabase types have empty Functions table.
-function rpc(fn: string, args?: Record<string, unknown>) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (supabase.rpc as (name: string, args?: Record<string, unknown>) => any)(fn, args);
-}
-
 // ---- Stats ----
 export async function supabaseGetStats(): Promise<{ onlineUsers: number; topWin: number; paidOut: number }> {
   try {
@@ -47,7 +40,7 @@ export interface SupabaseProfile {
 
 export async function supabaseGetUsers(): Promise<SupabaseProfile[]> {
   try {
-    const { data, error } = await rpc('admin_get_profiles');
+    const { data, error } = await supabase.rpc('admin_get_profiles');
     if (error) throw error;
     return (data ?? []) as SupabaseProfile[];
   } catch (e) {
@@ -57,12 +50,12 @@ export async function supabaseGetUsers(): Promise<SupabaseProfile[]> {
 }
 
 export async function supabaseUpdateBalance(userId: string, newBalance: number): Promise<void> {
-  const { error } = await rpc('admin_update_balance', { p_user_id: userId, p_balance: newBalance });
+  const { error } = await supabase.rpc('admin_update_balance', { p_user_id: userId, p_balance: newBalance });
   if (error) throw error;
 }
 
 export async function supabaseToggleAdmin(userId: string, isAdmin: boolean): Promise<void> {
-  const { error } = await rpc('admin_toggle_user_admin', { p_user_id: userId, p_is_admin: isAdmin });
+  const { error } = await supabase.rpc('admin_toggle_user_admin', { p_user_id: userId, p_is_admin: isAdmin });
   if (error) throw error;
 }
 
@@ -84,7 +77,7 @@ export interface SupabaseTransaction {
 
 export async function supabaseGetTransactions(): Promise<SupabaseTransaction[]> {
   try {
-    const { data, error } = await rpc('admin_get_transactions', { p_limit: 500 });
+    const { data, error } = await supabase.rpc('admin_get_transactions', { p_limit: 500 });
     if (error) throw error;
     return (data ?? []) as SupabaseTransaction[];
   } catch (e) {
@@ -94,7 +87,7 @@ export async function supabaseGetTransactions(): Promise<SupabaseTransaction[]> 
 }
 
 export async function supabaseUpdateTransactionStatus(txnId: string, status: string): Promise<void> {
-  const { error } = await rpc('admin_update_transaction_status', { p_txn_id: txnId, p_status: status });
+  const { error } = await supabase.rpc('admin_update_transaction_status', { p_txn_id: txnId, p_status: status });
   if (error) throw error;
 }
 
@@ -125,7 +118,6 @@ export async function syncTransactionsToCms(): Promise<void> {
         user: t.user_id ?? 'unknown',
         userId: t.user_id ?? undefined,
         amount: t.amount,
-        // WithdrawalRequest requires `destination` field
         destination: (t.metadata as { destination?: string })?.destination
           ?? (t.metadata as { upi_id?: string })?.upi_id
           ?? (t.metadata as { account?: string })?.account
@@ -168,7 +160,7 @@ export interface SupabaseStaff {
 
 export async function supabaseGetStaff(): Promise<SupabaseStaff[]> {
   try {
-    const { data, error } = await rpc('admin_get_staff');
+    const { data, error } = await supabase.rpc('admin_get_staff');
     if (error) throw error;
     return (data ?? []) as SupabaseStaff[];
   } catch (e) {
@@ -179,9 +171,9 @@ export async function supabaseGetStaff(): Promise<SupabaseStaff[]> {
 
 export async function supabaseStaffLogin(email: string, passwordHash: string): Promise<SupabaseStaff | null> {
   try {
-    const { data, error } = await rpc('admin_staff_login', { p_email: email, p_password_hash: passwordHash });
-    if (error || !data || (data as SupabaseStaff[]).length === 0) return null;
-    return (data as SupabaseStaff[])[0];
+    const { data, error } = await supabase.rpc('admin_staff_login', { p_email: email, p_password_hash: passwordHash });
+    if (error || !data || data.length === 0) return null;
+    return data[0] as SupabaseStaff;
   } catch (e) {
     console.error('[supabase] staffLogin error:', e);
     return null;
@@ -189,14 +181,11 @@ export async function supabaseStaffLogin(email: string, passwordHash: string): P
 }
 
 export async function supabaseCreateStaff(
-  email: string,
-  name: string,
-  role: string,
-  passwordHash: string,
-  permissions: Record<string, boolean>
+  email: string, name: string, role: string,
+  passwordHash: string, permissions: Record<string, boolean>
 ): Promise<string | null> {
   try {
-    const { data, error } = await rpc('admin_create_staff', {
+    const { data, error } = await supabase.rpc('admin_create_staff', {
       p_email: email, p_name: name, p_role: role,
       p_password_hash: passwordHash, p_permissions: permissions,
     });
@@ -209,37 +198,34 @@ export async function supabaseCreateStaff(
 }
 
 export async function supabaseUpdateStaffPassword(staffId: string, passwordHash: string): Promise<void> {
-  const { error } = await rpc('admin_update_staff_password', { p_staff_id: staffId, p_password_hash: passwordHash });
+  const { error } = await supabase.rpc('admin_update_staff_password', { p_staff_id: staffId, p_password_hash: passwordHash });
   if (error) throw error;
 }
 
 export async function supabaseUpdateStaffActive(staffId: string, isActive: boolean): Promise<void> {
-  const { error } = await rpc('admin_update_staff_active', { p_staff_id: staffId, p_is_active: isActive });
+  const { error } = await supabase.rpc('admin_update_staff_active', { p_staff_id: staffId, p_is_active: isActive });
   if (error) throw error;
 }
 
 export async function supabaseUpdateStaffPermissions(staffId: string, permissions: Record<string, boolean>): Promise<void> {
-  const { error } = await rpc('admin_update_staff_permissions', { p_staff_id: staffId, p_permissions: permissions });
+  const { error } = await supabase.rpc('admin_update_staff_permissions', { p_staff_id: staffId, p_permissions: permissions });
   if (error) throw error;
 }
 
 export async function supabaseDeleteStaff(staffId: string): Promise<void> {
-  const { error } = await rpc('admin_delete_staff', { p_staff_id: staffId });
+  const { error } = await supabase.rpc('admin_delete_staff', { p_staff_id: staffId });
   if (error) throw error;
 }
 
 // ---- Settings ----
 export interface SupabaseSetting {
-  id: string;
-  key: string;
-  value: unknown;
-  description: string | null;
-  updated_at: string;
+  id: string; key: string; value: unknown;
+  description: string | null; updated_at: string;
 }
 
 export async function supabaseGetSettings(): Promise<SupabaseSetting[]> {
   try {
-    const { data, error } = await rpc('admin_get_settings');
+    const { data, error } = await supabase.rpc('admin_get_settings');
     if (error) throw error;
     return (data ?? []) as SupabaseSetting[];
   } catch (e) {
@@ -249,24 +235,21 @@ export async function supabaseGetSettings(): Promise<SupabaseSetting[]> {
 }
 
 export async function supabaseUpdateSetting(key: string, value: unknown): Promise<void> {
-  const { error } = await rpc('admin_update_setting', { p_key: key, p_value: value });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await supabase.rpc('admin_update_setting', { p_key: key, p_value: value as any });
   if (error) throw error;
 }
 
 // ---- Banners ----
 export interface SupabaseBanner {
-  id: string;
-  title: string;
-  image_url: string;
-  link_url: string | null;
-  sort_order: number;
-  is_active: boolean;
-  created_at: string;
+  id: string; title: string; image_url: string;
+  link_url: string | null; sort_order: number;
+  is_active: boolean; created_at: string;
 }
 
 export async function supabaseGetBanners(): Promise<SupabaseBanner[]> {
   try {
-    const { data, error } = await rpc('admin_get_banners');
+    const { data, error } = await supabase.rpc('admin_get_banners');
     if (error) throw error;
     return (data ?? []) as SupabaseBanner[];
   } catch (e) {
@@ -280,7 +263,7 @@ export async function supabaseUpsertBanner(banner: {
   link_url?: string | null; sort_order?: number; is_active?: boolean;
 }): Promise<string | null> {
   try {
-    const { data, error } = await rpc('admin_upsert_banner', {
+    const { data, error } = await supabase.rpc('admin_upsert_banner', {
       p_id: banner.id ?? null, p_title: banner.title, p_image_url: banner.image_url,
       p_link_url: banner.link_url ?? null, p_sort_order: banner.sort_order ?? 0, p_is_active: banner.is_active ?? true,
     });
@@ -293,7 +276,7 @@ export async function supabaseUpsertBanner(banner: {
 }
 
 export async function supabaseDeleteBanner(id: string): Promise<void> {
-  const { error } = await rpc('admin_delete_banner', { p_id: id });
+  const { error } = await supabase.rpc('admin_delete_banner', { p_id: id });
   if (error) throw error;
 }
 
@@ -305,7 +288,7 @@ export interface SupabaseTicket {
 
 export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
   try {
-    const { data, error } = await rpc('admin_get_tickets');
+    const { data, error } = await supabase.rpc('admin_get_tickets');
     if (error) throw error;
     return (data ?? []) as SupabaseTicket[];
   } catch (e) {
@@ -315,7 +298,7 @@ export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
 }
 
 export async function supabaseUpdateTicketStatus(ticketId: string, status: string): Promise<void> {
-  const { error } = await rpc('admin_update_ticket_status', { p_ticket_id: ticketId, p_status: status });
+  const { error } = await supabase.rpc('admin_update_ticket_status', { p_ticket_id: ticketId, p_status: status });
   if (error) throw error;
 }
 
@@ -328,7 +311,7 @@ export interface SupabaseBet {
 
 export async function supabaseGetBets(): Promise<SupabaseBet[]> {
   try {
-    const { data, error } = await rpc('admin_get_bets', { p_limit: 200 });
+    const { data, error } = await supabase.rpc('admin_get_bets', { p_limit: 200 });
     if (error) throw error;
     return (data ?? []) as SupabaseBet[];
   } catch (e) {
