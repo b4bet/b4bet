@@ -1,52 +1,59 @@
 import { useState } from 'react';
 import { X, KeyRound, CheckCircle2 } from 'lucide-react';
+import { supabaseUpdateStaffPassword } from '../lib/supabaseIntegration';
 import { cms } from '../lib/cms';
 import PasswordInput from './PasswordInput';
 
 interface Props {
-  open: boolean;
-  onClose: () => void;
   staffId: string;
-  staffName: string;
+  staffName?: string;
+  onClose: () => void;
 }
 
-/**
- * Change Password modal for admin/staff. Uses PasswordInput which already
- * exposes the "show password" (eye) toggle on every field.
- */
-export default function AdminChangePasswordModal({ open, onClose, staffId, staffName }: Props) {
-  const [oldPass, setOldPass] = useState('');
+async function sha256Hex(plain: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(plain);
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export default function AdminChangePasswordModal({ staffId, staffName, onClose }: Props) {
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (!open) return null;
-
   const reset = () => {
-    setOldPass('');
     setNewPass('');
     setConfirmPass('');
     setError(null);
   };
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (newPass.length < 4) {
+      setError('Password must be at least 4 characters.');
+      return;
+    }
     if (newPass !== confirmPass) {
-      setError('New password and confirmation do not match.');
+      setError('Passwords do not match.');
       return;
     }
     setBusy(true);
-    const res = cms.changeStaffPassword(staffId, oldPass, newPass);
-    setBusy(false);
-    if (!res.ok) {
-      setError(res.error || 'Unable to update password.');
-      return;
+    try {
+      const hash = await sha256Hex(newPass);
+      await supabaseUpdateStaffPassword(staffId, hash);
+      cms.toast({ title: 'Password updated', body: 'Your password has been changed.', kind: 'success' });
+      reset();
+      onClose();
+    } catch {
+      setError('Failed to update password. Please try again.');
+    } finally {
+      setBusy(false);
     }
-    cms.toast({ title: 'Password updated', body: 'Your admin password has been changed.', kind: 'success' });
-    reset();
-    onClose();
   };
 
   return (
@@ -59,7 +66,7 @@ export default function AdminChangePasswordModal({ open, onClose, staffId, staff
             </div>
             <div>
               <h3 className="font-display font-bold text-white text-sm">Change Password</h3>
-              <p className="text-[11px] text-slate-500">Signed in as {staffName}</p>
+              {staffName && <p className="text-[11px] text-slate-500">Signed in as {staffName}</p>}
             </div>
           </div>
           <button
@@ -71,18 +78,7 @@ export default function AdminChangePasswordModal({ open, onClose, staffId, staff
           </button>
         </div>
 
-        <form onSubmit={submit} className="space-y-3">
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Old Password</label>
-            <PasswordInput
-              value={oldPass}
-              onChange={(e) => setOldPass(e.target.value)}
-              autoComplete="current-password"
-              placeholder="Current password"
-              className="mt-1 w-full"
-              required
-            />
-          </div>
+        <form onSubmit={(e) => { void submit(e); }} className="space-y-3">
           <div>
             <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">New Password</label>
             <PasswordInput
