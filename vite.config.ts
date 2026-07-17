@@ -3,20 +3,10 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
-const rawPort = import.meta.env.PORT || '8080';
-const port = Number(rawPort);
-
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-}
-
-// FIX: Hardcode base path for production (Cloudflare Pages)
-// This ensures assets load correctly regardless of env variables
-const basePath = import.meta.env.BASE_PATH || '/';
 const __dirname = import.meta.dirname;
 
 export default defineConfig({
-  base: basePath,
+  base: '/',
   plugins: [
     react(),
     tailwindcss(),
@@ -34,7 +24,7 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port,
+    port: 8080,
     strictPort: true,
     host: '0.0.0.0',
     allowedHosts: true,
@@ -43,7 +33,7 @@ export default defineConfig({
     },
   },
   preview: {
-    port,
+    port: 8080,
     host: '0.0.0.0',
     allowedHosts: true,
   },
