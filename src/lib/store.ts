@@ -1,4 +1,4 @@
-// Store â€” Supabase-backed balance, transactions, bets, game state
+// Store Ã¢â‚¬â€ Supabase-backed balance, transactions, bets, game state
 // Replaces the old localStorage-only mock store.
 
 import { supabase } from '@/integrations/supabase/client';
@@ -145,7 +145,7 @@ function seedLeaderboard(prefix: string): { user: string; earnings: number; ts: 
 
 class Store {
   balance = 0;
-  currency = '\u20B9'; // â‚¹
+  currency = '\u20B9'; // Ã¢â€šÂ¹
 
   notifications: NotificationItem[] = [];
 
@@ -534,3 +534,26 @@ class Store {
 }
 
 export const store = new Store();
+export function computeAutoOutcome(gameKey: string, config: { targetWinProbability: number; houseEdge: number }): string {
+  const winChance = (config.targetWinProbability - config.houseEdge) / 100;
+  const roll = Math.random();
+  if (gameKey === 'crash') {
+    if (roll < winChance) {
+      const point = 1 + Math.floor(Math.random() * 100) / 10;
+      return point.toFixed(2);
+    }
+    return (1 + Math.floor(Math.random() * 20) / 100).toFixed(2);
+  }
+  if (gameKey === 'mines') return roll < winChance ? 'win' : 'bust';
+  if (gameKey === 'sunvsmoon') {
+    if (roll < winChance) return 'sun';
+    if (roll < winChance * 2) return 'moon';
+    return 'eclipse';
+  }
+  if (gameKey === 'wingo') return String(Math.floor(Math.random() * 10));
+  if (gameKey === 'k3') return `${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1}`;
+  if (gameKey === 'fived') return String(Math.floor(Math.random() * 100000)).padStart(5, '0');
+  if (gameKey === 'trading') return roll < winChance ? 'up' : 'down';
+  if (gameKey === 'aviator') return (1 + Math.random() * 5).toFixed(2);
+  return '0';
+}
