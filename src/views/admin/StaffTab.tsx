@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { UserPlus, Trash2, Shield, ShieldOff, RefreshCw, Loader2 } from 'lucide-react';
-import { supabaseGetStaff, supabaseCreateStaff, type SupabaseStaff } from '@/lib/supabaseIntegration';
-import { supabase } from '@/integrations/supabase/client';
+import {
+  supabaseGetStaff,
+  supabaseCreateStaff,
+  supabaseUpdateStaffActive,
+  supabaseUpdateStaffPermissions,
+  supabaseDeleteStaff,
+  type SupabaseStaff,
+} from '@/lib/supabaseIntegration';
 
 const ALL_PERMISSIONS = [
   'dashboard', 'users', 'finance', 'games', 'staff',
@@ -24,7 +30,6 @@ export default function StaffTab() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = staff.find((s) => s.id === selectedId) ?? null;
 
-  // New staff form
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [pwd, setPwd] = useState('');
@@ -48,7 +53,10 @@ export default function StaffTab() {
     setSaving(true);
     try {
       const hash = await hashPassword(pwd.trim());
-      const defaultPerms = { dashboard: true, users: false, finance: false, games: false, staff: false, banners: false, tickets: false, settings: false, marketing: false, notifications: false };
+      const defaultPerms: Record<string, boolean> = {
+        dashboard: true, users: false, finance: false, games: false, staff: false,
+        banners: false, tickets: false, settings: false, marketing: false, notifications: false,
+      };
       const newId = await supabaseCreateStaff(email.trim(), name.trim(), role, hash, defaultPerms);
       if (!newId) throw new Error('Create failed');
       setName(''); setEmail(''); setPwd(''); setRole('staff'); setShowAdd(false);
@@ -63,29 +71,34 @@ export default function StaffTab() {
 
   const removeStaff = async (id: string) => {
     if (!window.confirm('Remove this staff member?')) return;
-    // Use direct supabase for delete (no auth needed since SECURITY DEFINER not set for delete, use service role alternative)
-    // Fallback: try direct table delete (may work if RLS allows or is bypassed via existing session)
-    const { error } = await supabase.rpc('admin_delete_staff' as never, { p_staff_id: id } as never);
-    if (error) {
-      // Graceful fallback: show message
-      alert('Could not delete staff. Please contact super admin.');
-      return;
+    try {
+      await supabaseDeleteStaff(id);
+      if (selectedId === id) setSelectedId(null);
+      await load();
+    } catch {
+      alert('Could not delete staff. Please try again.');
     }
-    if (selectedId === id) setSelectedId(null);
-    await load();
   };
 
   const toggleActive = async (id: string, current: boolean) => {
-    await supabase.rpc('admin_update_staff_active' as never, { p_staff_id: id, p_is_active: !current } as never);
-    setStaff((prev) => prev.map((s) => s.id === id ? { ...s, is_active: !current } : s));
+    try {
+      await supabaseUpdateStaffActive(id, !current);
+      setStaff((prev) => prev.map((s) => s.id === id ? { ...s, is_active: !current } : s));
+    } catch (e) {
+      console.error('toggleActive error:', e);
+    }
   };
 
   const updatePermission = async (id: string, key: PermKey, val: boolean) => {
     const member = staff.find((s) => s.id === id);
     if (!member) return;
-    const newPerms = { ...member.permissions, [key]: val };
-    await supabase.rpc('admin_update_staff_permissions' as never, { p_staff_id: id, p_permissions: newPerms } as never);
-    setStaff((prev) => prev.map((s) => s.id === id ? { ...s, permissions: newPerms } : s));
+    const newPerms: Record<string, boolean> = { ...member.permissions, [key]: val };
+    try {
+      await supabaseUpdateStaffPermissions(id, newPerms);
+      setStaff((prev) => prev.map((s) => s.id === id ? { ...s, permissions: newPerms } : s));
+    } catch (e) {
+      console.error('updatePermission error:', e);
+    }
   };
 
   return (
@@ -107,7 +120,6 @@ export default function StaffTab() {
         </div>
       </div>
 
-      {/* Add Staff Form */}
       {showAdd && (
         <div className="panel p-4 space-y-3">
           <h3 className="font-display font-bold text-sm text-white">New Staff Member</h3>
@@ -135,7 +147,6 @@ export default function StaffTab() {
       )}
 
       <div className="grid md:grid-cols-2 gap-4">
-        {/* Staff list */}
         <div className="panel overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -159,9 +170,7 @@ export default function StaffTab() {
                     <tr
                       key={s.id}
                       onClick={() => setSelectedId(selectedId === s.id ? null : s.id)}
-                      className={`cursor-pointer hover:bg-slatepanel-800/50 ${
-                        selectedId === s.id ? 'bg-neon-500/5 border-l-2 border-neon-400' : ''
-                      }`}
+                      className={`cursor-pointer hover:bg-slatepanel-800/50 ${selectedId === s.id ? 'bg-neon-500/5 border-l-2 border-neon-400' : ''}`}
                     >
                       <td className="p-3">
                         <div className="font-semibold text-white">{s.name}</div>
@@ -169,11 +178,9 @@ export default function StaffTab() {
                       </td>
                       <td className="p-3">
                         <span className={`chip text-[10px] ${
-                          s.role === 'super_admin'
-                            ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
-                            : s.role === 'admin'
-                              ? 'bg-neon-500/15 text-neon-300 border-neon-500/40'
-                              : 'bg-slatepanel-700 text-slate-300 border-borderline-900'
+                          s.role === 'super_admin' ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                            : s.role === 'admin' ? 'bg-neon-500/15 text-neon-300 border-neon-500/40'
+                            : 'bg-slatepanel-700 text-slate-300 border-borderline-900'
                         }`}>{s.role}</span>
                       </td>
                       <td className="p-3">
@@ -181,9 +188,7 @@ export default function StaffTab() {
                           s.is_active
                             ? 'bg-emeraldwin-500/15 text-emeraldwin-300 border-emeraldwin-500/40'
                             : 'bg-coral-500/15 text-coral-300 border-coral-500/40'
-                        }`}>
-                          {s.is_active ? 'Active' : 'Inactive'}
-                        </span>
+                        }`}>{s.is_active ? 'Active' : 'Inactive'}</span>
                       </td>
                       <td className="p-3 text-right">
                         <div className="flex gap-1.5 justify-end">
@@ -210,12 +215,9 @@ export default function StaffTab() {
           </div>
         </div>
 
-        {/* Permissions editor */}
         {selected && (
           <div className="panel p-4 space-y-3">
-            <h3 className="font-display font-bold text-sm text-white">
-              Permissions — {selected.name}
-            </h3>
+            <h3 className="font-display font-bold text-sm text-white">Permissions — {selected.name}</h3>
             <div className="space-y-2">
               {ALL_PERMISSIONS.map((key) => (
                 <label key={key} className="flex items-center justify-between cursor-pointer">
@@ -223,9 +225,7 @@ export default function StaffTab() {
                   <button
                     onClick={() => void updatePermission(selected.id, key, !selected.permissions[key])}
                     className={`w-10 h-5 rounded-full border transition-all ${
-                      selected.permissions[key]
-                        ? 'bg-neon-500 border-neon-400'
-                        : 'bg-slatepanel-800 border-borderline-900'
+                      selected.permissions[key] ? 'bg-neon-500 border-neon-400' : 'bg-slatepanel-800 border-borderline-900'
                     }`}
                   >
                     <span className={`block w-3.5 h-3.5 rounded-full bg-white mx-auto transition-transform ${
