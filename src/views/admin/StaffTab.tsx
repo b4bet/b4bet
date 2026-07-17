@@ -1,27 +1,34 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
-import { Users, Trash2, Plus, MessageSquare, X, Send, ShieldCheck, Briefcase, Headphones, KeyRound, Save } from 'lucide-react';
-import PasswordInput from '../../components/PasswordInput';
-import SelectModal from '../../components/SelectModal';
-import { cms } from '../../lib/cms';
-import { useStaff, useStaffSession } from '../../lib/cmsHooks';
-import { useBus } from '../../lib/hooks';
-import { Topics } from '../../lib/bus';
-import type { StaffRole, StaffDM, StaffAccount, PermissionKey } from '../../lib/cms';
-import { ALL_PERMISSIONS } from '../../lib/cms';
+import { useState } from 'react';
+import { UserPlus, Trash2, Shield, ShieldOff, Key, Mail } from 'lucide-react';
+import { cms, ALL_PERMISSIONS } from '@/lib/cms';
+import type { PermissionKey, StaffRole } from '@/lib/cms';
+import { useStaff, useStaffSession } from '@/lib/cmsHooks';
+import PasswordInput from '@/components/PasswordInput';
 
-const roleMeta: Record<StaffRole, { label: string; icon: typeof Briefcase; accent: string }> = {
-  support: { label: 'Chat Support Agent', icon: Headphones, accent: 'text-neon-300' },
-  finance: { label: 'Finance Manager', icon: Briefcase, accent: 'text-emeraldwin-400' },
-};
-
-const permLabels: Record<PermissionKey, string> = {
-  finance: 'Finance', banner: 'Banners & Logo', deposit: 'Manual Deposit', emails: 'Email Manager',
-  staff: 'Staff & Chat', marketing: 'Marketing', algos: 'Game Algos', users: 'Users',
-  smtp: 'SMTP', currencies: 'Currencies', crm: 'CRM', intercom: 'Intercom', notify: 'Notifications',
-  gateways: 'Auto Gateways', tickets: 'Live Tickets', history: 'History',
-  withdrawals: 'Withdrawals', redeem: 'Redeem Codes',
-  gameSettings: '8-Game Settings', paymentMethods: 'Payment Methods',
-  dynamicPages: 'Dynamic Pages', ban: 'Ban Section', notifyManager: 'Notification Manager',
+const PERM_LABELS: Record<PermissionKey, string> = {
+  finance: 'Finance',
+  banner: 'Banner',
+  deposit: 'Deposit',
+  emails: 'Emails',
+  staff: 'Staff',
+  marketing: 'Marketing',
+  algos: 'Game Algos',
+  users: 'Users',
+  smtp: 'SMTP',
+  currencies: 'Currencies',
+  crm: 'CRM',
+  intercom: 'Intercom',
+  notify: 'Notify',
+  gateways: 'Gateways',
+  tickets: 'Tickets',
+  history: 'History',
+  withdrawals: 'Withdrawals',
+  redeem: 'Redeem',
+  gameSettings: 'Game Settings',
+  paymentMethods: 'Payment Methods',
+  dynamicPages: 'Dynamic Pages',
+  ban: 'Ban',
+  notifyManager: 'Notify Manager',
 };
 
 
@@ -30,240 +37,240 @@ export default function StaffTab() {
   const sessionId = useStaffSession();
   const me = staff.find((s) => s.id === sessionId) ?? null;
 
+  const isSuperAdmin = me?.isOwner === true;
+
+  // Add staff form
   const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
   const [pwd, setPwd] = useState('');
   const [role, setRole] = useState<StaffRole>('support');
-  const [chatWith, setChatWith] = useState<StaffAccount | null>(null);
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
-  const create = () => {
+  // Selected staff for permission editing
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = staff.find((s) => s.id === selectedId) ?? null;
+
+  // Change password
+  const [cpId, setCpId] = useState<string | null>(null);
+  const [newPwd, setNewPwd] = useState('');
+  const [cpBusy, setCpBusy] = useState(false);
+  const [cpError, setCpError] = useState<string | null>(null);
+  const [cpOk, setCpOk] = useState(false);
+
+  const handleAdd = async () => {
     if (!name.trim() || !pwd.trim()) return;
-    cms.addStaff(name.trim(), pwd.trim(), role);
-    setName(''); setPwd('');
-    cms.toast({ title: 'Staff account created', body: `${name} · ${roleMeta[role].label}`, kind: 'success' });
+    setAddBusy(true);
+    setAddError(null);
+    try {
+      const emailVal = email.trim() || name.trim().toLowerCase().replace(/\s+/g, '.') + '@b4bet.local';
+      const acc = await cms.addStaffAccount(name.trim(), emailVal, pwd.trim(), false);
+      if (!acc) {
+        setAddError('Failed to add staff. Email may already be in use.');
+      } else {
+        setName(''); setEmail(''); setPwd('');
+      }
+    } catch {
+      setAddError('An error occurred. Please try again.');
+    } finally {
+      setAddBusy(false);
+    }
   };
 
-  // Self-exclusion only: roster shows every other staff account.
-  const roster = useMemo(() => {
-    if (!me) return staff.filter((s) => s.id !== sessionId);
-    return staff.filter((s) => s.id !== me.id);
-  }, [staff, me, sessionId]);
+  const handleRemove = async (id: string) => {
+    if (!window.confirm('Remove this staff member?')) return;
+    await cms.removeStaff(id);
+    if (selectedId === id) setSelectedId(null);
+  };
 
+  const handleTogglePerm = async (staffId: string, key: PermissionKey, current: boolean) => {
+    await cms.setStaffPermission(staffId, key, !current);
+  };
+
+  const handleChangePassword = async () => {
+    if (!cpId || !newPwd.trim()) return;
+    setCpBusy(true);
+    setCpError(null);
+    setCpOk(false);
+    try {
+      await cms.updateStaffPassword(cpId, newPwd.trim());
+      setCpOk(true);
+      setNewPwd('');
+      setTimeout(() => { setCpId(null); setCpOk(false); }, 1500);
+    } catch {
+      setCpError('Failed to update password.');
+    } finally {
+      setCpBusy(false);
+    }
+  };
 
   return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="font-display font-bold text-lg text-white">Staff Sub-Accounts & Internal Chat</h2>
-        <p className="text-xs text-slate-500">Create Support / Finance operators and message across departments.</p>
-      </div>
-
-      {/* Session switcher (mock login) */}
+    <div className="space-y-6">
       <div className="panel p-4">
-        <div className="flex items-center gap-2 mb-2">
-          <ShieldCheck className="w-4 h-4 text-neon-300" />
-          <h3 className="font-display font-bold text-white text-sm">Active operator session</h3>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {staff.map((s) => {
-            const RM = roleMeta[s.role];
-            const active = s.id === sessionId;
-            return (
-              <button
-                key={s.id}
-                onClick={() => cms.setStaffSession(s.id)}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
-                  active ? 'bg-gradient-to-br from-neon-400 to-neon-600 text-white' : 'bg-slatepanel-800 border border-borderline-900 text-slate-300'
-                }`}
+        <h2 className="font-display font-bold text-white text-base mb-4">Staff Management</h2>
+
+        {/* Add staff */}
+        {isSuperAdmin && (
+          <div className="bg-slatepanel-900 rounded-xl border border-borderline-900 p-4 mb-6 space-y-3">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Add Staff Member</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <input
+                className="input"
+                placeholder="Display name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <input
+                className="input"
+                placeholder="Email (optional)"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+              />
+              <PasswordInput
+                className="w-full"
+                placeholder="Password"
+                value={pwd}
+                onChange={(e) => setPwd(e.target.value)}
+              />
+              <select
+                className="input"
+                value={role}
+                onChange={(e) => setRole(e.target.value as StaffRole)}
               >
-                <RM.icon className={`w-3.5 h-3.5 ${active ? 'text-white' : RM.accent}`} />
-                {s.name}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+                <option value="support">Support</option>
+                <option value="finance">Finance / Admin</option>
+              </select>
+            </div>
+            {addError && (
+              <p className="text-xs text-coral-300">{addError}</p>
+            )}
+            <button
+              onClick={handleAdd}
+              disabled={addBusy || !name.trim() || !pwd.trim()}
+              className="btn-primary flex items-center gap-2 text-sm"
+            >
+              <UserPlus className="w-4 h-4" />
+              {addBusy ? 'Adding…' : 'Add Staff'}
+            </button>
+          </div>
+        )}
 
-      {/* Create staff */}
-      <div className="panel p-4">
-        <h3 className="font-display font-bold text-white text-sm mb-3 flex items-center gap-2"><Plus className="w-4 h-4 text-neon-300" /> New staff account</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Display name" className="input" />
-          <PasswordInput value={pwd} onChange={(e) => setPwd(e.target.value)} placeholder="Password" />
-          <SelectModal
-            value={role}
-            options={[
-              { value: 'support', label: 'Chat Support Agent' },
-              { value: 'finance', label: 'Finance Manager' },
-            ]}
-            onChange={(v) => setRole(v as StaffRole)}
-          />
-          <button onClick={create} className="btn-primary px-3 py-2 text-sm"><Plus className="w-4 h-4" /> Create</button>
-        </div>
-      </div>
-
-      {/* Staff list */}
-      <div className="panel p-4">
-        <h3 className="font-display font-bold text-white text-sm mb-3 flex items-center gap-2"><Users className="w-4 h-4 text-neon-300" /> All staff</h3>
+        {/* Staff list */}
         <div className="space-y-2">
-          {staff.map((s) => {
-            const RM = roleMeta[s.role];
-            return (
-              <div key={s.id} className="bg-midnight-850 rounded-lg px-3 py-2 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <RM.icon className={`w-4 h-4 ${RM.accent}`} />
-                    <span className="text-sm text-white">{s.name}</span>
-                    <span className="text-[10px] text-slate-500">{RM.label}</span>
-                    {s.online && <span className="w-1.5 h-1.5 rounded-full bg-emeraldwin-500" />}
-                  </div>
-                  <button onClick={() => cms.removeStaff(s.id)} className="text-coral-400 hover:text-coral-300">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+          {staff.length === 0 && (
+            <p className="text-sm text-slate-500 py-4 text-center">No staff members yet.</p>
+          )}
+          {staff.map((s) => (
+            <div
+              key={s.id}
+              className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${
+                selectedId === s.id
+                  ? 'bg-neon-500/10 border-neon-500/40'
+                  : 'bg-slatepanel-900 border-borderline-900 hover:border-borderline-700'
+              }`}
+              onClick={() => setSelectedId(selectedId === s.id ? null : s.id)}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-neon-500 to-indigo-500 grid place-items-center shrink-0">
+                  <span className="text-white text-xs font-bold">{s.name[0]?.toUpperCase()}</span>
                 </div>
-
-                {/* Password management — admin can view & update */}
-                <StaffPasswordRow staffId={s.id} current={s.password} />
-
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-1">
-                  {ALL_PERMISSIONS.map((p) => {
-                    const on = !!s.permissions?.[p];
-                    return (
-                      <button key={p} onClick={() => cms.setStaffPermission(s.id, p, !on)}
-                        className={`flex items-center justify-between text-[10px] px-2 py-1 rounded border transition-all ${on ? 'bg-emeraldwin-500/15 border-emeraldwin-500/40 text-emeraldwin-300' : 'bg-slatepanel-800 border-borderline-900 text-slate-500'}`}>
-                        <span className="truncate">{permLabels[p]}</span>
-                        <span className={`ml-1 w-6 h-3 rounded-full relative ${on ? 'bg-emeraldwin-500' : 'bg-slatepanel-700'}`}>
-                          <span className={`absolute top-0.5 w-2 h-2 rounded-full bg-white transition-all ${on ? 'left-3.5' : 'left-0.5'}`} />
-                        </span>
-                      </button>
-                    );
-                  })}
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white truncate">
+                    {s.name}
+                    {s.isOwner && <span className="ml-2 text-[10px] bg-neon-500/20 text-neon-300 px-1.5 py-0.5 rounded-full">Super Admin</span>}
+                  </p>
+                  <p className="text-xs text-slate-500 truncate">{s.email || s.role}</p>
                 </div>
-
               </div>
-
-            );
-          })}
+              <div className="flex items-center gap-2 shrink-0 ml-2">
+                {s.online && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400" title="Online" />
+                )}
+                {isSuperAdmin && !s.isOwner && (
+                  <>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setCpId(s.id); setNewPwd(''); setCpError(null); setCpOk(false); }}
+                      className="p-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white"
+                      title="Change password"
+                    >
+                      <Key className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleRemove(s.id); }}
+                      className="p-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900 text-coral-400 hover:text-coral-300"
+                      title="Remove staff"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
         </div>
-      </div>
 
-      {/* Internal chat roster (cross-department only) */}
-      <div className="panel p-4">
-        <h3 className="font-display font-bold text-white text-sm mb-1 flex items-center gap-2"><MessageSquare className="w-4 h-4 text-neon-300" /> Internal Chat — Cross-department roster</h3>
-        <p className="text-[10px] text-slate-500 mb-3">
-          {me ? <>Logged in as <span className="text-neon-300">{me.name}</span> ({roleMeta[me.role].label}). You can only message opposing departments.</> : 'Pick an operator session above.'}
-        </p>
-        {roster.length === 0 ? (
-          <div className="text-slate-500 text-sm">No other-department staff online.</div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {roster.map((s) => {
-              const RM = roleMeta[s.role];
-              return (
-                <button
-                  key={s.id}
-                  onClick={() => setChatWith(s)}
-                  className="flex items-center justify-between bg-midnight-850 hover:bg-slatepanel-800 rounded-lg px-3 py-2 border border-borderline-900 transition-colors"
-                >
-                  <div className="flex items-center gap-2">
-                    <RM.icon className={`w-4 h-4 ${RM.accent}`} />
-                    <div className="text-left">
-                      <div className="text-sm text-white">{s.name}</div>
-                      <div className="text-[10px] text-slate-500">{RM.label}</div>
-                    </div>
-                  </div>
-                  <MessageSquare className="w-4 h-4 text-neon-300" />
-                </button>
-              );
-            })}
+        {/* Permission editor */}
+        {selected && !selected.isOwner && isSuperAdmin && (
+          <div className="mt-4 bg-slatepanel-900 rounded-xl border border-borderline-900 p-4">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+              Permissions — {selected.name}
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {ALL_PERMISSIONS.map((key) => {
+                const enabled = !!(selected.permissions as Record<string, boolean>)[key];
+                return (
+                  <button
+                    key={key}
+                    onClick={() => handleTogglePerm(selected.id, key, enabled)}
+                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                      enabled
+                        ? 'bg-neon-500/15 border-neon-500/40 text-neon-300'
+                        : 'bg-slatepanel-800 border-borderline-900 text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    {enabled ? <Shield className="w-3 h-3" /> : <ShieldOff className="w-3 h-3" />}
+                    {PERM_LABELS[key]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Change password modal */}
+        {cpId && (
+          <div className="mt-4 bg-slatepanel-900 rounded-xl border border-borderline-900 p-4 space-y-3">
+            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+              Change Password — {staff.find(s => s.id === cpId)?.name}
+            </h3>
+            <PasswordInput
+              className="w-full"
+              placeholder="New password"
+              value={newPwd}
+              onChange={(e) => setNewPwd(e.target.value)}
+            />
+            {cpError && <p className="text-xs text-coral-300">{cpError}</p>}
+            {cpOk && <p className="text-xs text-emerald-400">Password updated!</p>}
+            <div className="flex gap-2">
+              <button
+                onClick={handleChangePassword}
+                disabled={cpBusy || !newPwd.trim()}
+                className="btn-primary text-sm flex items-center gap-2"
+              >
+                <Key className="w-3.5 h-3.5" />
+                {cpBusy ? 'Saving…' : 'Save'}
+              </button>
+              <button
+                onClick={() => setCpId(null)}
+                className="px-3 py-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white text-sm"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         )}
       </div>
-
-      {chatWith && me && <ChatPopup me={me} other={chatWith} onClose={() => setChatWith(null)} />}
-    </div>
-  );
-}
-
-function ChatPopup({ me, other, onClose }: { me: StaffAccount; other: StaffAccount; onClose: () => void }) {
-  const dms = useBus<StaffDM[]>(Topics.StaffDM, cms.staffDMs);
-  const [body, setBody] = useState('');
-  const endRef = useRef<HTMLDivElement>(null);
-  const RM = roleMeta[other.role];
-
-  const conv = useMemo(
-    () => dms.filter((m) => (m.fromId === me.id && m.toId === other.id) || (m.fromId === other.id && m.toId === me.id)),
-    [dms, me.id, other.id]
-  );
-
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [conv.length]);
-
-  const send = () => {
-    if (!body.trim()) return;
-    cms.sendStaffDM(other.id, body.trim());
-    setBody('');
-  };
-
-  return (
-    <div className="fixed bottom-4 right-4 z-50 w-[min(360px,calc(100vw-2rem))] panel border border-neon-400/40 bg-midnight-900/95 backdrop-blur-xl shadow-2xl flex flex-col">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-borderline-900">
-        <div className="flex items-center gap-2">
-          <RM.icon className={`w-4 h-4 ${RM.accent}`} />
-          <div>
-            <div className="text-sm text-white font-semibold">{other.name}</div>
-            <div className="text-[10px] text-slate-500">{RM.label}</div>
-          </div>
-        </div>
-        <button onClick={onClose} className="text-slate-500 hover:text-white"><X className="w-4 h-4" /></button>
-      </div>
-      <div className="flex-1 h-72 overflow-auto p-3 space-y-2 scrollbar-thin">
-        {conv.length === 0 && <div className="text-slate-500 text-xs text-center mt-4">No messages yet. Say hi 👋</div>}
-        {conv.map((m) => {
-          const mine = m.fromId === me.id;
-          return (
-            <div key={m.id} className={`max-w-[80%] ${mine ? 'ml-auto' : ''}`}>
-              <div className={`rounded-2xl px-3 py-2 text-sm ${mine ? 'bg-neon-500/20 text-white' : 'bg-slatepanel-800 text-slate-200'}`}>{m.body}</div>
-              <div className={`text-[9px] text-slate-500 mt-0.5 ${mine ? 'text-right' : ''}`}>{new Date(m.ts).toLocaleTimeString()}</div>
-            </div>
-          );
-        })}
-        <div ref={endRef} />
-      </div>
-      <div className="p-2 border-t border-borderline-900 flex gap-2">
-        <input
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && send()}
-          placeholder="Type a message…"
-          className="input flex-1 text-sm py-2"
-        />
-        <button onClick={send} className="btn-primary px-3 py-2"><Send className="w-4 h-4" /></button>
-      </div>
-    </div>
-  );
-}
-
-function StaffPasswordRow({ staffId, current }: { staffId: string; current: string }) {
-  const [val, setVal] = useState(current);
-  useEffect(() => { setVal(current); }, [current]);
-  const dirty = val !== current;
-  return (
-    <div className="flex items-center gap-2">
-      <KeyRound className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
-      <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Password</span>
-      <div className="flex-1 min-w-0">
-        <PasswordInput
-          value={val}
-          onChange={(e) => setVal(e.target.value)}
-          className="py-1.5 text-xs"
-          placeholder="Set password"
-        />
-      </div>
-      <button
-        onClick={() => { cms.updateStaffPassword(staffId, val); cms.toast({ title: 'Password updated', body: 'Staff credential rotated.', kind: 'success' }); }}
-        disabled={!dirty || !val.trim()}
-        className="btn-primary px-2 py-1.5 text-xs disabled:opacity-40"
-      >
-        <Save className="w-3.5 h-3.5" /> Save
-      </button>
     </div>
   );
 }
