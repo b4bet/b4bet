@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { ShieldCheck, LogIn, Mail, ArrowLeft, KeyRound, User as UserIcon } from 'lucide-react';
+import { ShieldCheck, LogIn, Mail, ArrowLeft, KeyRound } from 'lucide-react';
 import { cms } from '../lib/cms';
 import PasswordInput from './PasswordInput';
 
 /**
  * Admin login page. Shown whenever no staff session is active.
- * Includes a "Forgot password?" flow that uses the configured SMTP
- * server to send a recovery email (simulated dispatch).
+ * Authenticates against Supabase `staff` table via RPC staff_login.
+ * Includes a "Forgot password?" flow using the configured SMTP server.
  */
 export default function AdminLoginPage() {
   const [mode, setMode] = useState<'login' | 'forgot'>('login');
@@ -22,19 +22,23 @@ export default function AdminLoginPage() {
   const [resetErr, setResetErr] = useState<string | null>(null);
   const [resetBusy, setResetBusy] = useState(false);
 
-  const submitLogin = (e: React.FormEvent) => {
+  const submitLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setBusy(true);
-    const acc = cms.verifyStaffCredentialsByEmail(email, password);
-    if (!acc) {
-      setError('Invalid email or password.');
+    try {
+      const acc = await cms.verifyStaffCredentialsAsync(email, password);
+      if (!acc) {
+        setError('Invalid email or password.');
+        return;
+      }
+      cms.setStaffSession(acc.id);
+      cms.toast({ title: 'Welcome back', body: `Signed in as ${acc.name}.`, kind: 'success' });
+    } catch {
+      setError('Login failed. Please try again.');
+    } finally {
       setBusy(false);
-      return;
     }
-    cms.setStaffSession(acc.id);
-    cms.toast({ title: 'Welcome back', body: `Signed in as ${acc.name}.`, kind: 'success' });
-    setBusy(false);
   };
 
   const submitForgot = (e: React.FormEvent) => {
