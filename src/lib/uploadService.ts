@@ -1,4 +1,4 @@
-// Upload service — uses Supabase Storage via centralized client
+// Upload service â€” uses Supabase Storage via centralized client
 // Buckets: admin-uploads for logos, banners, game assets
 
 import { supabase } from '@/integrations/supabase/client';
