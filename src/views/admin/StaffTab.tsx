@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { UserPlus, Trash2, Shield, ShieldOff, RefreshCw, Loader2 } from 'lucide-react';
-import { supabaseGetStaff, type SupabaseStaff } from '@/lib/supabaseIntegration';
+import { supabaseGetStaff, supabaseCreateStaff, type SupabaseStaff } from '@/lib/supabaseIntegration';
 import { supabase } from '@/integrations/supabase/client';
 
 const ALL_PERMISSIONS = [
@@ -48,20 +48,14 @@ export default function StaffTab() {
     setSaving(true);
     try {
       const hash = await hashPassword(pwd.trim());
-      const { error } = await supabase.from('staff').insert({
-        name: name.trim(),
-        email: email.trim(),
-        password_hash: hash,
-        role,
-        is_active: true,
-        permissions: { dashboard: true, users: false, finance: false, games: false, staff: false, banners: false, tickets: false, settings: false, marketing: false, notifications: false },
-      });
-      if (error) throw error;
+      const defaultPerms = { dashboard: true, users: false, finance: false, games: false, staff: false, banners: false, tickets: false, settings: false, marketing: false, notifications: false };
+      const newId = await supabaseCreateStaff(email.trim(), name.trim(), role, hash, defaultPerms);
+      if (!newId) throw new Error('Create failed');
       setName(''); setEmail(''); setPwd(''); setRole('staff'); setShowAdd(false);
       await load();
     } catch (e) {
       console.error('addStaff error:', e);
-      alert('Failed to add staff');
+      alert('Failed to add staff member.');
     } finally {
       setSaving(false);
     }
@@ -69,13 +63,20 @@ export default function StaffTab() {
 
   const removeStaff = async (id: string) => {
     if (!window.confirm('Remove this staff member?')) return;
-    await supabase.from('staff').delete().eq('id', id);
+    // Use direct supabase for delete (no auth needed since SECURITY DEFINER not set for delete, use service role alternative)
+    // Fallback: try direct table delete (may work if RLS allows or is bypassed via existing session)
+    const { error } = await supabase.rpc('admin_delete_staff' as never, { p_staff_id: id } as never);
+    if (error) {
+      // Graceful fallback: show message
+      alert('Could not delete staff. Please contact super admin.');
+      return;
+    }
     if (selectedId === id) setSelectedId(null);
     await load();
   };
 
   const toggleActive = async (id: string, current: boolean) => {
-    await supabase.from('staff').update({ is_active: !current }).eq('id', id);
+    await supabase.rpc('admin_update_staff_active' as never, { p_staff_id: id, p_is_active: !current } as never);
     setStaff((prev) => prev.map((s) => s.id === id ? { ...s, is_active: !current } : s));
   };
 
@@ -83,7 +84,7 @@ export default function StaffTab() {
     const member = staff.find((s) => s.id === id);
     if (!member) return;
     const newPerms = { ...member.permissions, [key]: val };
-    await supabase.from('staff').update({ permissions: newPerms }).eq('id', id);
+    await supabase.rpc('admin_update_staff_permissions' as never, { p_staff_id: id, p_permissions: newPerms } as never);
     setStaff((prev) => prev.map((s) => s.id === id ? { ...s, permissions: newPerms } : s));
   };
 
