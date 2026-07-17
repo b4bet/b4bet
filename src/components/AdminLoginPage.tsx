@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { LogIn, Eye, EyeOff, ShieldAlert } from 'lucide-react';
 import { supabaseStaffLogin } from '../lib/supabaseIntegration';
 import { cms } from '../lib/cms';
-import type { StaffRole } from '../lib/cms';
+import type { StaffRole, PermissionKey } from '../lib/cms';
 
 async function sha256Hex(plain: string): Promise<string> {
   const encoder = new TextEncoder();
@@ -39,14 +39,39 @@ export default function AdminLoginPage() {
         setError('Invalid email or password.');
         return;
       }
-      // Set staff session in cms so AdminView gates pass
-      cms.setStaffSession({
+
+      // Map Supabase staff row to CMS StaffAccount and register it
+      const isOwner = acc.role === 'super_admin';
+      const role: StaffRole = (acc.role === 'super_admin' || acc.role === 'admin') ? 'finance' : 'support';
+      const permissions = isOwner
+        ? Object.fromEntries(
+            ['finance','banner','deposit','emails','staff','marketing','algos','users','smtp',
+             'currencies','crm','intercom','notify','gateways','tickets','history','withdrawals',
+             'redeem','gameSettings','paymentMethods','dynamicPages','ban','notifyManager']
+              .map((k) => [k, true])
+          ) as Record<PermissionKey, boolean>
+        : (acc.permissions as Record<PermissionKey, boolean>) ?? {};
+
+      const staffAccount = {
         id: acc.id,
         name: acc.name,
-        password: '',           // not stored in cms
-        role: acc.role as StaffRole,
+        email: acc.email,
+        password: '',
+        role,
         online: true,
-      });
+        permissions,
+        isOwner,
+      };
+
+      // Ensure the account is in cms.staff before setting session
+      if (!cms.staff.find((s) => s.id === acc.id)) {
+        cms.staff = [...cms.staff, staffAccount];
+      } else {
+        cms.staff = cms.staff.map((s) => s.id === acc.id ? { ...s, ...staffAccount } : s);
+      }
+
+      // Set session by ID (string) — this is what cms.setStaffSession expects
+      cms.setStaffSession(acc.id);
     } catch {
       setError('Login failed. Please try again.');
     } finally {
