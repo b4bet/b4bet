@@ -116,8 +116,8 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
   }
 
   const hasPermission = (key: PermissionKey) => {
-    if (me.role === 'super_admin') return true;
-    return (me as unknown as { permissions?: Record<string, boolean> }).permissions?.[key] ?? false;
+    if (me.isOwner) return true;
+    return !!me.permissions[key];
   };
 
   const pendingDepositCount = finance.deposits.filter((d) => d.status === 'pending' || d.status === 'processing').length;
@@ -183,7 +183,7 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
                 <KeyRound className="w-3.5 h-3.5" /> Change Password
               </button>
               <button
-                onClick={() => { cms.clearStaffSession(); setProfileOpen(false); }}
+                onClick={() => { cms.setStaffSession(null); setProfileOpen(false); }}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-coral-500/10 text-sm text-coral-400 hover:text-coral-300"
               >
                 <LogOut className="w-3.5 h-3.5" /> Logout
