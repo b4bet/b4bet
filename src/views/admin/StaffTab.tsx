@@ -1,272 +1,238 @@
-import { useState } from 'react';
-import { UserPlus, Trash2, Shield, ShieldOff, Key, Mail } from 'lucide-react';
-import { cms, ALL_PERMISSIONS } from '@/lib/cms';
-import type { PermissionKey, StaffRole } from '@/lib/cms';
-import { useStaff, useStaffSession } from '@/lib/cmsHooks';
-import PasswordInput from '@/components/PasswordInput';
+import { useState, useEffect, useCallback } from 'react';
+import { UserPlus, Trash2, Shield, ShieldOff, RefreshCw, Loader2 } from 'lucide-react';
+import { supabaseGetStaff, type SupabaseStaff } from '@/lib/supabaseIntegration';
+import { supabase } from '@/integrations/supabase/client';
 
-const PERM_LABELS: Record<PermissionKey, string> = {
-  finance: 'Finance',
-  banner: 'Banner',
-  deposit: 'Deposit',
-  emails: 'Emails',
-  staff: 'Staff',
-  marketing: 'Marketing',
-  algos: 'Game Algos',
-  users: 'Users',
-  smtp: 'SMTP',
-  currencies: 'Currencies',
-  crm: 'CRM',
-  intercom: 'Intercom',
-  notify: 'Notify',
-  gateways: 'Gateways',
-  tickets: 'Tickets',
-  history: 'History',
-  withdrawals: 'Withdrawals',
-  redeem: 'Redeem',
-  gameSettings: 'Game Settings',
-  paymentMethods: 'Payment Methods',
-  dynamicPages: 'Dynamic Pages',
-  ban: 'Ban',
-  notifyManager: 'Notify Manager',
-};
+const ALL_PERMISSIONS = [
+  'dashboard', 'users', 'finance', 'games', 'staff',
+  'banners', 'tickets', 'settings', 'marketing', 'notifications',
+] as const;
 
+type PermKey = typeof ALL_PERMISSIONS[number];
+
+async function hashPassword(plain: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(plain);
+  const hashBuf = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hashBuf)).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 export default function StaffTab() {
-  const staff = useStaff();
-  const sessionId = useStaffSession();
-  const me = staff.find((s) => s.id === sessionId) ?? null;
-
-  const isSuperAdmin = me?.isOwner === true;
-
-  // Add staff form
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [pwd, setPwd] = useState('');
-  const [role, setRole] = useState<StaffRole>('support');
-  const [addBusy, setAddBusy] = useState(false);
-  const [addError, setAddError] = useState<string | null>(null);
-
-  // Selected staff for permission editing
+  const [staff, setStaff] = useState<SupabaseStaff[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = staff.find((s) => s.id === selectedId) ?? null;
 
-  // Change password
-  const [cpId, setCpId] = useState<string | null>(null);
-  const [newPwd, setNewPwd] = useState('');
-  const [cpBusy, setCpBusy] = useState(false);
-  const [cpError, setCpError] = useState<string | null>(null);
-  const [cpOk, setCpOk] = useState(false);
+  // New staff form
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [pwd, setPwd] = useState('');
+  const [role, setRole] = useState('staff');
+  const [showAdd, setShowAdd] = useState(false);
 
-  const handleAdd = async () => {
-    if (!name.trim() || !pwd.trim()) return;
-    setAddBusy(true);
-    setAddError(null);
+  const load = useCallback(async () => {
+    setLoading(true);
     try {
-      const emailVal = email.trim() || name.trim().toLowerCase().replace(/\s+/g, '.') + '@b4bet.local';
-      const acc = await cms.addStaffAccount(name.trim(), emailVal, pwd.trim(), false);
-      if (!acc) {
-        setAddError('Failed to add staff. Email may already be in use.');
-      } else {
-        setName(''); setEmail(''); setPwd('');
-      }
-    } catch {
-      setAddError('An error occurred. Please try again.');
+      const data = await supabaseGetStaff();
+      setStaff(data);
     } finally {
-      setAddBusy(false);
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const addStaff = async () => {
+    if (!name.trim() || !email.trim() || !pwd.trim()) return;
+    setSaving(true);
+    try {
+      const hash = await hashPassword(pwd.trim());
+      const { error } = await supabase.from('staff').insert({
+        name: name.trim(),
+        email: email.trim(),
+        password_hash: hash,
+        role,
+        is_active: true,
+        permissions: { dashboard: true, users: false, finance: false, games: false, staff: false, banners: false, tickets: false, settings: false, marketing: false, notifications: false },
+      });
+      if (error) throw error;
+      setName(''); setEmail(''); setPwd(''); setRole('staff'); setShowAdd(false);
+      await load();
+    } catch (e) {
+      console.error('addStaff error:', e);
+      alert('Failed to add staff');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleRemove = async (id: string) => {
+  const removeStaff = async (id: string) => {
     if (!window.confirm('Remove this staff member?')) return;
-    await cms.removeStaff(id);
+    await supabase.from('staff').delete().eq('id', id);
     if (selectedId === id) setSelectedId(null);
+    await load();
   };
 
-  const handleTogglePerm = async (staffId: string, key: PermissionKey, current: boolean) => {
-    await cms.setStaffPermission(staffId, key, !current);
+  const toggleActive = async (id: string, current: boolean) => {
+    await supabase.from('staff').update({ is_active: !current }).eq('id', id);
+    setStaff((prev) => prev.map((s) => s.id === id ? { ...s, is_active: !current } : s));
   };
 
-  const handleChangePassword = async () => {
-    if (!cpId || !newPwd.trim()) return;
-    setCpBusy(true);
-    setCpError(null);
-    setCpOk(false);
-    try {
-      await cms.updateStaffPassword(cpId, newPwd.trim());
-      setCpOk(true);
-      setNewPwd('');
-      setTimeout(() => { setCpId(null); setCpOk(false); }, 1500);
-    } catch {
-      setCpError('Failed to update password.');
-    } finally {
-      setCpBusy(false);
-    }
+  const updatePermission = async (id: string, key: PermKey, val: boolean) => {
+    const member = staff.find((s) => s.id === id);
+    if (!member) return;
+    const newPerms = { ...member.permissions, [key]: val };
+    await supabase.from('staff').update({ permissions: newPerms }).eq('id', id);
+    setStaff((prev) => prev.map((s) => s.id === id ? { ...s, permissions: newPerms } : s));
   };
 
   return (
-    <div className="space-y-6">
-      <div className="panel p-4">
-        <h2 className="font-display font-bold text-white text-base mb-4">Staff Management</h2>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-display font-bold text-lg text-white">Staff Management</h2>
+          <p className="text-xs text-slate-500">Manage admin staff — live from Supabase.</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => void load()} disabled={loading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white text-xs font-semibold disabled:opacity-50">
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
+          <button onClick={() => setShowAdd((o) => !o)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neon-500/20 border border-neon-500/40 text-neon-300 hover:text-neon-200 text-xs font-semibold">
+            <UserPlus className="w-3.5 h-3.5" /> Add Staff
+          </button>
+        </div>
+      </div>
 
-        {/* Add staff */}
-        {isSuperAdmin && (
-          <div className="bg-slatepanel-900 rounded-xl border border-borderline-900 p-4 mb-6 space-y-3">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Add Staff Member</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <input
-                className="input"
-                placeholder="Display name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-              <input
-                className="input"
-                placeholder="Email (optional)"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              <PasswordInput
-                className="w-full"
-                placeholder="Password"
-                value={pwd}
-                onChange={(e) => setPwd(e.target.value)}
-              />
-              <select
-                className="input"
-                value={role}
-                onChange={(e) => setRole(e.target.value as StaffRole)}
-              >
-                <option value="support">Support</option>
-                <option value="finance">Finance / Admin</option>
-              </select>
-            </div>
-            {addError && (
-              <p className="text-xs text-coral-300">{addError}</p>
-            )}
-            <button
-              onClick={handleAdd}
-              disabled={addBusy || !name.trim() || !pwd.trim()}
-              className="btn-primary flex items-center gap-2 text-sm"
-            >
-              <UserPlus className="w-4 h-4" />
-              {addBusy ? 'Adding…' : 'Add Staff'}
-            </button>
+      {/* Add Staff Form */}
+      {showAdd && (
+        <div className="panel p-4 space-y-3">
+          <h3 className="font-display font-bold text-sm text-white">New Staff Member</h3>
+          <div className="grid grid-cols-2 gap-2">
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Full Name" className="input" />
+            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email" className="input" />
           </div>
-        )}
+          <div className="grid grid-cols-2 gap-2">
+            <input value={pwd} onChange={(e) => setPwd(e.target.value)} placeholder="Password" type="password" className="input" />
+            <select value={role} onChange={(e) => setRole(e.target.value)} className="input">
+              <option value="staff">Staff</option>
+              <option value="admin">Admin</option>
+              <option value="super_admin">Super Admin</option>
+            </select>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={() => void addStaff()} disabled={saving}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-neon-500/20 border border-neon-500/40 text-neon-300 text-sm font-semibold disabled:opacity-50">
+              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserPlus className="w-4 h-4" />}
+              {saving ? 'Saving...' : 'Add'}
+            </button>
+            <button onClick={() => setShowAdd(false)} className="px-4 py-2 rounded-lg bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white text-sm font-semibold">Cancel</button>
+          </div>
+        </div>
+      )}
 
+      <div className="grid md:grid-cols-2 gap-4">
         {/* Staff list */}
-        <div className="space-y-2">
-          {staff.length === 0 && (
-            <p className="text-sm text-slate-500 py-4 text-center">No staff members yet.</p>
-          )}
-          {staff.map((s) => (
-            <div
-              key={s.id}
-              className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${
-                selectedId === s.id
-                  ? 'bg-neon-500/10 border-neon-500/40'
-                  : 'bg-slatepanel-900 border-borderline-900 hover:border-borderline-700'
-              }`}
-              onClick={() => setSelectedId(selectedId === s.id ? null : s.id)}
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-neon-500 to-indigo-500 grid place-items-center shrink-0">
-                  <span className="text-white text-xs font-bold">{s.name[0]?.toUpperCase()}</span>
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white truncate">
-                    {s.name}
-                    {s.isOwner && <span className="ml-2 text-[10px] bg-neon-500/20 text-neon-300 px-1.5 py-0.5 rounded-full">Super Admin</span>}
-                  </p>
-                  <p className="text-xs text-slate-500 truncate">{s.email || s.role}</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0 ml-2">
-                {s.online && (
-                  <span className="w-2 h-2 rounded-full bg-emerald-400" title="Online" />
-                )}
-                {isSuperAdmin && !s.isOwner && (
-                  <>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setCpId(s.id); setNewPwd(''); setCpError(null); setCpOk(false); }}
-                      className="p-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white"
-                      title="Change password"
+        <div className="panel overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-midnight-850 border-b border-borderline-900">
+                <tr className="text-left text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
+                  <th className="p-3">Name</th>
+                  <th className="p-3">Role</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-borderline-900">
+                {loading ? (
+                  <tr><td colSpan={4} className="p-8 text-center text-slate-400">
+                    <Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" /> Loading...
+                  </td></tr>
+                ) : staff.length === 0 ? (
+                  <tr><td colSpan={4} className="p-8 text-center text-slate-500">No staff found.</td></tr>
+                ) : (
+                  staff.map((s) => (
+                    <tr
+                      key={s.id}
+                      onClick={() => setSelectedId(selectedId === s.id ? null : s.id)}
+                      className={`cursor-pointer hover:bg-slatepanel-800/50 ${
+                        selectedId === s.id ? 'bg-neon-500/5 border-l-2 border-neon-400' : ''
+                      }`}
                     >
-                      <Key className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleRemove(s.id); }}
-                      className="p-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900 text-coral-400 hover:text-coral-300"
-                      title="Remove staff"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </>
+                      <td className="p-3">
+                        <div className="font-semibold text-white">{s.name}</div>
+                        <div className="text-[11px] text-slate-500">{s.email}</div>
+                      </td>
+                      <td className="p-3">
+                        <span className={`chip text-[10px] ${
+                          s.role === 'super_admin'
+                            ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                            : s.role === 'admin'
+                              ? 'bg-neon-500/15 text-neon-300 border-neon-500/40'
+                              : 'bg-slatepanel-700 text-slate-300 border-borderline-900'
+                        }`}>{s.role}</span>
+                      </td>
+                      <td className="p-3">
+                        <span className={`chip text-[10px] ${
+                          s.is_active
+                            ? 'bg-emeraldwin-500/15 text-emeraldwin-300 border-emeraldwin-500/40'
+                            : 'bg-coral-500/15 text-coral-300 border-coral-500/40'
+                        }`}>
+                          {s.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right">
+                        <div className="flex gap-1.5 justify-end">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); void toggleActive(s.id, s.is_active); }}
+                            title={s.is_active ? 'Deactivate' : 'Activate'}
+                            className="w-7 h-7 rounded-lg border grid place-items-center bg-slatepanel-800 border-borderline-900 text-slate-400 hover:text-white"
+                          >
+                            {s.is_active ? <ShieldOff className="w-3.5 h-3.5" /> : <Shield className="w-3.5 h-3.5" />}
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); void removeStaff(s.id); }}
+                            className="w-7 h-7 rounded-lg border grid place-items-center bg-coral-500/10 border-coral-500/30 text-coral-400 hover:text-coral-300"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
                 )}
-              </div>
-            </div>
-          ))}
+              </tbody>
+            </table>
+          </div>
         </div>
 
-        {/* Permission editor */}
-        {selected && !selected.isOwner && isSuperAdmin && (
-          <div className="mt-4 bg-slatepanel-900 rounded-xl border border-borderline-900 p-4">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">
+        {/* Permissions editor */}
+        {selected && (
+          <div className="panel p-4 space-y-3">
+            <h3 className="font-display font-bold text-sm text-white">
               Permissions — {selected.name}
             </h3>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {ALL_PERMISSIONS.map((key) => {
-                const enabled = !!(selected.permissions as Record<string, boolean>)[key];
-                return (
+            <div className="space-y-2">
+              {ALL_PERMISSIONS.map((key) => (
+                <label key={key} className="flex items-center justify-between cursor-pointer">
+                  <span className="text-sm text-slate-300 capitalize">{key}</span>
                   <button
-                    key={key}
-                    onClick={() => handleTogglePerm(selected.id, key, enabled)}
-                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
-                      enabled
-                        ? 'bg-neon-500/15 border-neon-500/40 text-neon-300'
-                        : 'bg-slatepanel-800 border-borderline-900 text-slate-500 hover:text-slate-300'
+                    onClick={() => void updatePermission(selected.id, key, !selected.permissions[key])}
+                    className={`w-10 h-5 rounded-full border transition-all ${
+                      selected.permissions[key]
+                        ? 'bg-neon-500 border-neon-400'
+                        : 'bg-slatepanel-800 border-borderline-900'
                     }`}
                   >
-                    {enabled ? <Shield className="w-3 h-3" /> : <ShieldOff className="w-3 h-3" />}
-                    {PERM_LABELS[key]}
+                    <span className={`block w-3.5 h-3.5 rounded-full bg-white mx-auto transition-transform ${
+                      selected.permissions[key] ? 'translate-x-2' : '-translate-x-2'
+                    }`} />
                   </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Change password modal */}
-        {cpId && (
-          <div className="mt-4 bg-slatepanel-900 rounded-xl border border-borderline-900 p-4 space-y-3">
-            <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Change Password — {staff.find(s => s.id === cpId)?.name}
-            </h3>
-            <PasswordInput
-              className="w-full"
-              placeholder="New password"
-              value={newPwd}
-              onChange={(e) => setNewPwd(e.target.value)}
-            />
-            {cpError && <p className="text-xs text-coral-300">{cpError}</p>}
-            {cpOk && <p className="text-xs text-emerald-400">Password updated!</p>}
-            <div className="flex gap-2">
-              <button
-                onClick={handleChangePassword}
-                disabled={cpBusy || !newPwd.trim()}
-                className="btn-primary text-sm flex items-center gap-2"
-              >
-                <Key className="w-3.5 h-3.5" />
-                {cpBusy ? 'Saving…' : 'Save'}
-              </button>
-              <button
-                onClick={() => setCpId(null)}
-                className="px-3 py-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white text-sm"
-              >
-                Cancel
-              </button>
+                </label>
+              ))}
             </div>
           </div>
         )}
