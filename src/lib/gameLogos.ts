@@ -1,87 +1,62 @@
-// Game logo registry — admin uploads custom logos (stored as data URLs in
-// localStorage) which override the default lucide icons on game cards.
-// Cache-busting via a per-logo version/timestamp forces the UI to reload the
-// image immediately after every admin update.
-import { bus, Topics } from './bus';
+// Game logos — now fetched from Supabase games table + storage
+// Admin uploads custom logos which override default Lucide icons on game cards.
+// Falls back to default SVG icons if no logo is set.
 
-const STORAGE_KEY = 'b4bet.gameLogos';
+import { supabase } from '@/integrations/supabase/client';
+import { bus, Topics } from './bus';
 
 export type GameKey = 'crash' | 'mines' | 'wingo' | 'k3' | 'fived' | 'sunvsmoon' | 'trading' | 'aviator';
 
 type LogoEntry = { url: string; version: number };
 
-// Internal storage may be either the new object shape or a plain string
-// (legacy format before cache-busting). We treat both gracefully on load.
-type StoredLogoMap = Partial<Record<GameKey, LogoEntry | string>>;
-
-function load(): StoredLogoMap {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as StoredLogoMap;
-    if (!parsed || typeof parsed !== 'object') return {};
-    const migrated: StoredLogoMap = {};
-    for (const [key, val] of Object.entries(parsed)) {
-      if (typeof val === 'string') {
-        migrated[key as GameKey] = { url: val, version: Date.now() };
-      } else if (val && typeof val === 'object' && 'url' in val) {
-        migrated[key as GameKey] = val as LogoEntry;
-      }
-    }
-    return migrated;
-  } catch {
-    return {};
-  }
-}
-
-function save(map: StoredLogoMap) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    /* ignore quota */
-  }
-}
-
-function bustCache(url: string, version: number): string {
-  if (url.startsWith('data:')) return `${url}#v=${version}`;
-  if (url.includes('?')) return `${url}&v=${version}`;
-  return `${url}?v=${version}`;
-}
-
 class GameLogoStore {
-  private logos: StoredLogoMap = load();
+  private logos: Record<string, LogoEntry> = {};
 
-  get(key: GameKey): string | undefined {
-    const entry = this.logos[key];
-    if (!entry) return undefined;
-    if (typeof entry === 'string') return bustCache(entry, Date.now());
-    return bustCache(entry.url, entry.version);
+  constructor() {
+    this.syncFromSupabase();
+  }
+
+  private async syncFromSupabase() {
+    try {
+      const { data } = await supabase.from('games').select('slug, icon_url');
+      if (data) {
+        for (const g of data) {
+          if (g.icon_url) {
+            this.logos[g.slug] = { url: g.icon_url, version: Date.now() };
+          }
+        }
+        bus.emit(Topics.GameLogos, this.all());
+      }
+    } catch { /* use empty */ }
+  }
+
+  async get(key: GameKey): Promise<string | undefined> {
+    // Try Supabase first
+    try {
+      const { data } = await supabase.from('games').select('icon_url').eq('slug', key).single();
+      if (data?.icon_url) return data.icon_url;
+    } catch {}
+    return this.logos[key]?.url;
   }
 
   all(): Partial<Record<GameKey, string>> {
     const out: Partial<Record<GameKey, string>> = {};
     for (const [key, entry] of Object.entries(this.logos)) {
-      if (!entry) continue;
-      if (typeof entry === 'string') {
-        out[key as GameKey] = bustCache(entry, Date.now());
-      } else {
-        out[key as GameKey] = bustCache(entry.url, entry.version);
-      }
+      out[key as GameKey] = entry.url;
     }
     return out;
   }
 
-  set(key: GameKey, dataUrl: string) {
-    this.logos = { ...this.logos, [key]: { url: dataUrl, version: Date.now() } };
-    save(this.logos);
+  async set(key: GameKey, iconUrl: string) {
+    this.logos[key] = { url: iconUrl, version: Date.now() };
+    // Update Supabase
+    supabase.from('games').update({ icon_url: iconUrl }).eq('slug', key).then(() => {}).catch(() => {});
     bus.emit(Topics.GameLogos, this.all());
   }
 
-  remove(key: GameKey) {
-    const next = { ...this.logos };
-    delete next[key];
-    this.logos = next;
-    save(this.logos);
+  async remove(key: GameKey) {
+    delete this.logos[key];
+    supabase.from('games').update({ icon_url: null }).eq('slug', key).then(() => {}).catch(() => {});
     bus.emit(Topics.GameLogos, this.all());
   }
 }
