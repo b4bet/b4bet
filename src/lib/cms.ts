@@ -1,4 +1,4 @@
-// CMS â€” Supabase-backed admin-managed runtime content: banners, logo, UPI QR, deposit page HTML,
+// CMS – Supabase-backed admin-managed runtime content: banners, logo, UPI QR, deposit page HTML,
 // email templates, finance ledger, support inbox, staff sub-accounts and DMs,
 // payment methods, countries, referrals, dynamic pages, notification templates.
 // Now fully backed by Supabase database tables.
@@ -101,6 +101,25 @@ const defaultEmails: EmailTemplates = {
   withdrawalStatus: '<h1>Withdrawal {{status}}</h1><p>Hi {{username}}, your withdrawal of {{amount}} is now {{status}}.</p>',
 };
 
+// ---- Supabase staff row mapped to StaffAccount ----
+function mapSupabaseStaff(row: Record<string, unknown>): StaffAccount {
+  const role = (row.role as string) === 'super_admin' || (row.role as string) === 'admin' ? 'finance' : 'support';
+  const isOwner = (row.role as string) === 'super_admin';
+  const perms: Partial<Record<PermissionKey, boolean>> = isOwner
+    ? Object.fromEntries(ALL_PERMISSIONS.map(k => [k, true]))
+    : ((row.permissions as Partial<Record<PermissionKey, boolean>>) ?? {});
+  return {
+    id: row.id as string,
+    name: row.name as string,
+    email: row.email as string,
+    password: '', // never stored client-side
+    role: role as StaffRole,
+    online: false,
+    permissions: perms,
+    isOwner,
+  };
+}
+
 class Cms {
   banners: BannerSlide[] = defaultBanners;
   logoDataUrl: string | null = null;
@@ -154,11 +173,9 @@ class Cms {
 
   constructor() {
     this.loadFromStorage();
-    // Load banners from Supabase
     this.syncBannersFromSupabase();
-    // Load settings from Supabase
     this.syncSettingsFromSupabase();
-    // Load staff from Supabase
+    // Load staff from Supabase staff table (not profiles)
     this.syncStaffFromSupabase();
   }
 
@@ -168,8 +185,8 @@ class Cms {
     try {
       const { data } = await supabase.from('banners').select('*').eq('is_active', true).order('sort_order');
       if (data && data.length > 0) {
-        this.banners = data.map((b: any) => ({
-          id: b.id, imageDataUrl: b.image_url || '', imageUrl: b.image_url, linkUrl: b.link_url || '',
+        this.banners = data.map((b: Record<string, unknown>) => ({
+          id: b.id as string, imageDataUrl: (b.image_url as string) || '', imageUrl: b.image_url as string, linkUrl: (b.link_url as string) || '',
         }));
         this.emitBanners();
       }
@@ -180,30 +197,27 @@ class Cms {
     try {
       const { data } = await supabase.from('settings').select('*');
       if (data) {
-        for (const s of data) {
-          if (s.key === 'site_name' && s.value) { /* used in header */ }
-          if (s.key === 'min_deposit' && s.value) { /* use in deposit flow */ }
-          if (s.key === 'max_deposit' && s.value) { /* use in deposit flow */ }
-          if (s.key === 'min_withdrawal' && s.value) { /* use in withdrawal flow */ }
-          if (s.key === 'max_withdrawal' && s.value) { /* use in withdrawal flow */ }
-          if (s.key === 'referral_bonus' && s.value) { this.referralConfig.rewardAmount = s.value; }
-          if (s.key === 'maintenance_mode' && s.value === true) { /* show maintenance */ }
+        for (const s of data as Array<{ key: string; value: unknown }>) {
+          if (s.key === 'referral_bonus' && s.value) { this.referralConfig.rewardAmount = s.value as number; }
         }
       }
     } catch { /* ignore */ }
   }
 
-  private async syncStaffFromSupabase() {
+  // Load all active staff from Supabase `staff` table via RPC
+  async syncStaffFromSupabase() {
     try {
-      const { data } = await supabase.from('profiles').select('*').eq('is_admin', true);
-      if (data) {
-        const adminStaff: StaffAccount[] = data.map((p: any) => ({
-          id: p.id, name: p.username, password: '', role: 'finance' as StaffRole,
-          online: false, email: p.phone || '', permissions: {}, isOwner: true,
-        }));
-        if (adminStaff.length > 0) this.staff = [...adminStaff, ...this.staff.filter(s => !s.isOwner)];
+      const { data, error } = await supabase.rpc('get_all_staff');
+      if (error) { console.warn('[cms] syncStaffFromSupabase error:', error.message); return; }
+      if (data && Array.isArray(data)) {
+        this.staff = (data as Array<Record<string, unknown>>)
+          .filter(row => row.is_active)
+          .map(mapSupabaseStaff);
+        this.emitStaff();
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      console.warn('[cms] syncStaffFromSupabase failed:', err);
+    }
   }
 
   private loadFromStorage() {
@@ -280,7 +294,6 @@ class Cms {
     const rec = { id: Math.random().toString(36).slice(2), imageDataUrl, linkUrl };
     this.banners = [...this.banners, rec];
     this.emitBanners();
-    // Sync to Supabase
     supabase.from('banners').insert({ title: 'Banner', image_url: imageDataUrl, link_url: linkUrl, is_active: true, sort_order: this.banners.length }).then(() => {}).catch(() => {});
   }
   updateBanner(id: string, patch: Partial<BannerSlide>) {
@@ -312,7 +325,6 @@ class Cms {
     this.deposits = [rec, ...this.deposits];
     this.emitFinance();
     this.toast({ title: 'New deposit request', body: `${user} \u20B9${amount}`, kind: 'info' });
-    // Log to Supabase
     supabase.from('transactions').insert({ user_id: 'admin', type: 'deposit', amount, reference: `${user} - ${method}`, status: 'pending' }).then(() => {}).catch(() => {});
   }
   submitWithdrawal(user: string, amount: number, destination: string, details?: string) {
@@ -335,7 +347,6 @@ class Cms {
       try { store.creditUser(before.user, before.amount); } catch { /* ignore */ }
     }
     this.emitFinance();
-    // Update Supabase
     supabase.from('transactions').update({ status }).eq('id', id).then(() => {}).catch(() => {});
   }
   setWithdrawalStatus(id: string, status: WithdrawalRequest['status'], utr?: string, reason?: string) {
@@ -366,7 +377,6 @@ class Cms {
     this.support = [rec, ...this.support];
     this.emitSupport();
     this.toast({ title: 'New support message', body: `${from}: ${body.slice(0, 40)}`, kind: 'info' });
-    // Log to Supabase
     supabase.from('support_tickets').insert({ user_id: from, subject: 'Support', message: body, status: 'open' }).then(() => {}).catch(() => {});
   }
   markSupportRead(id?: string) {
@@ -375,56 +385,118 @@ class Cms {
   }
   unreadSupport() { return this.support.filter(s => !s.read).length; }
 
-  // ---- Staff ----
-  addStaff(name: string, password: string, role: StaffRole, permissions: Partial<Record<PermissionKey, boolean>> = {}) {
-    const rec: StaffAccount = { id: 'st_' + Math.random().toString(36).slice(2, 8), name, password, role, online: false, permissions };
-    this.staff = [...this.staff, rec];
+  // ---- Staff (Supabase-backed) ----
+
+  /**
+   * Add a new staff member to Supabase staff table.
+   */
+  async addStaff(name: string, password: string, role: StaffRole, permissions: Partial<Record<PermissionKey, boolean>> = {}): Promise<StaffAccount | null> {
+    const email = name.toLowerCase().replace(/\s+/g, '.') + '@b4bet.local';
+    try {
+      const { data, error } = await supabase.rpc('add_staff_member', {
+        p_email: email,
+        p_name: name,
+        p_password: password,
+        p_role: role === 'finance' ? 'admin' : 'staff',
+        p_permissions: permissions,
+      });
+      if (error) { console.warn('[cms] addStaff error:', error.message); return null; }
+      const rows = data as Array<Record<string, unknown>>;
+      if (rows && rows.length > 0) {
+        const acc = mapSupabaseStaff(rows[0]);
+        this.staff = [...this.staff, acc];
+        this.emitStaff();
+        return acc;
+      }
+      return null;
+    } catch (err) { console.warn('[cms] addStaff failed:', err); return null; }
+  }
+
+  /**
+   * Add a new staff member with explicit email.
+   */
+  async addStaffAccount(name: string, email: string, password: string, isOwner: boolean = false): Promise<StaffAccount | null> {
+    const supabaseRole = isOwner ? 'super_admin' : 'staff';
+    const perms: Partial<Record<PermissionKey, boolean>> = isOwner
+      ? Object.fromEntries(ALL_PERMISSIONS.map(k => [k, true]))
+      : {};
+    try {
+      const { data, error } = await supabase.rpc('add_staff_member', {
+        p_email: email.toLowerCase(),
+        p_name: name,
+        p_password: password,
+        p_role: supabaseRole,
+        p_permissions: perms,
+      });
+      if (error) { console.warn('[cms] addStaffAccount error:', error.message); return null; }
+      const rows = data as Array<Record<string, unknown>>;
+      if (rows && rows.length > 0) {
+        const acc = mapSupabaseStaff(rows[0]);
+        this.staff = [...this.staff, acc];
+        this.emitStaff();
+        return acc;
+      }
+      return null;
+    } catch (err) { console.warn('[cms] addStaffAccount failed:', err); return null; }
+  }
+
+  async setStaffPermission(id: string, key: PermissionKey, value: boolean) {
+    const acc = this.staff.find(s => s.id === id);
+    if (!acc) return;
+    const newPerms = { ...acc.permissions, [key]: value };
+    this.staff = this.staff.map(s => s.id === id ? { ...s, permissions: newPerms } : s);
     this.emitStaff();
-    // Sync to Supabase - mark profile as admin
-    supabase.from('profiles').update({ is_admin: true }).eq('username', name).then(() => {}).catch(() => {});
+    await supabase.rpc('update_staff_permissions', { p_id: id, p_permissions: newPerms })
+      .catch(err => { console.warn('[cms] setStaffPermission error:', err); });
   }
-  setStaffPermission(id: string, key: PermissionKey, value: boolean) {
-    this.staff = this.staff.map(s => s.id === id ? { ...s, permissions: { ...s.permissions, [key]: value } } : s);
-    this.emitStaff();
+
+  async updateStaffPassword(id: string, password: string) {
+    await supabase.rpc('update_staff_password', { p_id: id, p_new_password: password })
+      .catch(err => { console.warn('[cms] updateStaffPassword error:', err); });
   }
-  updateStaffPassword(id: string, password: string) {
-    this.staff = this.staff.map(s => s.id === id ? { ...s, password } : s);
-    this.emitStaff();
+
+  /**
+   * Verify staff credentials via Supabase RPC staff_login.
+   * Returns StaffAccount on success, null on failure.
+   */
+  async verifyStaffCredentialsAsync(email: string, password: string): Promise<StaffAccount | null> {
+    try {
+      const { data, error } = await supabase.rpc('staff_login', {
+        p_email: email.trim().toLowerCase(),
+        p_password: password,
+      });
+      if (error) { console.warn('[cms] staff_login error:', error.message); return null; }
+      const rows = data as Array<Record<string, unknown>>;
+      if (!rows || rows.length === 0) return null;
+      const acc = mapSupabaseStaff(rows[0]);
+      if (!this.staff.find(s => s.id === acc.id)) {
+        this.staff = [...this.staff, acc];
+        this.emitStaff();
+      }
+      return acc;
+    } catch (err) { console.warn('[cms] verifyStaffCredentialsAsync failed:', err); return null; }
   }
-  verifyStaffCredentials(name: string, password: string): StaffAccount | null {
-    const n = (name || '').trim().toLowerCase();
-    const found = this.staff.find(s => s.name.toLowerCase() === n && s.password === password);
-    return found ?? null;
-  }
-  verifyStaffCredentialsByEmail(email: string, password: string): StaffAccount | null {
-    const e = (email || '').trim().toLowerCase();
-    const found = this.staff.find(s => (s.email || '').toLowerCase() === e && s.password === password);
-    return found ?? null;
-  }
-  addStaffAccount(name: string, email: string, password: string, isOwner: boolean = false): StaffAccount {
-    const acc: StaffAccount = {
-      id: 'st_' + Math.random().toString(36).slice(2, 8), name, email: email.toLowerCase(), password,
-      role: isOwner ? 'finance' : 'support', online: false, isOwner,
-      permissions: isOwner ? Object.fromEntries(ALL_PERMISSIONS.map(k => [k, true])) : {},
-    };
-    this.staff = [...this.staff, acc];
-    this.emitStaff();
-    supabase.from('profiles').update({ is_admin: true }).eq('username', name).then(() => {}).catch(() => {});
-    return acc;
-  }
-  changeStaffPassword(id: string, oldPassword: string, newPassword: string): { ok: boolean; error?: string } {
+
+  // Legacy sync stubs — use verifyStaffCredentialsAsync instead
+  verifyStaffCredentials(_name: string, _password: string): StaffAccount | null { return null; }
+  verifyStaffCredentialsByEmail(_email: string, _password: string): StaffAccount | null { return null; }
+
+  async changeStaffPassword(id: string, oldPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
     const acc = this.staff.find(s => s.id === id);
     if (!acc) return { ok: false, error: 'Account not found.' };
-    if (acc.password !== oldPassword) return { ok: false, error: 'Old password is incorrect.' };
     if (!newPassword || newPassword.length < 4) return { ok: false, error: 'New password must be at least 4 characters.' };
-    this.staff = this.staff.map(s => s.id === id ? { ...s, password: newPassword } : s);
-    this.emitStaff();
+    const verified = await this.verifyStaffCredentialsAsync(acc.email || '', oldPassword);
+    if (!verified) return { ok: false, error: 'Old password is incorrect.' };
+    await this.updateStaffPassword(id, newPassword);
     return { ok: true };
   }
+
   updateStaffEmail(id: string, email: string) {
     this.staff = this.staff.map(s => s.id === id ? { ...s, email } : s);
     this.emitStaff();
+    supabase.from('staff').update({ email: email.toLowerCase(), updated_at: new Date().toISOString() }).eq('id', id).then(() => {}).catch(() => {});
   }
+
   requestStaffPasswordReset(email: string): { ok: boolean; error?: string; tempPassword?: string } {
     const e = (email || '').trim().toLowerCase();
     if (!e) return { ok: false, error: 'Please enter your recovery email address.' };
@@ -432,24 +504,25 @@ class Cms {
     if (!acc) return { ok: false, error: 'No admin account found with that email.' };
     if (!this.smtpConfig.active || !this.smtpConfig.host || !this.smtpConfig.user) return { ok: false, error: 'SMTP is not configured. Please configure SMTP first.' };
     const temp = 'tmp' + Math.random().toString(36).slice(2, 8);
-    this.staff = this.staff.map(s => s.id === acc.id ? { ...s, password: temp } : s);
-    this.emitStaff();
+    this.updateStaffPassword(acc.id, temp).catch(() => {});
     this.toast({ title: 'Password reset email sent', body: `A recovery email was dispatched to ${acc.email} via ${this.smtpConfig.host}.`, kind: 'success' });
     return { ok: true, tempPassword: temp };
   }
+
   hasPermission(key: PermissionKey): boolean {
     const me = this.currentStaff();
     if (!me) return false;
     if (me.isOwner) return true;
     return !!me.permissions[key];
   }
-  removeStaff(id: string) {
+
+  async removeStaff(id: string) {
     this.staff = this.staff.filter(s => s.id !== id);
     this.emitStaff();
-    // Remove admin flag from Supabase
-    const s = this.staff.find(x => x.id === id);
-    // Already filtered, so use the staff list
+    await supabase.rpc('deactivate_staff', { p_id: id })
+      .catch(err => { console.warn('[cms] removeStaff error:', err); });
   }
+
   setStaffSession(id: string | null) {
     this.staffSessionId = id;
     this.staff = this.staff.map(s => ({ ...s, online: s.id === id ? true : s.online }));
@@ -468,6 +541,19 @@ class Cms {
     const meId = this.staffSessionId;
     if (!meId) return [];
     return this.staffDMs.filter(m => (m.fromId === meId && m.toId === otherId) || (m.fromId === otherId && m.toId === meId));
+  }
+
+  // ---- IP Signup Bonus Check ----
+  /**
+   * Returns true if this IP has already been used for a signup.
+   * Used to block duplicate signup bonuses.
+   */
+  async hasIpAlreadySignedUp(ip: string): Promise<boolean> {
+    try {
+      const { data, error } = await supabase.rpc('check_ip_signup_bonus', { p_ip: ip });
+      if (error) return false;
+      return !!data;
+    } catch { return false; }
   }
 
   // ---- Countries / Geo ----
@@ -567,7 +653,6 @@ class Cms {
     };
     this.tickets = [ticket, ...this.tickets];
     this.emitTickets();
-    // Log to Supabase
     supabase.from('support_tickets').insert({ user_id: accountId, subject, message, status: 'open', priority: 'normal' }).then(() => {}).catch(() => {});
     return ticket;
   }
