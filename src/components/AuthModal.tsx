@@ -116,8 +116,8 @@ function LoginForm({
     e.preventDefault();
     setError(null);
     setLoading(true);
-    setTimeout(() => {
-      const result = auth.login(identifier, password);
+    setTimeout(async () => {
+      const result = await auth.login(identifier, password);
       setLoading(false);
       if (result.ok) {
         onSuccess();
@@ -232,8 +232,8 @@ function SignupForm({
     e.preventDefault();
     setError(null);
     setLoading(true);
-    setTimeout(() => {
-      const result = auth.register(username, email, password, referralCode, mobile);
+    setTimeout(async () => {
+      const result = await auth.register(username, email, password, referralCode, mobile);
       setLoading(false);
       if (result.ok) {
         bus.emit(Topics.AuthState, auth.getSession());
@@ -392,8 +392,8 @@ function ForgotForm({ onBack }: { onBack: () => void }) {
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      const result = auth.resetPassword(email, code, newPassword);
+    setTimeout(async () => {
+      const result = await auth.resetPassword(code, newPassword);
       setLoading(false);
       if (result.ok) {
         setStep('success');
@@ -573,8 +573,8 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      const result = auth.changePassword(currentPassword, newPassword);
+    setTimeout(async () => {
+      const result = await auth.changePassword(currentPassword, newPassword);
       setLoading(false);
       if (result.ok) {
         setSuccess(true);
