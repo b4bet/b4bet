@@ -1,23 +1,10 @@
-// Auth manager — handles user registration, login, logout, and forgot-password.
-// Uses localStorage for persistence and the bus/cms pattern for reactive state.
-// Password is hashed client-side (demo only — not production-grade security).
+// Auth manager â€” Supabase Auth backend
+// Handles user registration, login, logout, and forgot-password via Supabase.
 
+import { supabase } from '@/integrations/supabase/client';
 import { bus, Topics } from './bus';
 import { store } from './store';
 import { cms } from './cms';
-import { generateAccountId } from './accountId';
-
-const STORAGE_KEY_USERS = 'b4bet.users';
-const STORAGE_KEY_SESSION = 'b4bet.session';
-const STORAGE_KEY_RESET_CODES = 'b4bet.passwordResetCodes';
-const STORAGE_KEY_BANS = 'b4bet.bannedUsers';
-const STORAGE_KEY_CLIENT_IP = 'b4bet.clientIp';
-
-export interface PasswordResetCode {
-  email: string;
-  code: string;
-  expiresAt: number;
-}
 
 export interface AuthUser {
   id: string;
@@ -25,7 +12,6 @@ export interface AuthUser {
   username: string;
   email: string;
   mobile: string;
-  passwordHash: string;
   referralCode: string | null;
   ownReferralCode?: string;
   createdAt: number;
@@ -53,25 +39,18 @@ export interface BanRecord {
   unbanReason?: string;
 }
 
-/** Simple FNV-1a hash — for demo only. Not cryptographically secure. */
-function simpleHash(s: string): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  return (h >>> 0).toString(16).padStart(8, '0');
+/** Generate 6-digit numeric account ID */
+function generateAccountId(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-/** Generate or retrieve a simulated client IP fingerprint stored in localStorage.
- *  This simulates IP detection in a pure frontend environment.
- */
+/** Get or create simulated client IP fingerprint stored in localStorage */
 function getOrCreateClientIp(): string {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY_CLIENT_IP);
+    const stored = localStorage.getItem('b4bet.clientIp');
     if (stored) return stored;
     const ip = `${Math.floor(Math.random() * 200) + 10}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`;
-    localStorage.setItem(STORAGE_KEY_CLIENT_IP, ip);
+    localStorage.setItem('b4bet.clientIp', ip);
     return ip;
   } catch {
     return '0.0.0.0';
@@ -79,111 +58,62 @@ function getOrCreateClientIp(): string {
 }
 
 class AuthManager {
-  private users: AuthUser[] = [];
   private session: AuthSession | null = null;
-  private resetCodes: Record<string, PasswordResetCode> = {};
+  private usersCache: AuthUser[] = [];
   private bannedUsers: BanRecord[] = [];
 
   constructor() {
-    this.loadFromStorage();
-    this.loadResetCodes();
-    this.loadBans();
+    this.loadSession();
     this.applyPendingReferralRewards();
 
     bus.on(Topics.ReferralDepositApproved, (payload) => {
       const { username, amount } = payload as { username: string; amount: number };
-      const user = this.getUserByUsername(username);
+      const user = this.usersCache.find(u => u.username.toLowerCase() === username.toLowerCase());
       if (user && user.referralCode) {
         this.processReferralReward(user, amount);
       }
     });
   }
 
-  private loadFromStorage() {
+  private async loadSession() {
+    // Restore session from localStorage
     try {
-      const raw = localStorage.getItem(STORAGE_KEY_USERS);
-      if (raw) this.users = JSON.parse(raw) as AuthUser[];
-    } catch { /* ignore */ }
-    // Backfill 6-digit accountId for any legacy users stored without one.
-    let changed = false;
-    this.users = this.users.map((u) => {
-      if (!u.accountId) {
-        changed = true;
-        return { ...u, accountId: generateAccountId() };
-      }
-      return u;
-    });
-    if (changed) this.persistUsers();
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY_SESSION);
+      const raw = localStorage.getItem('b4bet.session');
       if (raw) this.session = JSON.parse(raw) as AuthSession;
     } catch { /* ignore */ }
-  }
 
-  private persistUsers() {
-    try {
-      localStorage.setItem(STORAGE_KEY_USERS, JSON.stringify(this.users));
-    } catch { /* ignore */ }
+    // Verify session is still valid with Supabase
+    if (this.session) {
+      const { data: { session: supabaseSession } } = await supabase.auth.getSession();
+      if (supabaseSession) {
+        this.session = {
+          userId: supabaseSession.user.id,
+          accountId: supabaseSession.user.user_metadata.accountId || '',
+          username: supabaseSession.user.user_metadata.username || supabaseSession.user.email || '',
+          email: supabaseSession.user.email || '',
+          loggedInAt: Date.now(),
+        };
+        this.persistSession();
+      } else {
+        this.session = null;
+        this.persistSession();
+      }
+    }
+    this.emitState();
   }
 
   private persistSession() {
     try {
       if (this.session) {
-        localStorage.setItem(STORAGE_KEY_SESSION, JSON.stringify(this.session));
+        localStorage.setItem('b4bet.session', JSON.stringify(this.session));
       } else {
-        localStorage.removeItem(STORAGE_KEY_SESSION);
+        localStorage.removeItem('b4bet.session');
       }
-    } catch { /* ignore */ }
-  }
-
-  private loadResetCodes() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY_RESET_CODES);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, PasswordResetCode>;
-        this.resetCodes = parsed;
-      }
-    } catch { /* ignore */ }
-    this.cleanupResetCodes();
-  }
-
-  private persistResetCodes() {
-    try {
-      localStorage.setItem(STORAGE_KEY_RESET_CODES, JSON.stringify(this.resetCodes));
-    } catch { /* ignore */ }
-  }
-
-  private cleanupResetCodes() {
-    const now = Date.now();
-    let changed = false;
-    for (const email of Object.keys(this.resetCodes)) {
-      if (this.resetCodes[email].expiresAt < now) {
-        delete this.resetCodes[email];
-        changed = true;
-      }
-    }
-    if (changed) this.persistResetCodes();
-  }
-
-  private loadBans() {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY_BANS);
-      if (raw) this.bannedUsers = JSON.parse(raw) as BanRecord[];
-    } catch { /* ignore */ }
-  }
-
-  private persistBans() {
-    try {
-      localStorage.setItem(STORAGE_KEY_BANS, JSON.stringify(this.bannedUsers));
     } catch { /* ignore */ }
   }
 
   private emitState() {
     bus.emit(Topics.AuthState, this.session);
-  }
-
-  private emitBans() {
-    bus.emit('auth:bans', this.bannedUsers);
   }
 
   getSession(): AuthSession | null {
@@ -194,74 +124,13 @@ class AuthManager {
     return this.session !== null;
   }
 
-  /** Return all currently active ban records (no unbanDate). */
-  getBannedUsers(): BanRecord[] {
-    return this.bannedUsers.filter((b) => !b.unbanDate);
-  }
-
-  /** Return full ban history including unbanned records. */
-  getAllBanHistory(): BanRecord[] {
-    return [...this.bannedUsers];
-  }
-
-  /** Ban a user by ID with a reason. Adds them to the Ban Section. */
-  banUser(id: string, reason: string, bannedBy: 'system' | 'admin' = 'admin'): boolean {
-    const user = this.users.find((u) => u.id === id);
-    if (!user) return false;
-
-    user.isActive = false;
-    this.persistUsers();
-
-    // Remove any prior active ban entry and add fresh one
-    this.bannedUsers = this.bannedUsers.filter((b) => !(b.userId === id && !b.unbanDate));
-    const record: BanRecord = {
-      userId: user.id,
-      username: user.username,
-      email: user.email,
-      ip: user.registrationIp ?? '—',
-      banDate: Date.now(),
-      banReason: reason,
-      bannedBy,
-    };
-    this.bannedUsers.push(record);
-    this.persistBans();
-    this.emitBans();
-
-    if (this.session?.userId === id) {
-      this.logout();
-    } else {
-      bus.emit(Topics.AuthState, this.session);
-    }
-    return true;
-  }
-
-  /** Unban a user by ID with a mandatory reason. */
-  unbanUser(id: string, reason: string): boolean {
-    const user = this.users.find((u) => u.id === id);
-    if (!user) return false;
-
-    user.isActive = true;
-    this.persistUsers();
-
-    const activeBan = this.bannedUsers.find((b) => b.userId === id && !b.unbanDate);
-    if (activeBan) {
-      activeBan.unbanDate = Date.now();
-      activeBan.unbanReason = reason;
-    }
-    this.persistBans();
-    this.emitBans();
-    bus.emit(Topics.AuthState, this.session);
-    return true;
-  }
-
-  /** Register a new user. Auto-logs in on success. */
-  register(
+  async register(
     username: string,
     email: string,
     password: string,
     referralCode: string,
     mobile: string,
-  ): { ok: boolean; error?: string } {
+  ): Promise<{ ok: boolean; error?: string }> {
     const uname = username.trim();
     const umail = email.trim().toLowerCase();
     const uref = referralCode.trim();
@@ -282,249 +151,182 @@ class AuthManager {
     if (password.length < 6) {
       return { ok: false, error: 'Password must be at least 6 characters.' };
     }
-    if (this.users.find((u) => u.email === umail)) {
-      return { ok: false, error: 'This email is already used. Please login.' };
-    }
-    if (this.users.find((u) => u.mobile === umobile)) {
-      return { ok: false, error: 'This mobile number is already used. Please login.' };
-    }
 
-    // ── IP tracking (silent) ────────────────────────────────────────────────
-    // The client IP is captured for every registration so admins can review
-    // multi-account activity from the same device in the Ban Section > IP
-    // Activity view. Registration is NEVER blocked here — the user is not
-    // shown any IP-related message. Admins may ban manually from the panel.
     const clientIp = getOrCreateClientIp();
-    // ────────────────────────────────────────────────────────────────────────
+    const accountId = generateAccountId();
 
-    const accId = generateAccountId();
-    const user: AuthUser = {
-      id: accId,
-      accountId: accId,
+    // Sign up with Supabase Auth
+    const { data, error } = await supabase.auth.signUp({
+      email: umail,
+      password,
+      options: {
+        data: {
+          username: uname,
+          accountId,
+          mobile: umobile,
+          referralCode: uref || null,
+          registrationIp: clientIp,
+        },
+      },
+    });
+
+    if (error) {
+      if (error.message.includes('already registered') || error.message.includes('already exists')) {
+        return { ok: false, error: 'This email is already registered. Please login.' };
+      }
+      return { ok: false, error: error.message };
+    }
+
+    if (!data.user) {
+      return { ok: false, error: 'Registration failed. Please try again.' };
+    }
+
+    // Create profile in profiles table
+    const ownRef = 'player_' + Math.random().toString(36).slice(2, 10);
+    await supabase.from('profiles').upsert({
+      id: data.user.id,
+      username: uname,
+      display_name: uname,
+      phone: umobile,
+      balance: 0,
+      total_deposit: 0,
+      total_withdrawal: 0,
+      vip_level: 0,
+      is_admin: false,
+    });
+
+    // Grant signup bonus
+    try { store.grantSignupBonus(data.user.id, uname); } catch { /* ignore */ }
+
+    // Set session
+    this.session = {
+      userId: data.user.id,
+      accountId,
       username: uname,
       email: umail,
-      mobile: umobile,
-      passwordHash: simpleHash(password),
-      referralCode: uref || null,
-      ownReferralCode: 'player_' + Math.random().toString(36).slice(2, 8),
-      createdAt: Date.now(),
-      isActive: true,
-      registrationIp: clientIp,
+      loggedInAt: Date.now(),
     };
+    this.persistSession();
+    this.emitState();
 
-    this.users.push(user);
-    this.persistUsers();
-    // Grant the admin-configured signup bonus (once per new user).
-    try { store.grantSignupBonus(user.accountId, user.username); } catch { /* ignore */ }
-    // Notify listeners so IP Activity views refresh with the new registration.
-    this.emitBans();
-
-    // Record the referral relationship if the signup came through a valid referral link/code
     if (uref) {
-      const referrer = this.users.find(
-        (u) => u.id === uref || u.ownReferralCode === uref,
-      );
-      if (referrer) {
-        user.referralCode = referrer.id;
-        cms.recordReferralSignup(user, referrer.id);
-        this.persistUsers();
+      // Record referral
+      const { data: profiles } = await supabase.from('profiles').select('id').eq('username', uref);
+      if (profiles && profiles.length > 0) {
+        cms.recordReferralSignup(
+          { id: data.user.id, accountId, username: uname, email: umail, mobile: umobile, referralCode: uref, createdAt: Date.now(), isActive: true },
+          profiles[0].id
+        );
       }
     }
 
-    this.session = {
-      userId: user.id,
-      accountId: user.accountId,
-      username: user.username,
-      email: user.email,
-      loggedInAt: Date.now(),
-    };
-    this.persistSession();
-    this.emitState();
-    this.applyPendingReferralRewards();
-
     cms.pushFromTemplate('nt_welcome', 'Welcome!', `Account created. Welcome, ${uname}!`, 'success');
-
-    const smtp = cms.smtpConfig;
-    if (smtp.active) {
-      cms.toast({
-        title: 'Welcome email sent',
-        body: `Dispatched to ${umail} via ${smtp.host}.`,
-        kind: 'info',
-      });
-    }
-
     return { ok: true };
   }
 
-  /** Login with email or username + password. */
-  login(identifier: string, password: string): { ok: boolean; error?: string } {
+  async login(identifier: string, password: string): Promise<{ ok: boolean; error?: string }> {
     const id = identifier.trim().toLowerCase();
-    const user = this.users.find(
-      (u) => u.email === id || u.username.toLowerCase() === id,
-    );
-    if (!user) {
-      return { ok: false, error: 'No account found with that email or username.' };
+
+    // Try Supabase sign-in
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: id.includes('@') ? id : `${id}@b4bet.local`,
+      password,
+    });
+
+    if (error) {
+      // Fallback: try using email from profiles
+      const { data: profileData } = await supabase.from('profiles').select('id').eq('username', id).single();
+      if (profileData) {
+        const { data: d2, error: e2 } = await supabase.auth.signInWithPassword({
+          email: id.includes('@') ? id : `${id}@placeholder.local`,
+          password,
+        });
+        if (e2) {
+          return { ok: false, error: 'Invalid email/username or password.' };
+        }
+        if (d2.user) {
+          this.session = {
+            userId: d2.user.id,
+            accountId: d2.user.user_metadata.accountId || '',
+            username: d2.user.user_metadata.username || id,
+            email: d2.user.email || '',
+            loggedInAt: Date.now(),
+          };
+          this.persistSession();
+          this.emitState();
+          this.applyPendingReferralRewards();
+          cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
+          return { ok: true };
+        }
+      }
+      return { ok: false, error: 'Invalid email/username or password.' };
     }
-    if (user.isActive === false) {
-      return { ok: false, error: 'This account has been banned. Contact support.' };
-    }
-    if (user.passwordHash !== simpleHash(password)) {
-      return { ok: false, error: 'Incorrect password.' };
+
+    if (!data.user) {
+      return { ok: false, error: 'Login failed.' };
     }
 
     this.session = {
-      userId: user.id,
-      accountId: user.accountId,
-      username: user.username,
-      email: user.email,
+      userId: data.user.id,
+      accountId: data.user.user_metadata.accountId || '',
+      username: data.user.user_metadata.username || id,
+      email: data.user.email || '',
       loggedInAt: Date.now(),
     };
     this.persistSession();
     this.emitState();
     this.applyPendingReferralRewards();
 
-    cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${user.username}!`, 'success');
-
+    cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
     return { ok: true };
   }
 
-  /** Return all registered users (no password hashes). */
-  getUsers(): Omit<AuthUser, 'passwordHash'>[] {
-    return this.users.map(({ passwordHash: _, ...u }) => u);
-  }
-
-  getUserByUsername(username: string): AuthUser | undefined {
-    return this.users.find((u) => u.username.toLowerCase() === username.toLowerCase());
-  }
-
-  getUserById(id: string): Omit<AuthUser, 'passwordHash'> | undefined {
-    const u = this.users.find((x) => x.id === id);
-    if (!u) return undefined;
-    const { passwordHash: _, ...rest } = u;
-    return rest;
-  }
-
-  getUserByAccountId(accountId: string): AuthUser | undefined {
-    return this.users.find((u) => u.accountId === accountId);
-  }
-
-  /** Toggle a user's active status (ban/unban). */
-  setUserStatus(id: string, isActive: boolean) {
-    const user = this.users.find((u) => u.id === id);
-    if (!user) return false;
-    user.isActive = isActive;
-    this.persistUsers();
-    if (!isActive && this.session?.userId === id) {
-      this.logout();
-    }
-    bus.emit(Topics.AuthState, this.session);
-    return true;
-  }
-
-  /** Log out the current session. */
-  logout() {
+  async logout() {
+    await supabase.auth.signOut();
     this.session = null;
     this.persistSession();
     this.emitState();
     cms.pushFromTemplate('nt_logout', 'Logged Out', 'Your session has ended. See you next time!', 'info');
   }
 
-  async forgotPassword(
-    email: string,
-  ): Promise<{ ok: boolean; error?: string }> {
+  async forgotPassword(email: string): Promise<{ ok: boolean; error?: string }> {
     const umail = email.trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(umail)) {
       return { ok: false, error: 'Please enter a valid email address.' };
     }
 
-    const user = this.users.find((u) => u.email === umail);
-    if (!user) {
-      return { ok: false, error: 'No account found with that email address.' };
-    }
+    const { error } = await supabase.auth.resetPasswordForEmail(umail, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
 
-    const smtp = cms.smtpConfig;
-    if (!smtp.active) {
-      return { ok: false, error: 'Email service is not configured. Please configure SMTP in the Admin Panel.' };
-    }
-
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    this.resetCodes[umail] = { email: umail, code, expiresAt: Date.now() + 15 * 60 * 1000 };
-    this.persistResetCodes();
-    this.cleanupResetCodes();
-
-    try {
-      const res = await fetch('/api/auth/reset-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: umail, code, smtp }),
-      });
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-      if (!res.ok || !data.ok) {
-        delete this.resetCodes[umail];
-        this.persistResetCodes();
-        return { ok: false, error: data.error || 'Failed to send reset email.' };
-      }
-    } catch (e) {
-      delete this.resetCodes[umail];
-      this.persistResetCodes();
-      return { ok: false, error: 'Network error while sending reset email.' };
+    if (error) {
+      return { ok: false, error: error.message };
     }
 
     cms.toast({
       title: 'Password reset sent',
-      body: `A recovery code was sent to ${umail}. Check your inbox.`,
+      body: `A recovery link was sent to ${umail}. Check your inbox.`,
       kind: 'success',
     });
-
     return { ok: true };
   }
 
-  resetPassword(
-    email: string,
-    code: string,
-    newPassword: string,
-  ): { ok: boolean; error?: string } {
-    const umail = email.trim().toLowerCase();
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(umail)) {
-      return { ok: false, error: 'Please enter a valid email address.' };
-    }
+  async resetPassword(code: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
     if (!newPassword || newPassword.length < 6) {
       return { ok: false, error: 'Password must be at least 6 characters.' };
     }
 
-    this.cleanupResetCodes();
-    const entry = this.resetCodes[umail];
-    if (!entry) {
-      return { ok: false, error: 'No reset request found for this email. Please request a new code.' };
-    }
-    if (Date.now() > entry.expiresAt) {
-      delete this.resetCodes[umail];
-      this.persistResetCodes();
-      return { ok: false, error: 'Reset code has expired. Please request a new one.' };
-    }
-    if (entry.code !== code.trim()) {
-      return { ok: false, error: 'Invalid reset code. Please try again.' };
-    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
 
-    const user = this.users.find((u) => u.email === umail);
-    if (!user) {
-      return { ok: false, error: 'No account found with that email address.' };
+    if (error) {
+      return { ok: false, error: error.message };
     }
-
-    user.passwordHash = simpleHash(newPassword);
-    this.persistUsers();
-    delete this.resetCodes[umail];
-    this.persistResetCodes();
 
     cms.pushFromTemplate('nt_password_reset', 'Password Reset Successful', 'Your password has been updated successfully.', 'success');
-
     return { ok: true };
   }
 
-  changePassword(
-    currentPassword: string,
-    newPassword: string,
-  ): { ok: boolean; error?: string } {
+  async changePassword(currentPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
     if (!this.session) {
       return { ok: false, error: 'You must be logged in to change your password.' };
     }
@@ -532,48 +334,112 @@ class AuthManager {
       return { ok: false, error: 'Password must be at least 6 characters.' };
     }
 
-    const user = this.users.find((u) => u.id === this.session?.userId);
-    if (!user) {
-      return { ok: false, error: 'Account not found.' };
-    }
-    if (user.passwordHash !== simpleHash(currentPassword)) {
+    // Verify current password by re-authenticating
+    const { error: reauthErr } = await supabase.auth.signInWithPassword({
+      email: this.session.email,
+      password: currentPassword,
+    });
+    if (reauthErr) {
       return { ok: false, error: 'Current password is incorrect.' };
     }
 
-    user.passwordHash = simpleHash(newPassword);
-    this.persistUsers();
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+      return { ok: false, error: error.message };
+    }
 
     cms.pushFromTemplate('nt_password_changed', 'Password Changed', 'Your password was updated successfully.', 'success');
-
     return { ok: true };
   }
 
-  processReferralReward(user: AuthUser, amount: number) {
-    const cfg = cms.referralConfig;
-    const ref = cms.referrals.find(
-      (r) => r.referredUserId === user.id && !r.firstDepositApproved,
-    );
-    if (!ref) return;
+  getUsers(): Omit<AuthUser, 'passwordHash'>[] {
+    return this.usersCache.map(({ /* omit sensitive */ ...u }) => u as any);
+  }
 
+  getUserByUsername(username: string): AuthUser | undefined {
+    return this.usersCache.find(u => u.username.toLowerCase() === username.toLowerCase());
+  }
+
+  getUserById(id: string): Omit<AuthUser, 'passwordHash'> | undefined {
+    const u = this.usersCache.find(x => x.id === id);
+    if (!u) return undefined;
+    return u as any;
+  }
+
+  getUserByAccountId(accountId: string): AuthUser | undefined {
+    return this.usersCache.find(u => u.accountId === accountId);
+  }
+
+  setUserStatus(id: string, isActive: boolean) {
+    const user = this.usersCache.find(u => u.id === id);
+    if (!user) return false;
+    user.isActive = isActive;
+    if (!isActive && this.session?.userId === id) {
+      this.logout();
+    }
+    bus.emit(Topics.AuthState, this.session);
+    return true;
+  }
+
+  banUser(id: string, reason: string, bannedBy: 'system' | 'admin' = 'admin'): boolean {
+    const user = this.usersCache.find(u => u.id === id);
+    if (!user) return false;
+    user.isActive = false;
+    const record: BanRecord = {
+      userId: user.id,
+      username: user.username,
+      email: user.email,
+      ip: user.registrationIp ?? '\u2014',
+      banDate: Date.now(),
+      banReason: reason,
+      bannedBy,
+    };
+    this.bannedUsers.push(record);
+    if (this.session?.userId === id) this.logout();
+    else bus.emit(Topics.AuthState, this.session);
+    return true;
+  }
+
+  unbanUser(id: string, reason: string): boolean {
+    const user = this.usersCache.find(u => u.id === id);
+    if (!user) return false;
+    user.isActive = true;
+    const activeBan = this.bannedUsers.find(b => b.userId === id && !b.unbanDate);
+    if (activeBan) {
+      activeBan.unbanDate = Date.now();
+      activeBan.unbanReason = reason;
+    }
+    bus.emit(Topics.AuthState, this.session);
+    return true;
+  }
+
+  getBannedUsers(): BanRecord[] {
+    return this.bannedUsers.filter(b => !b.unbanDate);
+  }
+
+  getAllBanHistory(): BanRecord[] {
+    return [...this.bannedUsers];
+  }
+
+  private processReferralReward(user: AuthUser, amount: number) {
+    const cfg = cms.referralConfig;
+    const ref = cms.referrals.find(r => r.referredUserId === user.id && !r.firstDepositApproved);
+    if (!ref) return;
     if (amount < cfg.minDeposit) {
       ref.depositAmount = amount;
       bus.emit(Topics.Referrals, cms.referrals);
       return;
     }
-
-    const totalRefs = cms.referrals.filter((r) => r.referrerId === ref.referrerId).length;
-    const rewardAmount =
-      totalRefs > cfg.tierThreshold
-        ? Math.round((amount * cfg.tierPercent) / 100)
-        : cfg.rewardAmount;
-
+    const totalRefs = cms.referrals.filter(r => r.referrerId === ref.referrerId).length;
+    const rewardAmount = totalRefs > cfg.tierThreshold
+      ? Math.round((amount * cfg.tierPercent) / 100)
+      : cfg.rewardAmount;
     ref.firstDepositApproved = true;
     ref.depositAmount = amount;
     ref.rewardAmount = rewardAmount;
     ref.rewardPaid = true;
-
-    const session = this.getSession();
-    if (session && session.userId === ref.referrerId) {
+    const sess = this.getSession();
+    if (sess && sess.userId === ref.referrerId) {
       store.credit(rewardAmount);
       ref.rewardCredited = true;
       ref.paidAt = Date.now();
@@ -581,17 +447,16 @@ class AuthManager {
     } else {
       ref.rewardCredited = false;
     }
-
     bus.emit(Topics.Referrals, cms.referrals);
   }
 
   applyPendingReferralRewards() {
-    const session = this.getSession();
-    if (!session) return;
+    const sess = this.getSession();
+    if (!sess) return;
     let credited = 0;
     let total = 0;
     for (const ref of cms.referrals) {
-      if (ref.referrerId !== session.userId) continue;
+      if (ref.referrerId !== sess.userId) continue;
       if (!ref.firstDepositApproved || ref.rewardCredited) continue;
       total += ref.rewardAmount;
       store.credit(ref.rewardAmount);
