@@ -9,10 +9,7 @@ import type { AuthUser } from './auth';
 
 // ---- Types ----
 export interface BannerSlide {
-  id: string;
-  imageDataUrl: string;
-  imageUrl?: string;
-  linkUrl: string;
+  id: string; imageDataUrl: string; imageUrl?: string; linkUrl: string;
 }
 export interface DepositRequest {
   id: string; user: string; userId?: string; amount: number; method: string;
@@ -240,6 +237,43 @@ class Cms {
     this.loadNotificationTemplates();
     // Load all data from Supabase on startup
     this.syncAllFromSupabase();
+    // Start realtime subscriptions for live updates
+    this.startRealtimeSubscriptions();
+  }
+
+  // ---- Realtime subscriptions for live data ----
+  private startRealtimeSubscriptions() {
+    // Transactions table - auto refresh when any change happens
+    supabase
+      .channel('cms_transactions')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        void this.syncTransactionsFromSupabase();
+      })
+      .subscribe();
+
+    // Profiles table
+    supabase
+      .channel('cms_profiles')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+        void this.syncUsersFromSupabase();
+      })
+      .subscribe();
+
+    // Support tickets
+    supabase
+      .channel('cms_tickets')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets' }, () => {
+        void this.syncTicketsFromSupabase();
+      })
+      .subscribe();
+
+    // Staff
+    supabase
+      .channel('cms_staff')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'staff' }, () => {
+        void this.syncStaffFromSupabase();
+      })
+      .subscribe();
   }
 
   // ---- Master sync: loads everything ----
@@ -257,8 +291,8 @@ class Cms {
 
   private async syncBannersFromSupabase() {
     try {
-      const { data } = await supabase.from('banners').select('*').eq('is_active', true).order('sort_order');
-      if (data && data.length > 0) {
+      const { data } = await supabase.rpc('admin_get_banners');
+      if (data && (data as Array<Record<string, unknown>>).length > 0) {
         this.banners = (data as Array<Record<string, unknown>>).map(b => ({
           id: b.id as string, imageDataUrl: (b.image_url as string) || '', imageUrl: b.image_url as string, linkUrl: (b.link_url as string) || '',
         }));
@@ -269,7 +303,7 @@ class Cms {
 
   private async syncSettingsFromSupabase() {
     try {
-      const { data } = await supabase.from('settings').select('*');
+      const { data } = await supabase.rpc('admin_get_settings');
       if (data) {
         for (const s of data as Array<{ key: string; value: unknown }>) {
           if (s.key === 'referral_bonus' && s.value) this.referralConfig.rewardAmount = s.value as number;
@@ -280,6 +314,7 @@ class Cms {
 
   async syncStaffFromSupabase() {
     try {
+      // Use the SECURITY DEFINER RPC - works without auth.uid()
       const { data, error } = await supabase.rpc('get_all_staff');
       if (error) { console.warn('[cms] syncStaff error:', error.message); return; }
       if (data && Array.isArray(data)) {
@@ -291,7 +326,8 @@ class Cms {
 
   async syncTransactionsFromSupabase() {
     try {
-      const { data, error } = await supabase.rpc('admin_get_transactions', { p_type: null });
+      // Use p_limit (not p_type - that version was removed)
+      const { data, error } = await supabase.rpc('admin_get_transactions', { p_limit: 500 });
       if (error) { console.warn('[cms] syncTransactions error:', error.message); return; }
       if (data && Array.isArray(data)) {
         const rows = data as Array<Record<string, unknown>>;
@@ -354,7 +390,7 @@ class Cms {
   private emitDepositHtml() { bus.emit(Topics.DepositHtml, this.depositPageHtml); }
   private emitWithdrawalHtml() { bus.emit(Topics.WithdrawalHtml, this.withdrawalPageHtml); }
   private emitEmails() { bus.emit(Topics.EmailTemplates, this.emailTemplates); }
-  private emitFinance() { bus.emit(Topics.Finance, { deposits: this.deposits, withdrawals: this.withdrawals }); }
+  emitFinance() { bus.emit(Topics.Finance, { deposits: this.deposits, withdrawals: this.withdrawals }); }
   private emitSupport() { bus.emit(Topics.Support, this.support); }
   private emitStaff() { bus.emit(Topics.Staff, this.staff); }
   private emitDMs() { bus.emit(Topics.StaffDM, this.staffDMs); }
@@ -365,7 +401,7 @@ class Cms {
 
   get notificationTemplates(): NotificationTemplate[] { return this._notificationTemplates; }
   private loadNotificationTemplates() {
-    try { const raw = localStorage.getItem(Cms.NOTIF_TEMPLATES_KEY); if (raw) this._notificationTemplates = JSON.parse(raw); } catch { /* ignore */ }
+    try { const raw = localStorage.getItem(Cms.NOTIF_TEMPLATES_KEY); if (raw) this._notificationTemplates = JSON.parse(raw) as NotificationTemplate[]; } catch { /* ignore */ }
   }
   private persistNotificationTemplates() {
     try { localStorage.setItem(Cms.NOTIF_TEMPLATES_KEY, JSON.stringify(this._notificationTemplates)); } catch { /* ignore */ }
@@ -403,15 +439,18 @@ class Cms {
   addBanner(imageDataUrl: string, linkUrl = '') {
     const rec = { id: Math.random().toString(36).slice(2), imageDataUrl, linkUrl };
     this.banners = [...this.banners, rec]; this.emitBanners();
-    supabase.from('banners').insert({ title: 'Banner', image_url: imageDataUrl, link_url: linkUrl, is_active: true, sort_order: this.banners.length }).then(() => {}).catch(() => {});
+    supabase.rpc('admin_upsert_banner', { p_id: null, p_title: 'Banner', p_image_url: imageDataUrl, p_link_url: linkUrl, p_sort_order: this.banners.length, p_is_active: true }).then(() => {}).catch(() => {});
   }
   updateBanner(id: string, patch: Partial<BannerSlide>) {
     this.banners = this.banners.map(b => b.id === id ? { ...b, ...patch } : b); this.emitBanners();
-    supabase.from('banners').update({ image_url: patch.imageDataUrl, link_url: patch.linkUrl }).eq('id', id).then(() => {}).catch(() => {});
+    if (patch.imageDataUrl || patch.linkUrl) {
+      const b = this.banners.find(x => x.id === id);
+      if (b) supabase.rpc('admin_upsert_banner', { p_id: id, p_title: 'Banner', p_image_url: b.imageDataUrl, p_link_url: b.linkUrl, p_sort_order: 0, p_is_active: true }).then(() => {}).catch(() => {});
+    }
   }
   removeBanner(id: string) {
     this.banners = this.banners.filter(b => b.id !== id); this.emitBanners();
-    supabase.from('banners').update({ is_active: false }).eq('id', id).then(() => {}).catch(() => {});
+    supabase.rpc('admin_delete_banner', { p_id: id }).then(() => {}).catch(() => {});
   }
 
   setLogo(dataUrl: string | null) { this.logoDataUrl = dataUrl; this.emitLogo(); }
@@ -430,7 +469,7 @@ class Cms {
       user_id: userId || null, type: 'deposit', amount,
       reference: `${user} - ${method}`, status: 'pending', metadata: meta,
     }).then(({ data }) => {
-      if (data) this.syncTransactionsFromSupabase();
+      if (data) void this.syncTransactionsFromSupabase();
     }).catch(() => {});
     // Optimistic local
     const rec: DepositRequest = { id: Math.random().toString(36).slice(2), user, userId, amount, method, utr, details, status: 'pending', ts: Date.now() };
@@ -443,7 +482,7 @@ class Cms {
     supabase.from('transactions').insert({
       user_id: userId || null, type: 'withdrawal', amount,
       reference: `${user} - ${destination}`, status: 'pending', metadata: meta,
-    }).then(() => { this.syncTransactionsFromSupabase(); }).catch(() => {});
+    }).then(() => { void this.syncTransactionsFromSupabase(); }).catch(() => {});
     const rec: WithdrawalRequest = { id: Math.random().toString(36).slice(2), user, userId, amount, destination, details, status: 'pending', ts: Date.now() };
     this.withdrawals = [rec, ...this.withdrawals]; this.emitFinance();
     this.toast({ title: 'New withdrawal request', body: `${user} \u20B9${amount}`, kind: 'warn' });
@@ -517,7 +556,7 @@ class Cms {
     };
     this.tickets = [ticket, ...this.tickets]; this.emitTickets();
     supabase.from('support_tickets').insert({ user_id: accountId, subject, message, status: 'open', priority: 'normal' })
-      .then(() => { this.syncTicketsFromSupabase(); }).catch(() => {});
+      .then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {});
     return ticket;
   }
   getTicket(id: string): SupportTicket | undefined { return this.tickets.find(t => t.id === id); }
@@ -529,7 +568,7 @@ class Cms {
   closeTicket(id: string) {
     this.tickets = this.tickets.map(t => t.id === id ? { ...t, status: 'closed' as TicketStatus } : t);
     this.emitTickets();
-    supabase.from('support_tickets').update({ status: 'closed' }).eq('id', id).then(() => {}).catch(() => {});
+    supabase.rpc('admin_update_ticket_status', { p_ticket_id: id, p_status: 'closed' }).then(() => {}).catch(() => {});
   }
   addTicketMessage(ticketId: string, body: string, role: 'user' | 'agent', agentId?: string) {
     const msg: TicketMessage = { id: Math.random().toString(36).slice(2), role, agentId, body, ts: Date.now() };
@@ -538,41 +577,70 @@ class Cms {
   }
   ackTicket(id: string) { this.tickets = this.tickets.map(t => t.id === id ? { ...t, acknowledged: true } : t); this.emitTickets(); }
 
-  // ---- Staff (Supabase-backed) ----
+  // ---- Staff (Supabase-backed via SECURITY DEFINER RPCs) ----
   async addStaff(name: string, password: string, role: StaffRole, permissions: Partial<Record<PermissionKey, boolean>> = {}): Promise<StaffAccount | null> {
     const email = name.toLowerCase().replace(/\s+/g, '.') + '@b4bet.local';
+    const hash = await this.hashPassword(password);
     try {
-      const { data, error } = await supabase.rpc('add_staff_member', { p_email: email, p_name: name, p_password: password, p_role: role === 'finance' ? 'admin' : 'staff', p_permissions: permissions });
+      const { data, error } = await supabase.rpc('admin_create_staff', {
+        p_email: email, p_name: name, p_role: role === 'finance' ? 'admin' : 'staff',
+        p_password_hash: hash, p_permissions: permissions,
+      });
       if (error) { console.warn('[cms] addStaff error:', error.message); return null; }
-      const rows = data as Array<Record<string, unknown>>;
-      if (rows?.length > 0) { const acc = mapSupabaseStaff(rows[0]); this.staff = [...this.staff, acc]; this.emitStaff(); return acc; }
+      if (data) {
+        await this.syncStaffFromSupabase();
+        return this.staff.find(s => s.id === data) ?? null;
+      }
       return null;
     } catch (e) { console.warn('[cms] addStaff failed:', e); return null; }
   }
+
   async addStaffAccount(name: string, email: string, password: string, isOwner: boolean = false): Promise<StaffAccount | null> {
     const supabaseRole = isOwner ? 'super_admin' : 'staff';
     const perms: Partial<Record<PermissionKey, boolean>> = isOwner ? Object.fromEntries(ALL_PERMISSIONS.map(k => [k, true])) : {};
+    const hash = await this.hashPassword(password);
     try {
-      const { data, error } = await supabase.rpc('add_staff_member', { p_email: email.toLowerCase(), p_name: name, p_password: password, p_role: supabaseRole, p_permissions: perms });
+      const { data, error } = await supabase.rpc('admin_create_staff', {
+        p_email: email.toLowerCase(), p_name: name, p_role: supabaseRole,
+        p_password_hash: hash, p_permissions: perms,
+      });
       if (error) { console.warn('[cms] addStaffAccount error:', error.message); return null; }
-      const rows = data as Array<Record<string, unknown>>;
-      if (rows?.length > 0) { const acc = mapSupabaseStaff(rows[0]); this.staff = [...this.staff, acc]; this.emitStaff(); return acc; }
+      if (data) {
+        await this.syncStaffFromSupabase();
+        return this.staff.find(s => s.id === data) ?? null;
+      }
       return null;
     } catch (e) { console.warn('[cms] addStaffAccount failed:', e); return null; }
   }
+
   async setStaffPermission(id: string, key: PermissionKey, value: boolean) {
     const acc = this.staff.find(s => s.id === id);
     if (!acc) return;
     const newPerms = { ...acc.permissions, [key]: value };
     this.staff = this.staff.map(s => s.id === id ? { ...s, permissions: newPerms } : s); this.emitStaff();
-    await supabase.rpc('update_staff_permissions', { p_id: id, p_permissions: newPerms }).catch(e => console.warn('[cms] setStaffPermission error:', e));
+    await supabase.rpc('admin_update_staff_permissions', { p_staff_id: id, p_permissions: newPerms }).catch(e => console.warn('[cms] setStaffPermission error:', e));
   }
+
   async updateStaffPassword(id: string, password: string) {
-    await supabase.rpc('update_staff_password', { p_id: id, p_new_password: password }).catch(e => console.warn('[cms] updateStaffPassword error:', e));
+    const hash = await this.hashPassword(password);
+    await supabase.rpc('admin_update_staff_password', { p_staff_id: id, p_password_hash: hash }).catch(e => console.warn('[cms] updateStaffPassword error:', e));
   }
+
+  // SHA-256 hash helper
+  private async hashPassword(plain: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(plain);
+    const buf = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
   async verifyStaffCredentialsAsync(email: string, password: string): Promise<StaffAccount | null> {
     try {
-      const { data, error } = await supabase.rpc('staff_login', { p_email: email.trim().toLowerCase(), p_password: password });
+      const hash = await this.hashPassword(password);
+      const { data, error } = await supabase.rpc('admin_staff_login', {
+        p_email: email.trim().toLowerCase(),
+        p_password_hash: hash,
+      });
       if (error) { console.warn('[cms] staff_login error:', error.message); return null; }
       const rows = data as Array<Record<string, unknown>>;
       if (!rows?.length) return null;
@@ -583,6 +651,7 @@ class Cms {
   }
   verifyStaffCredentials(_name: string, _password: string): StaffAccount | null { return null; }
   verifyStaffCredentialsByEmail(_email: string, _password: string): StaffAccount | null { return null; }
+
   async changeStaffPassword(id: string, oldPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
     const acc = this.staff.find(s => s.id === id);
     if (!acc) return { ok: false, error: 'Account not found.' };
@@ -592,10 +661,13 @@ class Cms {
     await this.updateStaffPassword(id, newPassword);
     return { ok: true };
   }
+
   updateStaffEmail(id: string, email: string) {
     this.staff = this.staff.map(s => s.id === id ? { ...s, email } : s); this.emitStaff();
+    // Use direct table update (staff email change is rare and low risk)
     supabase.from('staff').update({ email: email.toLowerCase(), updated_at: new Date().toISOString() }).eq('id', id).then(() => {}).catch(() => {});
   }
+
   requestStaffPasswordReset(email: string): { ok: boolean; error?: string; tempPassword?: string } {
     const e = (email || '').trim().toLowerCase();
     if (!e) return { ok: false, error: 'Please enter your recovery email address.' };
@@ -607,24 +679,28 @@ class Cms {
     this.toast({ title: 'Password reset email sent', body: `A recovery email was dispatched to ${acc.email} via ${this.smtpConfig.host}.`, kind: 'success' });
     return { ok: true, tempPassword: temp };
   }
+
   hasPermission(key: PermissionKey): boolean {
     const me = this.currentStaff();
     if (!me) return false;
     if (me.isOwner) return true;
     return !!me.permissions[key];
   }
+
   async removeStaff(id: string) {
     this.staff = this.staff.filter(s => s.id !== id); this.emitStaff();
-    await supabase.rpc('deactivate_staff', { p_id: id }).catch(e => console.warn('[cms] removeStaff error:', e));
+    await supabase.rpc('admin_delete_staff', { p_staff_id: id }).catch(e => console.warn('[cms] removeStaff error:', e));
   }
+
   setStaffSession(id: string | null) {
     this.staffSessionId = id;
     this.staff = this.staff.map(s => ({ ...s, online: s.id === id ? true : s.online }));
     this.emitStaff();
     bus.emit(Topics.StaffSession, id);
     // When staff logs in, refresh all data
-    if (id) this.syncAllFromSupabase();
+    if (id) void this.syncAllFromSupabase();
   }
+
   currentStaff(): StaffAccount | null { return this.staff.find(s => s.id === this.staffSessionId) ?? null; }
   sendStaffDM(toId: string, body: string) {
     const me = this.currentStaff();
