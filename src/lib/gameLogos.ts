@@ -1,4 +1,4 @@
-// Game logos — now fetched from Supabase games table + storage
+// Game logos â€” now fetched from Supabase games table + storage
 // Admin uploads custom logos which override default Lucide icons on game cards.
 // Falls back to default SVG icons if no logo is set.
 
