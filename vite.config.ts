@@ -3,8 +3,6 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 
-
-
 const rawPort = process.env.PORT || '8080';
 const port = Number(rawPort);
 
@@ -30,7 +28,7 @@ export default defineConfig({
   },
   root: __dirname,
   build: {
-    outDir: path.resolve(__dirname, 'dist/public'),
+    outDir: path.resolve(__dirname, 'dist'),
     emptyOutDir: true,
   },
   server: {
