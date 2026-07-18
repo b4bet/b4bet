@@ -1,10 +1,15 @@
 /**
- * TradingGameView — Binary options trading game.
+ * TradingGameView — server-side settlement version.
  *
- * Layout changes (spec §6):
- *   Top bar:     Asset selector + Binary chip only (no Back button, no Balance widget).
+ * When a bet expires the outcome is settled by the process-bet Edge Function
+ * (trading_settle). The server compares entry vs exit price, atomically
+ * updates profiles.balance and inserts a bets row.
+ * store.recordTradingBet() is called ONLY for the local UI history — it no
+ * longer modifies the balance.
+ *
+ * Layout matches spec §6:
+ *   Top bar:     Asset selector + Binary chip only.
  *   Control panel order: Amount → Active Bets toggle → Expiration → UP/DOWN → Payout.
- *   Active bets panel: toggle above expiry row; no X button; outside-click closes.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -18,6 +23,8 @@ import { bus, Topics } from '../lib/bus';
 import type { TradingBetRecord } from '../lib/store';
 import { useBalance } from '../lib/hooks';
 import { cms } from '../lib/cms';
+import { auth } from '../lib/auth';
+import { GameService } from '../lib/game-service';
 
 // ─────────────────────────────────────────────────────────────
 type AssetCategory = 'Crypto' | 'Forex' | 'Commodities' | 'Stocks';
@@ -119,7 +126,7 @@ function ToastItem({ toast, onRemove }: { toast: ToastItem; onRemove: (id: strin
 }
 
 // ─────────────────────────────────────────────────────────────
-// Chart (Canvas-based — unchanged from original)
+// Chart (Canvas-based — unchanged)
 // ─────────────────────────────────────────────────────────────
 function PriceChart({ priceHistory, currentPrice, selectedAsset, activeBets }: {
   priceHistory: PricePoint[]; currentPrice: number; selectedAsset: Asset; activeBets?: ActiveBet[];
@@ -289,7 +296,7 @@ function PriceChart({ priceHistory, currentPrice, selectedAsset, activeBets }: {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Active bets panel — spec §6: no X button; closed by toggle or outside click.
+// Active bets panel
 // ─────────────────────────────────────────────────────────────
 function ActiveBetsList({ bets }: { bets: ActiveBet[] }) {
   const winning = bets.filter((b) => b.isWinning).length;
@@ -341,7 +348,7 @@ function ActiveBetsList({ bets }: { bets: ActiveBet[] }) {
 // ─────────────────────────────────────────────────────────────
 // Main view
 // ─────────────────────────────────────────────────────────────
-export default function TradingGameView({ onBack }: { onBack?: () => void }) {
+export default function TradingGameView({ onBack: _onBack }: { onBack?: () => void }) {
   const balance = useBalance();
 
   const [selectedAsset, setSelectedAsset] = useState<Asset>(ASSETS[0]);
@@ -352,7 +359,6 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
   const [betsPanelOpen, setBetsPanelOpen] = useState(false);
 
   const [selectedTime,   setSelectedTime]   = useState<TimeOption>(1);
-  // Use string state so user can fully clear the field (spec §1)
   const [betAmountStr,   setBetAmountStr]   = useState('100');
   const betAmount = parseFloat(betAmountStr) || 0;
 
@@ -361,15 +367,12 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
   const activeBetsRef   = useRef<ActiveBet[]>(activeBets);
   const currentPriceRef = useRef(currentPrice);
   const assetRef        = useRef(selectedAsset);
-
-  // Ref for outside-click detection on active bets panel
-  const betsPanelRef = useRef<HTMLDivElement>(null);
+  const betsPanelRef    = useRef<HTMLDivElement>(null);
 
   useEffect(() => { activeBetsRef.current = activeBets; }, [activeBets]);
   useEffect(() => { currentPriceRef.current = currentPrice; }, [currentPrice]);
   useEffect(() => { assetRef.current = selectedAsset; }, [selectedAsset]);
 
-  // spec §6: close Active Bets panel on outside click
   useEffect(() => {
     if (!betsPanelOpen) return;
     const handler = (e: MouseEvent) => {
@@ -412,7 +415,13 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
     });
   }, []);
 
-  // ── Resolve bets ──
+  const addToast    = useCallback((message: string, type: ToastItem['type']) => {
+    const t: ToastItem = { id: Math.random().toString(36).slice(2), message, type };
+    setToasts((prev) => [...prev, t]);
+  }, []);
+  const removeToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
+
+  // ── Resolve bets (server-side settlement) ──
   const resolveBets = useCallback(() => {
     const now = Date.now();
     const cp  = currentPriceRef.current;
@@ -427,35 +436,64 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
       });
       updated.forEach((bet) => {
         if (bet.timeRemaining <= 0) {
-          const won = bet.isWinning;
-          if (won) {
-            const profit = (bet.betAmount * bet.payoutPercentage) / 100;
-            store.credit(bet.betAmount + profit);
-            addToast(`WIN +${Math.floor(profit)} on ${bet.asset.symbol}`, 'win');
-
-            store.recordTradingBet({ symbol: bet.asset.symbol, direction: bet.direction, stake: bet.betAmount, duration: bet.durationMinutes, entryPrice: bet.entryPrice, exitPrice: currentPriceRef.current, payout: bet.payoutPercentage, win: bet.betAmount + profit, won: true } as Omit<TradingBetRecord, 'id' | 'ts'>);
-          } else {
-            addToast(`LOSS -${Math.floor(bet.betAmount)} on ${bet.asset.symbol}`, 'lose');
-
-            store.recordTradingBet({ symbol: bet.asset.symbol, direction: bet.direction, stake: bet.betAmount, duration: bet.durationMinutes, entryPrice: bet.entryPrice, exitPrice: currentPriceRef.current, payout: bet.payoutPercentage, win: 0, won: false } as Omit<TradingBetRecord, 'id' | 'ts'>);
+          // Settlement is fully server-side
+          const session = auth.getSession();
+          if (session) {
+            void GameService.tradingSettle(
+              session.userId,
+              bet.asset.symbol,
+              bet.direction,
+              bet.betAmount,
+              bet.entryPrice,
+              cp,
+              bet.payoutPercentage,
+            ).then((res) => {
+              // Sync balance from server
+              store.setBalance(res.balance_after);
+              if (res.won) {
+                addToast(`WIN +${Math.floor(res.profit)} on ${bet.asset.symbol}`, 'win');
+              } else {
+                addToast(`LOSS -${Math.floor(bet.betAmount)} on ${bet.asset.symbol}`, 'lose');
+              }
+              // Local history only — no balance mutation
+              store.recordTradingBet({
+                symbol: bet.asset.symbol,
+                direction: bet.direction,
+                stake: bet.betAmount,
+                duration: bet.durationMinutes,
+                entryPrice: bet.entryPrice,
+                exitPrice: cp,
+                payout: bet.payoutPercentage,
+                win: res.won ? res.payout : 0,
+                won: res.won,
+              } as Omit<TradingBetRecord, 'id' | 'ts'>);
+            }).catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : 'Server error';
+              addToast(`Settle failed: ${msg}`, 'info');
+            });
           }
+          // Don't push to remaining — bet is expired
         } else {
           remaining.push(bet);
         }
       });
       return remaining;
     });
-  }, []);
+  }, [addToast]);
 
   useEffect(() => {
     const id = setInterval(() => { updatePrice(); resolveBets(); }, 1000);
     return () => clearInterval(id);
   }, [updatePrice, resolveBets]);
 
-  const addToast    = useCallback((message: string, type: ToastItem['type']) => { const t: ToastItem = { id: Math.random().toString(36).slice(2), message, type }; setToasts((prev) => [...prev, t]); }, []);
-  const removeToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
+  const limits = store.getGameLimits('trading');
 
   const handlePlaceBet = useCallback((direction: BetDirection) => {
+    const session = auth.getSession();
+    if (!session) {
+      bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login');
+      return;
+    }
     const amt = parseFloat(betAmountStr) || 0;
     if (amt < limits.min || amt > limits.max) {
       cms.toast({ title: 'Bet out of range', body: `Trading bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
@@ -466,6 +504,7 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
       addToast('Invalid bet amount', 'info');
       return;
     }
+    // Deduct balance locally for optimistic display; server reconciles on settle
     const ok = store.debit(amt);
     if (!ok) { bus.emit(Topics.InsufficientBalance); addToast('Insufficient balance', 'info'); return; }
 
@@ -485,7 +524,7 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
     };
     setActiveBets((prev) => [...prev, newBet]);
     addToast(`${direction} on ${assetRef.current.symbol} ×${selectedTime}m`, 'info');
-  }, [balance, betAmountStr, selectedTime, addToast]);
+  }, [balance, betAmountStr, selectedTime, addToast, limits]);
 
   const handleAssetChange = (asset: Asset) => {
     setSelectedAsset(asset);
@@ -498,15 +537,13 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
     setBetAmountStr(String(Math.max(1, Math.min(Math.floor(balance), cur + delta))));
   };
 
-  const limits       = store.getGameLimits('trading');
   const potentialWin = betAmount + (betAmount * selectedAsset.payout) / 100;
   const canBet       = betAmount > 0 && betAmount <= balance;
 
   return (
     <div className="flex flex-col animate-fade-in h-[calc(100vh-130px)]">
-      {/* ── spec §6 Top bar: asset selector + Binary chip only ── */}
+      {/* ── Top bar: asset selector only ── */}
       <div className="bg-gray-900 border border-gray-800 rounded-t-2xl px-3 py-2 flex items-center gap-2 flex-shrink-0">
-        {/* Asset selector */}
         <div className="relative flex-1">
           <button
             onClick={() => setAssetDropdown(!assetDropdown)}
@@ -552,7 +589,7 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
       {/* ── Control panel ── */}
       <div className="bg-gray-900 border border-t-0 border-gray-800 rounded-b-2xl px-3 py-2.5 flex-shrink-0 space-y-2.5">
 
-        {/* spec §6: Amount FIRST */}
+        {/* Amount FIRST */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] text-gray-400 uppercase tracking-wide">Amount</span>
@@ -565,7 +602,6 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
             <button onClick={() => adjustAmount(-50)} disabled={betAmount <= 1} className="p-2 rounded-lg bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-40 transition-all active:scale-95">
               <Minus className="w-4 h-4" />
             </button>
-            {/* String-based input — allows fully clearing the field (spec §1) */}
             <input
               type="text"
               inputMode="decimal"
@@ -586,7 +622,7 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
           </div>
         </div>
 
-        {/* spec §6: Active Bets toggle ABOVE expiry options — outside-click closes, no X button */}
+        {/* Active Bets toggle */}
         <div ref={betsPanelRef}>
           <button
             onClick={() => setBetsPanelOpen(!betsPanelOpen)}
@@ -604,7 +640,7 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
           {betsPanelOpen && <ActiveBetsList bets={activeBets} />}
         </div>
 
-        {/* spec §6: Expiration time AFTER amount & active bets toggle */}
+        {/* Expiration */}
         <div>
           <div className="flex items-center gap-1.5 mb-1.5">
             <Clock className="w-3 h-3 text-gray-400" />
@@ -623,7 +659,7 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
           </div>
         </div>
 
-        {/* spec §6: UP/DOWN buttons BELOW expiry */}
+        {/* UP/DOWN buttons */}
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => handlePlaceBet('UP')}
