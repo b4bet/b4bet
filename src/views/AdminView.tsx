@@ -4,7 +4,7 @@ import {
   Cpu, Bell, Megaphone, Wallet, Trophy, Mail, Server, Coins,
   CreditCard, FileText, Image, Gift, Settings, History,
   ShieldBan, MessageSquare, Zap, BarChart2, LogOut, Menu, X,
-  KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown,
+  KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown, Link2,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -42,11 +42,13 @@ import BannerLogoTab from './admin/BannerLogoTab';
 import CrmTab from './admin/CrmTab';
 import TicketAlertOverlay from '../components/TicketAlertOverlay';
 import AdminSupportNotification from '../components/AdminSupportNotification';
+import AffiliatesTab from './admin/AffiliatesTab';
+import TopRankingsTab from './admin/TopRankingsTab';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager'
   | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory'
-  | 'requests' | 'signupBonus' | 'dashboard';
+  | 'requests' | 'signupBonus' | 'dashboard' | 'affiliates';
 
 type GameHandlerKey = 'crash' | 'wingo' | 'k3' | 'fived' | 'sunvsmoon' | 'aviator';
 type FloatToast = { id: number; message: string; icon: 'deposit' | 'withdrawal' | 'support' };
@@ -59,6 +61,7 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'tickets',             label: 'Tickets',          icon: Headphones },
   { key: 'users',               label: 'Users',            icon: Users },
   { key: 'staff',               label: 'Staff',            icon: ShieldCheck },
+  { key: 'affiliates',          label: 'Affiliates',       icon: Link2 },
   { key: 'gateways',            label: 'Auto Gateways',    icon: Zap },
   { key: 'algos',               label: 'Game Algos',       icon: Cpu },
   { key: 'games',               label: 'Game Handlers',    icon: Settings },
@@ -97,17 +100,16 @@ async function sha256Hex(plain: string): Promise<string> {
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// ─── Password form ────────────────────────────────────────────────────────────
 function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () => void }) {
   const [old, setOld]         = useState('');
   const [next, setNext]       = useState('');
   const [confirm, setConfirm] = useState('');
-  const [showOld,   setShowOld]   = useState(false);
-  const [showNext,  setShowNext]  = useState(false);
-  const [showConf,  setShowConf]  = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
-  const [ok, setOk]           = useState(false);
+  const [showOld,  setShowOld]  = useState(false);
+  const [showNext, setShowNext] = useState(false);
+  const [showConf, setShowConf] = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+  const [ok, setOk]             = useState(false);
 
   const submit = async () => {
     setError('');
@@ -155,7 +157,6 @@ function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () =
   );
 }
 
-// ─── Notification row ─────────────────────────────────────────────────────────
 function NotifRow({ icon: Icon, label, count, onClick, accent }: {
   icon: typeof Bell; label: string; count: number; onClick: () => void; accent: string;
 }) {
@@ -170,7 +171,6 @@ function NotifRow({ icon: Icon, label, count, onClick, accent }: {
   );
 }
 
-// ─── Floating toast ───────────────────────────────────────────────────────────
 function FloatingToasts({ toasts, onDismiss }: { toasts: FloatToast[]; onDismiss: (id: number) => void }) {
   if (toasts.length === 0) return null;
   const MAP = {
@@ -196,7 +196,6 @@ function FloatingToasts({ toasts, onDismiss }: { toasts: FloatToast[]; onDismiss
   );
 }
 
-// ─── Notification bell ────────────────────────────────────────────────────────
 function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSupport, onNavigate }: {
   totalUnread: number; pendingDeposits: number; pendingWithdrawals: number;
   unreadSupport: number; onNavigate: (tab: Tab) => void;
@@ -213,8 +212,7 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
   return (
     <div className="relative" ref={ref}>
       <button onClick={() => setOpen(v => !v)}
-        className="relative w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 grid place-items-center hover:border-violet-500/50 transition-colors"
-        aria-label="Notifications">
+        className="relative w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 grid place-items-center hover:border-violet-500/50 transition-colors">
         <Bell className="w-4 h-4 text-slate-300" />
         {totalUnread > 0 && (
           <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-[20px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center border-2 border-slate-900 shadow-lg">
@@ -223,19 +221,11 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
         )}
       </button>
       {open && (
-        <div className="absolute right-0 top-11 w-[280px] max-w-[calc(100vw-4rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] p-2">
-          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-3 py-1.5 flex items-center gap-1.5">
-            <Bell className="w-3 h-3" /> Notifications
-          </p>
-          {pendingDeposits > 0 && (
-            <NotifRow icon={Banknote}      accent="text-emerald-400" label="Pending deposits"        count={pendingDeposits}    onClick={() => { onNavigate('finance');  setOpen(false); }} />
-          )}
-          {pendingWithdrawals > 0 && (
-            <NotifRow icon={TrendingDown}  accent="text-red-400"     label="Pending withdrawals"     count={pendingWithdrawals} onClick={() => { onNavigate('requests'); setOpen(false); }} />
-          )}
-          {unreadSupport > 0 && (
-            <NotifRow icon={MessageSquare} accent="text-violet-400"  label="Unread support messages" count={unreadSupport}      onClick={() => { cms.markSupportRead(); setOpen(false); }} />
-          )}
+        <div className="absolute right-0 top-11 w-[280px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] p-2">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-3 py-1.5">Notifications</p>
+          {pendingDeposits > 0 && <NotifRow icon={Banknote} accent="text-emerald-400" label="Pending deposits" count={pendingDeposits} onClick={() => { onNavigate('finance'); setOpen(false); }} />}
+          {pendingWithdrawals > 0 && <NotifRow icon={TrendingDown} accent="text-red-400" label="Pending withdrawals" count={pendingWithdrawals} onClick={() => { onNavigate('requests'); setOpen(false); }} />}
+          {unreadSupport > 0 && <NotifRow icon={MessageSquare} accent="text-violet-400" label="Unread support" count={unreadSupport} onClick={() => { cms.markSupportRead(); setOpen(false); }} />}
           {totalUnread === 0 && <p className="text-xs text-slate-500 text-center py-4">No pending notifications</p>}
         </div>
       )}
@@ -243,7 +233,6 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
 export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r: Route) => void; onOpenMenu?: () => void }) {
   const sessionId = useStaffSession();
   const [tab, setTab]                      = useState<Tab>('dashboard');
@@ -255,12 +244,9 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   const toastCounterRef                    = useRef(0);
   const profileRef                         = useRef<HTMLDivElement>(null);
 
-  const staff   = useStaff();
-  const me      = staff.find((s) => s.id === sessionId);
+  const staff = useStaff();
+  const me    = staff.find((s) => s.id === sessionId);
 
-  // ── REALTIME counts via CMS hooks (Supabase realtime → cms store → bus → hook) ──
-  // No polling needed — cms.ts already has realtime Supabase channel subscriptions.
-  // When any transaction changes in DB, cms auto-syncs and bus fires Finance event.
   const finance = useFinance();
   const support = useSupport();
 
@@ -269,7 +255,6 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   const unreadSupport      = support.filter((s) => !s.read).length;
   const totalUnread        = pendingDeposits + pendingWithdrawals + unreadSupport;
 
-  // ── Floating toast when count INCREASES ──────────────────────────────────────
   const prevDepRef = useRef(pendingDeposits);
   const prevWdRef  = useRef(pendingWithdrawals);
   const prevSupRef = useRef(unreadSupport);
@@ -281,24 +266,20 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   }, []);
 
   useEffect(() => {
-    if (pendingDeposits > prevDepRef.current)
-      pushToast(`${pendingDeposits - prevDepRef.current} new deposit request!`, 'deposit');
+    if (pendingDeposits > prevDepRef.current) pushToast(`${pendingDeposits - prevDepRef.current} new deposit!`, 'deposit');
     prevDepRef.current = pendingDeposits;
   }, [pendingDeposits, pushToast]);
 
   useEffect(() => {
-    if (pendingWithdrawals > prevWdRef.current)
-      pushToast(`${pendingWithdrawals - prevWdRef.current} new withdrawal request!`, 'withdrawal');
+    if (pendingWithdrawals > prevWdRef.current) pushToast(`${pendingWithdrawals - prevWdRef.current} new withdrawal!`, 'withdrawal');
     prevWdRef.current = pendingWithdrawals;
   }, [pendingWithdrawals, pushToast]);
 
   useEffect(() => {
-    if (unreadSupport > prevSupRef.current)
-      pushToast(`${unreadSupport - prevSupRef.current} new support message!`, 'support');
+    if (unreadSupport > prevSupRef.current) pushToast(`${unreadSupport - prevSupRef.current} new message!`, 'support');
     prevSupRef.current = unreadSupport;
   }, [unreadSupport, pushToast]);
 
-  // admin-navigate event
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail as Tab;
@@ -308,7 +289,6 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     return () => window.removeEventListener('admin-navigate', handler);
   }, []);
 
-  // Close profile dropdown on outside click
   useEffect(() => {
     if (!profileOpen) return;
     const close = (e: MouseEvent) => {
@@ -332,7 +312,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   const ActiveGamePanel = GAME_HANDLER_TABS.find((g) => g.key === gameHandlerTab)?.Panel ?? CrashHandlingPanel;
 
   const SidebarNav = () => (
-    <nav className="flex-1 overflow-y-auto py-2 scrollbar-thin">
+    <nav className="flex-1 overflow-y-auto py-2">
       {TABS.map((t) => (
         <button key={t.key} onClick={() => navigate(t.key)}
           className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
@@ -347,8 +327,6 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
 
   return (
     <div className="flex flex-col min-h-screen h-screen bg-slate-950 text-white overflow-hidden">
-
-      {/* ══ FIXED FULL-WIDTH HEADER ══ */}
       <header className="fixed top-0 left-0 right-0 z-50 flex items-center bg-slate-900 border-b border-slate-800" style={{ height: '56px' }}>
         <div className="flex items-center gap-3 pl-4 pr-2">
           <button className="md:hidden text-slate-400 hover:text-white" onClick={() => setSidebarOpen(true)}>
@@ -358,39 +336,27 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           <span className="font-bold text-sm tracking-wide text-white hidden sm:block select-none">Admin Panel</span>
         </div>
         <div className="flex-1" />
-        {/* Right: bell + profile */}
         <div className="flex items-center gap-3 pr-4">
-          <NotifBell
-            totalUnread={totalUnread}
-            pendingDeposits={pendingDeposits}
-            pendingWithdrawals={pendingWithdrawals}
-            unreadSupport={unreadSupport}
-            onNavigate={navigate}
-          />
-          {/* Profile — no arrow */}
+          <NotifBell totalUnread={totalUnread} pendingDeposits={pendingDeposits} pendingWithdrawals={pendingWithdrawals} unreadSupport={unreadSupport} onNavigate={navigate} />
           <div className="relative" ref={profileRef}>
             <button onClick={() => { setProfileOpen(v => !v); setShowPwForm(false); }}
               className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 pl-1.5 pr-3 py-1.5 rounded-lg transition-colors">
               <div className="w-7 h-7 rounded-full bg-violet-600 grid place-items-center text-xs font-bold shrink-0">
                 {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
               </div>
-              <span className="hidden sm:block text-slate-300 text-xs max-w-[110px] truncate leading-none">
-                {me?.name ?? me?.email ?? 'Admin'}
-              </span>
+              <span className="hidden sm:block text-slate-300 text-xs max-w-[110px] truncate">{me?.name ?? me?.email ?? 'Admin'}</span>
             </button>
             {profileOpen && (
-              <div className="absolute right-0 top-full mt-2 w-[272px] max-w-[calc(100vw-2rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] overflow-hidden">
+              <div className="absolute right-0 top-full mt-2 w-[272px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] overflow-hidden">
                 <div className="px-4 py-3 border-b border-slate-800">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-violet-600 grid place-items-center text-base font-bold shrink-0">
                       {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
                     </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-white truncate">{me?.name ?? '—'}</p>
-                      <p className="text-xs text-slate-400 truncate">{me?.email ?? '—'}</p>
-                      <span className="text-[10px] bg-violet-600/30 text-violet-300 px-1.5 py-0.5 rounded-full">
-                        {me?.role === 'superadmin' || me?.isOwner ? 'Super Admin' : me?.role ?? 'Staff'}
-                      </span>
+                    <div>
+                      <p className="text-sm font-semibold text-white">{me?.name ?? '—'}</p>
+                      <p className="text-xs text-slate-400">{me?.email ?? '—'}</p>
+                      <span className="text-[10px] bg-violet-600/30 text-violet-300 px-1.5 py-0.5 rounded-full capitalize">{me?.role ?? 'staff'}</span>
                     </div>
                   </div>
                 </div>
@@ -399,9 +365,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
                     className="w-full flex items-center gap-2 text-sm text-slate-300 hover:text-white py-1 transition-colors">
                     <KeyRound className="w-4 h-4" /> Change Password
                   </button>
-                  {showPwForm && me && (
-                    <PasswordChangeForm staffId={me.id} onDone={() => { setShowPwForm(false); setProfileOpen(false); }} />
-                  )}
+                  {showPwForm && me && <PasswordChangeForm staffId={me.id} onDone={() => { setShowPwForm(false); setProfileOpen(false); }} />}
                 </div>
                 <div className="px-4 py-2">
                   <button onClick={() => cms.staffLogout()}
@@ -415,60 +379,42 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
         </div>
       </header>
 
-      {/* ══ BODY ══ */}
       <div className="flex flex-1 overflow-hidden" style={{ paddingTop: '56px' }}>
-        {/* Desktop sidebar */}
         <aside className="hidden md:flex w-56 flex-col border-r border-slate-800 bg-slate-900 shrink-0 h-full">
           <SidebarNav />
         </aside>
 
-        {/* Mobile drawer */}
         {sidebarOpen && (
           <div className="fixed inset-0 z-40 md:hidden">
             <div className="absolute inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
             <aside className="absolute left-0 top-0 bottom-0 w-64 bg-slate-900 border-r border-slate-800 flex flex-col z-50">
               <div className="flex items-center justify-between px-4 py-4 border-b border-slate-800 shrink-0">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="w-5 h-5 text-violet-400" />
-                  <span className="font-bold text-sm">Admin Panel</span>
-                </div>
-                <button onClick={() => setSidebarOpen(false)} className="text-slate-400 hover:text-white">
-                  <X className="w-5 h-5" />
-                </button>
+                <span className="font-bold text-sm">Admin Panel</span>
+                <button onClick={() => setSidebarOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
               </div>
               <SidebarNav />
             </aside>
           </div>
         )}
 
-        {/* Main content */}
-        <main className="flex-1 overflow-y-auto p-4 scrollbar-thin">
+        <main className="flex-1 overflow-y-auto p-4">
           {tab === 'dashboard'            && <DashboardOverviewTab />}
           {tab === 'finance'              && <FinanceTab />}
           {tab === 'requests'             && <RequestsTab />}
           {tab === 'tickets'              && <TicketsTab />}
+          {tab === 'affiliates'           && <AffiliatesTab />}
           {tab === 'gateways'             && <AutoGatewaysTab />}
-          {tab === 'handlers'             && (
-            <div className="space-y-4">
-              <h2 className="font-bold text-lg">Payment Handlers</h2>
-              <p className="text-slate-500 text-sm">Configure deposit/withdrawal handler logic here.</p>
-            </div>
-          )}
+          {tab === 'handlers'             && <div className="space-y-4"><h2 className="font-bold text-lg">Payment Handlers</h2><p className="text-slate-500 text-sm">Configure deposit/withdrawal handler logic here.</p></div>}
           {tab === 'algos'               && <GameAlgosTab />}
           {tab === 'games'               && (
             <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <OnlineCountPanel />
-                <TopWinPaidOutPanel />
-              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><OnlineCountPanel /><TopWinPaidOutPanel /></div>
               <div className="flex flex-wrap gap-2">
                 {GAME_HANDLER_TABS.map((g) => (
                   <button key={g.key} onClick={() => setGameHandlerTab(g.key)}
                     className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
                       gameHandlerTab === g.key ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                    }`}>
-                    {g.label}
-                  </button>
+                    }`}>{g.label}</button>
                 ))}
               </div>
               <ActiveGamePanel />
@@ -476,7 +422,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           )}
           {tab === 'users'               && <UsersTab />}
           {tab === 'balanceHistory'      && <BalanceHistoryTab />}
-          {tab === 'topRankings'         && <TopRankingsAdminPanel />}
+          {tab === 'topRankings'         && <TopRankingsTab />}
           {tab === 'staff'               && hasPermission('staff') && <StaffTab />}
           {tab === 'notifications'       && <NotificationsTab />}
           {tab === 'notificationManager' && <NotificationManagerTab />}
@@ -494,12 +440,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           {tab === 'history'             && <HistoryTab />}
           {tab === 'ban'                 && <BanSectionTab />}
           {tab === 'intercom'            && <IntercomTab />}
-          {tab === 'manageProfile'       && (
-            <div className="space-y-4">
-              <h2 className="font-bold text-lg">Profile</h2>
-              <p className="text-slate-500 text-sm">Use the profile button in the header to change your password.</p>
-            </div>
-          )}
+          {tab === 'manageProfile'       && <div className="space-y-4"><h2 className="font-bold text-lg">Profile</h2><p className="text-slate-500 text-sm">Use the profile button in the header to change your password.</p></div>}
         </main>
       </div>
 
