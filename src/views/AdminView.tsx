@@ -7,10 +7,14 @@ import {
   KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
-import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
+import { useStaff, useStaffSession } from '../lib/cmsHooks';
 import { cms, type PermissionKey } from '../lib/cms';
 import AdminLoginPage from '../components/AdminLoginPage';
-import { supabaseStaffLogin, supabaseUpdateStaffPassword } from '../lib/supabaseIntegration';
+import {
+  supabaseStaffLogin,
+  supabaseUpdateStaffPassword,
+  supabaseGetTransactions,
+} from '../lib/supabaseIntegration';
 import DashboardOverviewTab from './admin/DashboardOverviewTab';
 import FinanceTab from './admin/FinanceTab';
 import RequestsTab from './admin/RequestsTab';
@@ -55,7 +59,6 @@ type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationMa
   | 'requests' | 'signupBonus' | 'dashboard';
 
 type GameHandlerKey = 'crash' | 'wingo' | 'k3' | 'fived' | 'sunvsmoon' | 'aviator';
-
 type FloatToast = { id: number; message: string; icon: 'deposit' | 'withdrawal' | 'support' };
 
 // ─── Sidebar tab list ────────────────────────────────────────────────────────
@@ -90,7 +93,6 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'intercom',            label: 'Intercom',            icon: MessageSquare },
 ];
 
-// ─── Game handler sub-tabs ────────────────────────────────────────────────────
 const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.Element }[] = [
   { key: 'crash',     label: 'Crash',       Panel: CrashHandlingPanel },
   { key: 'wingo',     label: 'Win Go',      Panel: WingoHandlingPanel },
@@ -100,23 +102,22 @@ const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.
   { key: 'aviator',   label: 'Aviator',     Panel: AviatorHandlingPanel },
 ];
 
-// ─── sha256 helper ────────────────────────────────────────────────────────────
 async function sha256Hex(plain: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(plain));
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// ─── Password change form ─────────────────────────────────────────────────────
+// ─── Password form ────────────────────────────────────────────────────────────
 function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () => void }) {
   const [old, setOld]         = useState('');
   const [next, setNext]       = useState('');
   const [confirm, setConfirm] = useState('');
-  const [showOld, setShowOld]   = useState(false);
-  const [showNext, setShowNext] = useState(false);
-  const [showConf, setShowConf] = useState(false);
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState('');
-  const [ok, setOk]             = useState(false);
+  const [showOld,   setShowOld]   = useState(false);
+  const [showNext,  setShowNext]  = useState(false);
+  const [showConf,  setShowConf]  = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError]     = useState('');
+  const [ok, setOk]           = useState(false);
 
   const submit = async () => {
     setError('');
@@ -140,10 +141,8 @@ function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () =
     <div className="space-y-1">
       <label className="text-[11px] text-slate-400">{label}</label>
       <div className="relative">
-        <input
-          type={show ? 'text' : 'password'} value={val} onChange={(e) => set(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white pr-9 outline-none"
-        />
+        <input type={show ? 'text' : 'password'} value={val} onChange={(e) => set(e.target.value)}
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white pr-9 outline-none" />
         <button type="button" onClick={toggle} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
           {show ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
         </button>
@@ -166,7 +165,7 @@ function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () =
   );
 }
 
-// ─── Notification row (inside dropdown) ──────────────────────────────────────
+// ─── Notification row ─────────────────────────────────────────────────────────
 function NotifRow({ icon: Icon, label, count, onClick, accent }: {
   icon: typeof Bell; label: string; count: number; onClick: () => void; accent: string;
 }) {
@@ -176,37 +175,39 @@ function NotifRow({ icon: Icon, label, count, onClick, accent }: {
       <span className="flex items-center gap-2 text-sm text-slate-300">
         <Icon className={`w-4 h-4 ${accent}`} /> {label}
       </span>
-      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${count > 0 ? 'bg-red-500/20 text-red-300' : 'bg-slate-700 text-slate-500'}`}>
-        {count}
-      </span>
+      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-red-500/20 text-red-300">{count}</span>
     </button>
   );
 }
 
-// ─── Floating toast notification ─────────────────────────────────────────────
+// ─── Floating toast ───────────────────────────────────────────────────────────
+// Fixed to right-4 bottom-6 with min/max width so it never overflows the screen
 function FloatingToasts({ toasts, onDismiss }: { toasts: FloatToast[]; onDismiss: (id: number) => void }) {
   if (toasts.length === 0) return null;
-  const iconMap = {
-    deposit:    { icon: Banknote,     color: 'text-emerald-400', bg: 'bg-emerald-500/15 border-emerald-500/30' },
-    withdrawal: { icon: TrendingDown, color: 'text-red-400',     bg: 'bg-red-500/15 border-red-500/30' },
-    support:    { icon: MessageSquare,color: 'text-violet-400',  bg: 'bg-violet-500/15 border-violet-500/30' },
-  };
+  const MAP = {
+    deposit:    { Icon: Banknote,      color: 'text-emerald-400', bg: 'bg-slate-900 border-emerald-500/40' },
+    withdrawal: { Icon: TrendingDown,  color: 'text-red-400',     bg: 'bg-slate-900 border-red-500/40' },
+    support:    { Icon: MessageSquare, color: 'text-violet-400',  bg: 'bg-slate-900 border-violet-500/40' },
+  } as const;
   return (
-    // right-4 instead of right-0 so toast is never cut off at screen edge
-    <div className="fixed bottom-6 right-4 z-[200] flex flex-col gap-2 pointer-events-none">
+    <div
+      // right-4 + w-[300px] keeps the toast comfortably inside any screen ≥320 px
+      className="fixed bottom-6 right-4 z-[300] flex flex-col gap-2 w-[min(300px,calc(100vw-2rem))]"
+      style={{ pointerEvents: 'none' }}
+    >
       {toasts.map((t) => {
-        const { icon: Icon, color, bg } = iconMap[t.icon];
+        const { Icon, color, bg } = MAP[t.icon];
         return (
-          <div key={t.id}
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl backdrop-blur-sm text-sm font-semibold text-white animate-in slide-in-from-right-4 fade-in duration-300 ${bg} pointer-events-auto`}
+          <div
+            key={t.id}
             onClick={() => onDismiss(t.id)}
+            style={{ pointerEvents: 'auto' }}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl text-sm font-semibold text-white ${bg} cursor-pointer`}
           >
-            <Bell className="w-4 h-4 text-white/80 shrink-0" />
+            <Bell className="w-4 h-4 text-white/60 shrink-0" />
             <Icon className={`w-4 h-4 shrink-0 ${color}`} />
-            <span className="text-xs">{t.message}</span>
-            <button onClick={() => onDismiss(t.id)} className="ml-1 text-white/50 hover:text-white">
-              <X className="w-3.5 h-3.5" />
-            </button>
+            <span className="text-xs flex-1">{t.message}</span>
+            <X className="w-3.5 h-3.5 text-white/40 shrink-0" />
           </div>
         );
       })}
@@ -214,59 +215,51 @@ function FloatingToasts({ toasts, onDismiss }: { toasts: FloatToast[]; onDismiss
   );
 }
 
-// ─── Notification bell button (reusable for admin + staff) ───────────────────
+// ─── Notification bell (shared for admin + all staff roles) ──────────────────
 function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSupport, onNavigate }: {
-  totalUnread: number;
-  pendingDeposits: number;
-  pendingWithdrawals: number;
-  unreadSupport: number;
-  onNavigate: (tab: Tab) => void;
+  totalUnread: number; pendingDeposits: number; pendingWithdrawals: number;
+  unreadSupport: number; onNavigate: (tab: Tab) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (!open) return;
-    const close = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [open]);
 
   return (
     <div className="relative" ref={ref}>
-      <button
-        onClick={() => setOpen(v => !v)}
+      <button onClick={() => setOpen(v => !v)}
         className="relative w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 grid place-items-center hover:border-violet-500/50 transition-colors"
-        aria-label="Notifications"
-      >
+        aria-label="Notifications">
         <Bell className="w-4 h-4 text-slate-300" />
         {totalUnread > 0 && (
-          <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-[20px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center border-2 border-slate-900 shadow">
+          // badge positioned so it doesn't clip on any side
+          <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-[20px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center border-2 border-slate-900 shadow-lg">
             {totalUnread > 99 ? '99+' : totalUnread}
           </span>
         )}
       </button>
 
       {open && (
-        // right-0 keeps dropdown aligned to button, max-w so it doesn't overflow
-        <div className="absolute right-0 top-11 w-72 max-w-[calc(100vw-1rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[100] p-2">
+        // right-0 aligns with button, max-w prevents overflow on small screens
+        <div className="absolute right-0 top-11 w-[280px] max-w-[calc(100vw-4rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] p-2">
           <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-3 py-1.5 flex items-center gap-1.5">
             <Bell className="w-3 h-3" /> Notifications
           </p>
-          {/* Only show rows where count > 0 */}
           {pendingDeposits > 0 && (
-            <NotifRow icon={Banknote}      accent="text-emerald-400" label="Pending deposits"           count={pendingDeposits}    onClick={() => { onNavigate('finance');   setOpen(false); }} />
+            <NotifRow icon={Banknote}      accent="text-emerald-400" label="Pending deposits"         count={pendingDeposits}    onClick={() => { onNavigate('finance');  setOpen(false); }} />
           )}
           {pendingWithdrawals > 0 && (
-            <NotifRow icon={TrendingDown}  accent="text-red-400"     label="Pending withdrawals"        count={pendingWithdrawals} onClick={() => { onNavigate('requests');  setOpen(false); }} />
+            <NotifRow icon={TrendingDown}  accent="text-red-400"     label="Pending withdrawals"      count={pendingWithdrawals} onClick={() => { onNavigate('requests'); setOpen(false); }} />
           )}
           {unreadSupport > 0 && (
-            <NotifRow icon={MessageSquare} accent="text-violet-400"  label="Unread support messages"   count={unreadSupport}      onClick={() => { cms.markSupportRead();   setOpen(false); }} />
+            <NotifRow icon={MessageSquare} accent="text-violet-400"  label="Unread support messages" count={unreadSupport}      onClick={() => { cms.markSupportRead(); setOpen(false); }} />
           )}
           {totalUnread === 0 && (
-            <p className="text-xs text-slate-500 text-center py-3">No pending notifications</p>
+            <p className="text-xs text-slate-500 text-center py-4">No pending notifications</p>
           )}
         </div>
       )}
@@ -277,33 +270,27 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r: Route) => void; onOpenMenu?: () => void }) {
   const sessionId = useStaffSession();
-  const [tab, setTab]                       = useState<Tab>('dashboard');
-  const [gameHandlerTab, setGameHandlerTab]  = useState<GameHandlerKey>('crash');
-  const [sidebarOpen, setSidebarOpen]       = useState(false);
-  const [profileOpen, setProfileOpen]       = useState(false);
-  const [showPwForm, setShowPwForm]         = useState(false);
-  const [floatToasts, setFloatToasts]       = useState<FloatToast[]>([]);
-  const toastCounterRef                     = useRef(0);
-  const profileRef                          = useRef<HTMLDivElement>(null);
+  const [tab, setTab]                      = useState<Tab>('dashboard');
+  const [gameHandlerTab, setGameHandlerTab] = useState<GameHandlerKey>('crash');
+  const [sidebarOpen, setSidebarOpen]      = useState(false);
+  const [profileOpen, setProfileOpen]      = useState(false);
+  const [showPwForm, setShowPwForm]        = useState(false);
+  const [floatToasts, setFloatToasts]      = useState<FloatToast[]>([]);
+  const toastCounterRef                    = useRef(0);
+  const profileRef                         = useRef<HTMLDivElement>(null);
 
-  const staff   = useStaff();
-  const finance = useFinance();
-  const support = useSupport();
-  const me = staff.find((s) => s.id === sessionId);
+  const staff = useStaff();
+  const me    = staff.find((s) => s.id === sessionId);
 
-  // ── Reactive pending counts ──
-  // These are derived from live useFinance / useSupport hooks.
-  // When a deposit/withdrawal is accepted or rejected anywhere in the app
-  // (via cms store update), these counts auto-update immediately.
-  const pendingDeposits    = finance.deposits.filter((d) => d.status === 'pending').length;
-  const pendingWithdrawals = finance.withdrawals.filter((w) => w.status === 'pending').length;
-  const unreadSupport      = support.filter((s) => !s.read).length;
-  const totalUnread        = pendingDeposits + pendingWithdrawals + unreadSupport;
+  // ── SUPABASE live notification counts (poll every 20s) ────────────────────
+  const [pendingDeposits,    setPendingDeposits]    = useState(0);
+  const [pendingWithdrawals, setPendingWithdrawals] = useState(0);
+  const [unreadSupport,      setUnreadSupport]      = useState(0);
+  const totalUnread = pendingDeposits + pendingWithdrawals + unreadSupport;
 
-  // ── Floating toast: show when count INCREASES ──
-  const prevDeposits    = useRef(pendingDeposits);
-  const prevWithdrawals = useRef(pendingWithdrawals);
-  const prevSupport     = useRef(unreadSupport);
+  const prevDepRef = useRef(0);
+  const prevWdRef  = useRef(0);
+  const prevSupRef = useRef(0);
 
   const pushToast = useCallback((message: string, icon: FloatToast['icon']) => {
     const id = ++toastCounterRef.current;
@@ -311,28 +298,44 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     setTimeout(() => setFloatToasts((prev) => prev.filter((t) => t.id !== id)), 2000);
   }, []);
 
-  useEffect(() => {
-    if (pendingDeposits > prevDeposits.current) {
-      pushToast(`${pendingDeposits - prevDeposits.current} new deposit request!`, 'deposit');
-    }
-    prevDeposits.current = pendingDeposits;
-  }, [pendingDeposits, pushToast]);
+  const fetchCounts = useCallback(async () => {
+    try {
+      const txns = await supabaseGetTransactions();
+      const dep = txns.filter((t) => t.type === 'deposit'    && (t.status === 'pending' || t.status === 'processing')).length;
+      const wd  = txns.filter((t) => t.type === 'withdrawal' && (t.status === 'pending' || t.status === 'processing')).length;
+      // Support unread from CMS store (Supabase tickets don't have "read" tracking in supabase)
+      // so we keep only deposit/withdrawal from supabase
+      if (dep > prevDepRef.current) pushToast(`${dep - prevDepRef.current} new deposit request!`, 'deposit');
+      if (wd  > prevWdRef.current)  pushToast(`${wd  - prevWdRef.current} new withdrawal request!`, 'withdrawal');
+      prevDepRef.current = dep;
+      prevWdRef.current  = wd;
+      setPendingDeposits(dep);
+      setPendingWithdrawals(wd);
+    } catch { /* silent */ }
+  }, [pushToast]);
 
+  // Run once on mount + poll every 20 seconds
   useEffect(() => {
-    if (pendingWithdrawals > prevWithdrawals.current) {
-      pushToast(`${pendingWithdrawals - prevWithdrawals.current} new withdrawal request!`, 'withdrawal');
-    }
-    prevWithdrawals.current = pendingWithdrawals;
-  }, [pendingWithdrawals, pushToast]);
+    void fetchCounts();
+    const timer = setInterval(() => void fetchCounts(), 20000);
+    return () => clearInterval(timer);
+  }, [fetchCounts]);
 
+  // Support unread from cms (local) — shown in bell but not from supabase
   useEffect(() => {
-    if (unreadSupport > prevSupport.current) {
-      pushToast(`${unreadSupport - prevSupport.current} new support message!`, 'support');
-    }
-    prevSupport.current = unreadSupport;
-  }, [unreadSupport, pushToast]);
+    const tick = () => {
+      // read support count from cms store directly
+      const count = (cms as unknown as { support?: { read?: boolean }[] }).support?.filter((s) => !s.read).length ?? 0;
+      if (count > prevSupRef.current) pushToast(`${count - prevSupRef.current} new support message!`, 'support');
+      prevSupRef.current = count;
+      setUnreadSupport(count);
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => clearInterval(id);
+  }, [pushToast]);
 
-  // ── admin-navigate event ──
+  // admin-navigate event from other components
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail as Tab;
@@ -342,13 +345,12 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     return () => window.removeEventListener('admin-navigate', handler);
   }, []);
 
-  // ── Close profile on outside click ──
+  // Close profile dropdown on outside click
   useEffect(() => {
     if (!profileOpen) return;
     const close = (e: MouseEvent) => {
       if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
-        setProfileOpen(false);
-        setShowPwForm(false);
+        setProfileOpen(false); setShowPwForm(false);
       }
     };
     document.addEventListener('mousedown', close);
@@ -364,97 +366,18 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   if (!sessionId) return <AdminLoginPage />;
 
   const navigate = (t: Tab) => { setTab(t); setSidebarOpen(false); };
-
   const ActiveGamePanel = GAME_HANDLER_TABS.find((g) => g.key === gameHandlerTab)?.Panel ?? CrashHandlingPanel;
 
-  // ── Shared header content (reused in both desktop + mobile) ──────────────────
-  const HeaderRight = () => (
-    <div className="flex items-center gap-2">
-      {/* Notification bell — same for all staff */}
-      <NotifBell
-        totalUnread={totalUnread}
-        pendingDeposits={pendingDeposits}
-        pendingWithdrawals={pendingWithdrawals}
-        unreadSupport={unreadSupport}
-        onNavigate={navigate}
-      />
-
-      {/* Profile button — NO arrow */}
-      <div className="relative" ref={profileRef}>
-        <button
-          onClick={() => { setProfileOpen(v => !v); setShowPwForm(false); }}
-          className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 rounded-lg text-sm transition-colors"
-        >
-          <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold shrink-0">
-            {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
-          </div>
-          <span className="hidden sm:block text-slate-300 text-xs max-w-[100px] truncate">
-            {me?.name ?? me?.email ?? 'Admin'}
-          </span>
-          {/* ← ChevronDown removed as requested */}
-        </button>
-
-        {profileOpen && (
-          <div className="absolute right-0 top-full mt-2 w-72 max-w-[calc(100vw-1rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[100] overflow-hidden">
-            {/* User info */}
-            <div className="px-4 py-3 border-b border-slate-800">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-violet-600 flex items-center justify-center text-lg font-bold shrink-0">
-                  {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-white truncate">{me?.name ?? '—'}</p>
-                  <p className="text-xs text-slate-400 truncate">{me?.email ?? '—'}</p>
-                  <span className="text-[10px] bg-violet-600/30 text-violet-300 px-1.5 py-0.5 rounded-full">
-                    {me?.role === 'superadmin' || me?.isOwner ? 'Super Admin' : me?.role ?? 'Staff'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Change password */}
-            <div className="px-4 py-2 border-b border-slate-800">
-              <button
-                onClick={() => setShowPwForm(v => !v)}
-                className="w-full flex items-center gap-2 text-sm text-slate-300 hover:text-white py-1 transition-colors"
-              >
-                <KeyRound className="w-4 h-4" />
-                Change Password
-              </button>
-              {showPwForm && me && (
-                <PasswordChangeForm staffId={me.id} onDone={() => { setShowPwForm(false); setProfileOpen(false); }} />
-              )}
-            </div>
-
-            {/* Logout */}
-            <div className="px-4 py-2">
-              <button
-                onClick={() => cms.staffLogout()}
-                className="w-full flex items-center gap-2 text-sm text-red-400 hover:text-red-300 py-1 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                Logout
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-
-  // ── Sidebar nav items ──────────────────────────────────────────────────────
+  // ── Sidebar nav ────────────────────────────────────────────────────────────
   const SidebarNav = () => (
     <nav className="flex-1 overflow-y-auto py-2 scrollbar-thin">
       {TABS.map((t) => (
-        <button
-          key={t.key}
-          onClick={() => navigate(t.key)}
+        <button key={t.key} onClick={() => navigate(t.key)}
           className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
             tab === t.key
               ? 'bg-violet-600/20 text-violet-300 border-r-2 border-violet-500'
               : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-          }`}
-        >
+          }`}>
           <t.icon className="w-4 h-4 shrink-0" />
           <span>{t.label}</span>
         </button>
@@ -463,35 +386,108 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   );
 
   return (
-    // ── Full-height column: header on top (full width), then sidebar+content below ──
-    <div className="flex flex-col h-screen bg-slate-950 text-white overflow-hidden">
+    /**
+     * Layout:
+     *   fixed header spanning 100vw at the very top (z-50)
+     *   pt-14 body = content starts below header
+     *   sidebar + main side-by-side filling remaining height
+     */
+    <div className="flex flex-col min-h-screen h-screen bg-slate-950 text-white overflow-hidden">
 
-      {/* ══ FULL-WIDTH TOP HEADER ══════════════════════════════════════════════ */}
-      <header className="w-full flex items-center justify-between px-4 md:px-6 h-14 border-b border-slate-800 bg-slate-900 shrink-0 z-30">
-        {/* Left: hamburger (mobile) + panel title */}
-        <div className="flex items-center gap-3">
+      {/* ══ HEADER — fixed, full 100vw, z-50 ══════════════════════════════════ */}
+      <header
+        className="fixed top-0 left-0 right-0 z-50 flex items-center bg-slate-900 border-b border-slate-800"
+        style={{ height: '56px' }}
+      >
+        {/* Left – hamburger + logo */}
+        <div className="flex items-center gap-3 pl-4 pr-2">
           <button className="md:hidden text-slate-400 hover:text-white" onClick={() => setSidebarOpen(true)}>
             <Menu className="w-5 h-5" />
           </button>
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-5 h-5 text-violet-400 shrink-0" />
-            <span className="font-bold text-sm tracking-wide hidden sm:block">Admin Panel</span>
-          </div>
+          <ShieldCheck className="w-5 h-5 text-violet-400 shrink-0" />
+          <span className="font-bold text-sm tracking-wide text-white hidden sm:block select-none">Admin Panel</span>
         </div>
 
-        {/* Right: bell + profile */}
-        <HeaderRight />
+        {/* Spacer */}
+        <div className="flex-1" />
+
+        {/* Right – bell + profile, pushed to the very right edge */}
+        <div className="flex items-center gap-3 pr-4">
+
+          {/* Notification bell */}
+          <NotifBell
+            totalUnread={totalUnread}
+            pendingDeposits={pendingDeposits}
+            pendingWithdrawals={pendingWithdrawals}
+            unreadSupport={unreadSupport}
+            onNavigate={navigate}
+          />
+
+          {/* Profile button — no arrow */}
+          <div className="relative" ref={profileRef}>
+            <button
+              onClick={() => { setProfileOpen(v => !v); setShowPwForm(false); }}
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 pl-1.5 pr-3 py-1.5 rounded-lg transition-colors"
+            >
+              <div className="w-7 h-7 rounded-full bg-violet-600 grid place-items-center text-xs font-bold shrink-0">
+                {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
+              </div>
+              <span className="hidden sm:block text-slate-300 text-xs max-w-[110px] truncate leading-none">
+                {me?.name ?? me?.email ?? 'Admin'}
+              </span>
+            </button>
+
+            {profileOpen && (
+              <div className="absolute right-0 top-full mt-2 w-[272px] max-w-[calc(100vw-2rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] overflow-hidden">
+                {/* User info */}
+                <div className="px-4 py-3 border-b border-slate-800">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-violet-600 grid place-items-center text-base font-bold shrink-0">
+                      {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-white truncate">{me?.name ?? '—'}</p>
+                      <p className="text-xs text-slate-400 truncate">{me?.email ?? '—'}</p>
+                      <span className="text-[10px] bg-violet-600/30 text-violet-300 px-1.5 py-0.5 rounded-full">
+                        {me?.role === 'superadmin' || me?.isOwner ? 'Super Admin' : me?.role ?? 'Staff'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Change password */}
+                <div className="px-4 py-2 border-b border-slate-800">
+                  <button onClick={() => setShowPwForm(v => !v)}
+                    className="w-full flex items-center gap-2 text-sm text-slate-300 hover:text-white py-1 transition-colors">
+                    <KeyRound className="w-4 h-4" /> Change Password
+                  </button>
+                  {showPwForm && me && (
+                    <PasswordChangeForm staffId={me.id} onDone={() => { setShowPwForm(false); setProfileOpen(false); }} />
+                  )}
+                </div>
+
+                {/* Logout */}
+                <div className="px-4 py-2">
+                  <button onClick={() => cms.staffLogout()}
+                    className="w-full flex items-center gap-2 text-sm text-red-400 hover:text-red-300 py-1 transition-colors">
+                    <LogOut className="w-4 h-4" /> Logout
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </header>
 
-      {/* ══ BODY: sidebar + content ════════════════════════════════════════════ */}
-      <div className="flex flex-1 overflow-hidden">
+      {/* ══ BODY (below fixed header) ════════════════════════════════════════ */}
+      <div className="flex flex-1 overflow-hidden" style={{ paddingTop: '56px' }}>
 
-        {/* ── Desktop sidebar ── */}
-        <aside className="hidden md:flex w-56 flex-col border-r border-slate-800 bg-slate-900 shrink-0">
+        {/* Desktop sidebar */}
+        <aside className="hidden md:flex w-56 flex-col border-r border-slate-800 bg-slate-900 shrink-0 h-full">
           <SidebarNav />
         </aside>
 
-        {/* ── Mobile drawer ── */}
+        {/* Mobile drawer */}
         {sidebarOpen && (
           <div className="fixed inset-0 z-40 md:hidden">
             <div className="absolute inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
@@ -510,7 +506,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           </div>
         )}
 
-        {/* ── Main content area ── */}
+        {/* Main content */}
         <main className="flex-1 overflow-y-auto p-4 scrollbar-thin">
           {tab === 'dashboard'            && <DashboardOverviewTab />}
           {tab === 'finance'              && <FinanceTab />}
@@ -532,15 +528,10 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
               </div>
               <div className="flex flex-wrap gap-2">
                 {GAME_HANDLER_TABS.map((g) => (
-                  <button
-                    key={g.key}
-                    onClick={() => setGameHandlerTab(g.key)}
+                  <button key={g.key} onClick={() => setGameHandlerTab(g.key)}
                     className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                      gameHandlerTab === g.key
-                        ? 'bg-violet-600 text-white'
-                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                    }`}
-                  >
+                      gameHandlerTab === g.key ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}>
                     {g.label}
                   </button>
                 ))}
@@ -577,11 +568,11 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
         </main>
       </div>
 
-      {/* ── Support overlays ── */}
+      {/* Support overlays */}
       <TicketAlertOverlay />
       <AdminSupportNotification />
 
-      {/* ── Floating toast notifications (right-4 so fully visible) ── */}
+      {/* Floating toasts — fixed right-4, fully inside screen */}
       <FloatingToasts
         toasts={floatToasts}
         onDismiss={(id) => setFloatToasts((prev) => prev.filter((t) => t.id !== id))}
