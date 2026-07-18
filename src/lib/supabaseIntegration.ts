@@ -273,3 +273,30 @@ export async function supabaseGetPaymentMethods(): Promise<SupabasePaymentMethod
     return (data ?? []) as SupabasePaymentMethod[];
   } catch (e) { console.error('[supabase] getPaymentMethods error:', e); return []; }
 }
+
+// ---- Bets ----
+// Used by FinanceTab to show game bet history alongside transactions.
+export interface SupabaseBet {
+  id: string;
+  user_id: string | null;
+  bet_amount: number;
+  win_amount: number | null;
+  multiplier: number | null;
+  status: string;
+  bet_details: Record<string, unknown> | null;
+  placed_at: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export async function supabaseGetBets(limit = 500): Promise<SupabaseBet[]> {
+  try {
+    const { data, error } = await supabase
+      .from('bets')
+      .select('id, user_id, bet_amount, win_amount, multiplier, status, bet_details, placed_at, resolved_at, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return (data ?? []) as SupabaseBet[];
+  } catch (e) { console.error('[supabase] getBets error:', e); return []; }
+}
