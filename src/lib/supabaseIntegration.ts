@@ -2,6 +2,28 @@ import { supabase } from '../integrations/supabase/client';
 import { cms } from './cms';
 import type { DepositRequest, WithdrawalRequest } from './cms';
 
+// ---- Auth helpers ----
+export async function getCurrentUser() {
+  const { data: { user } } = await supabase.auth.getUser();
+  return user;
+}
+
+export async function signUpUser(email: string, password: string, _userData: { firstName: string; lastName: string; phone?: string }): Promise<{ success: boolean; error?: string }> {
+  const { error } = await supabase.auth.signUp({ email, password });
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
+export async function loginUser(email: string, password: string): Promise<{ success: boolean; user?: Awaited<ReturnType<typeof getCurrentUser>>; error?: string }> {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) return { success: false, error: error.message };
+  return { success: true, user: data.user };
+}
+
+export async function logoutUser(): Promise<void> {
+  await supabase.auth.signOut();
+}
+
 // ---- Stats ----
 export async function supabaseGetStats(): Promise<{ onlineUsers: number; topWin: number; paidOut: number }> {
   try {
@@ -9,16 +31,12 @@ export async function supabaseGetStats(): Promise<{ onlineUsers: number; topWin:
     const txns = await supabaseGetTransactions();
     const topWin = txns.reduce((max, t) => Math.max(max, t.win_amount ?? 0), 0);
     const totalPaidOut = txns
-      .filter((t: SupabaseTransaction) => t.type === 'withdrawal' && t.status === 'completed')
-      .reduce((sum: number, r: SupabaseTransaction) => sum + (r.amount || 0), 0);
+      .filter((t) => t.type === 'withdrawal' && t.status === 'completed')
+      .reduce((sum, r) => sum + (r.amount || 0), 0);
     return { onlineUsers: profiles.length, topWin, paidOut: totalPaidOut };
   } catch {
     return { onlineUsers: 0, topWin: 0, paidOut: 0 };
   }
-}
-
-export async function loginUser(email: string, password: string) {
-  return await supabase.auth.signInWithPassword({ email, password });
 }
 
 // ---- Users ----
@@ -43,10 +61,7 @@ export async function supabaseGetUsers(): Promise<SupabaseProfile[]> {
     const { data, error } = await supabase.rpc('admin_get_profiles');
     if (error) throw error;
     return (data ?? []) as SupabaseProfile[];
-  } catch (e) {
-    console.error('[supabase] getUsers error:', e);
-    return [];
-  }
+  } catch (e) { console.error('[supabase] getUsers error:', e); return []; }
 }
 
 export async function supabaseUpdateBalance(userId: string, newBalance: number): Promise<void> {
@@ -61,18 +76,10 @@ export async function supabaseToggleAdmin(userId: string, isAdmin: boolean): Pro
 
 // ---- Transactions ----
 export interface SupabaseTransaction {
-  id: string;
-  user_id: string | null;
-  type: string;
-  amount: number;
-  win_amount?: number;
-  balance_before: number;
-  balance_after: number;
-  reference: string | null;
-  metadata: Record<string, unknown>;
-  status: string;
-  created_at: string;
-  updated_at: string;
+  id: string; user_id: string | null; type: string; amount: number;
+  win_amount?: number; balance_before: number; balance_after: number;
+  reference: string | null; metadata: Record<string, unknown>;
+  status: string; created_at: string; updated_at: string;
 }
 
 export async function supabaseGetTransactions(): Promise<SupabaseTransaction[]> {
@@ -80,10 +87,7 @@ export async function supabaseGetTransactions(): Promise<SupabaseTransaction[]> 
     const { data, error } = await supabase.rpc('admin_get_transactions', { p_limit: 500 });
     if (error) throw error;
     return (data ?? []) as SupabaseTransaction[];
-  } catch (e) {
-    console.error('[supabase] getTransactions error:', e);
-    return [];
-  }
+  } catch (e) { console.error('[supabase] getTransactions error:', e); return []; }
 }
 
 export async function supabaseUpdateTransactionStatus(txnId: string, status: string): Promise<void> {
@@ -91,50 +95,31 @@ export async function supabaseUpdateTransactionStatus(txnId: string, status: str
   if (error) throw error;
 }
 
-// ---- Sync transactions → cms finance ----
 export async function syncTransactionsToCms(): Promise<void> {
   try {
     const txns = await supabaseGetTransactions();
-
-    const deposits: DepositRequest[] = txns
-      .filter((t) => t.type === 'deposit')
-      .map((t) => ({
-        id: t.id,
-        user: t.user_id ?? 'unknown',
-        userId: t.user_id ?? undefined,
-        amount: t.amount,
-        method: (t.metadata as { method?: string })?.method ?? 'bank',
-        utr: (t.metadata as { utr?: string })?.utr,
-        details: (t.metadata as { details?: string })?.details,
-        reason: (t.metadata as { reason?: string })?.reason,
-        status: mapStatus(t.status),
-        ts: new Date(t.created_at).getTime(),
-      }));
-
-    const withdrawals: WithdrawalRequest[] = txns
-      .filter((t) => t.type === 'withdrawal')
-      .map((t) => ({
-        id: t.id,
-        user: t.user_id ?? 'unknown',
-        userId: t.user_id ?? undefined,
-        amount: t.amount,
-        destination: (t.metadata as { destination?: string })?.destination
-          ?? (t.metadata as { upi_id?: string })?.upi_id
-          ?? (t.metadata as { account?: string })?.account
-          ?? '',
-        utr: (t.metadata as { utr?: string })?.utr,
-        details: (t.metadata as { details?: string })?.details,
-        reason: (t.metadata as { reason?: string })?.reason,
-        status: mapStatus(t.status),
-        ts: new Date(t.created_at).getTime(),
-      }));
-
+    const deposits: DepositRequest[] = txns.filter((t) => t.type === 'deposit').map((t) => ({
+      id: t.id, user: t.user_id ?? 'unknown', userId: t.user_id ?? undefined, amount: t.amount,
+      method: (t.metadata as { method?: string })?.method ?? 'bank',
+      utr: (t.metadata as { utr?: string })?.utr,
+      details: (t.metadata as { details?: string })?.details,
+      reason: (t.metadata as { reason?: string })?.reason,
+      status: mapStatus(t.status), ts: new Date(t.created_at).getTime(),
+    }));
+    const withdrawals: WithdrawalRequest[] = txns.filter((t) => t.type === 'withdrawal').map((t) => ({
+      id: t.id, user: t.user_id ?? 'unknown', userId: t.user_id ?? undefined, amount: t.amount,
+      destination: (t.metadata as { destination?: string })?.destination
+        ?? (t.metadata as { upi_id?: string })?.upi_id
+        ?? (t.metadata as { account?: string })?.account ?? '',
+      utr: (t.metadata as { utr?: string })?.utr,
+      details: (t.metadata as { details?: string })?.details,
+      reason: (t.metadata as { reason?: string })?.reason,
+      status: mapStatus(t.status), ts: new Date(t.created_at).getTime(),
+    }));
     (cms as unknown as { deposits: DepositRequest[] }).deposits = deposits;
     (cms as unknown as { withdrawals: WithdrawalRequest[] }).withdrawals = withdrawals;
     (cms as unknown as { emitFinance: () => void }).emitFinance();
-  } catch (e) {
-    console.error('[supabase] syncTransactionsToCms error:', e);
-  }
+  } catch (e) { console.error('[supabase] syncTransactionsToCms error:', e); }
 }
 
 function mapStatus(s: string): 'pending' | 'processing' | 'approved' | 'rejected' | 'cancelled' {
@@ -148,14 +133,9 @@ function mapStatus(s: string): 'pending' | 'processing' | 'approved' | 'rejected
 
 // ---- Staff ----
 export interface SupabaseStaff {
-  id: string;
-  email: string;
-  name: string;
-  role: string;
-  permissions: Record<string, boolean>;
-  is_active: boolean;
-  last_login_at: string | null;
-  created_at: string;
+  id: string; email: string; name: string; role: string;
+  permissions: Record<string, boolean>; is_active: boolean;
+  last_login_at: string | null; created_at: string;
 }
 
 export async function supabaseGetStaff(): Promise<SupabaseStaff[]> {
@@ -163,10 +143,7 @@ export async function supabaseGetStaff(): Promise<SupabaseStaff[]> {
     const { data, error } = await supabase.rpc('admin_get_staff');
     if (error) throw error;
     return (data ?? []) as SupabaseStaff[];
-  } catch (e) {
-    console.error('[supabase] getStaff error:', e);
-    return [];
-  }
+  } catch (e) { console.error('[supabase] getStaff error:', e); return []; }
 }
 
 export async function supabaseStaffLogin(email: string, passwordHash: string): Promise<SupabaseStaff | null> {
@@ -174,27 +151,15 @@ export async function supabaseStaffLogin(email: string, passwordHash: string): P
     const { data, error } = await supabase.rpc('admin_staff_login', { p_email: email, p_password_hash: passwordHash });
     if (error || !data || data.length === 0) return null;
     return data[0] as SupabaseStaff;
-  } catch (e) {
-    console.error('[supabase] staffLogin error:', e);
-    return null;
-  }
+  } catch (e) { console.error('[supabase] staffLogin error:', e); return null; }
 }
 
-export async function supabaseCreateStaff(
-  email: string, name: string, role: string,
-  passwordHash: string, permissions: Record<string, boolean>
-): Promise<string | null> {
+export async function supabaseCreateStaff(email: string, name: string, role: string, passwordHash: string, permissions: Record<string, boolean>): Promise<string | null> {
   try {
-    const { data, error } = await supabase.rpc('admin_create_staff', {
-      p_email: email, p_name: name, p_role: role,
-      p_password_hash: passwordHash, p_permissions: permissions,
-    });
+    const { data, error } = await supabase.rpc('admin_create_staff', { p_email: email, p_name: name, p_role: role, p_password_hash: passwordHash, p_permissions: permissions });
     if (error) throw error;
     return data as string;
-  } catch (e) {
-    console.error('[supabase] createStaff error:', e);
-    return null;
-  }
+  } catch (e) { console.error('[supabase] createStaff error:', e); return null; }
 }
 
 export async function supabaseUpdateStaffPassword(staffId: string, passwordHash: string): Promise<void> {
@@ -228,15 +193,12 @@ export async function supabaseGetSettings(): Promise<SupabaseSetting[]> {
     const { data, error } = await supabase.rpc('admin_get_settings');
     if (error) throw error;
     return (data ?? []) as SupabaseSetting[];
-  } catch (e) {
-    console.error('[supabase] getSettings error:', e);
-    return [];
-  }
+  } catch (e) { console.error('[supabase] getSettings error:', e); return []; }
 }
 
 export async function supabaseUpdateSetting(key: string, value: unknown): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await supabase.rpc('admin_update_setting', { p_key: key, p_value: value as any });
+  // Cast to string since Supabase RPC expects a serializable value
+  const { error } = await supabase.rpc('admin_update_setting', { p_key: key, p_value: value as string });
   if (error) throw error;
 }
 
@@ -252,16 +214,10 @@ export async function supabaseGetBanners(): Promise<SupabaseBanner[]> {
     const { data, error } = await supabase.rpc('admin_get_banners');
     if (error) throw error;
     return (data ?? []) as SupabaseBanner[];
-  } catch (e) {
-    console.error('[supabase] getBanners error:', e);
-    return [];
-  }
+  } catch (e) { console.error('[supabase] getBanners error:', e); return []; }
 }
 
-export async function supabaseUpsertBanner(banner: {
-  id?: string; title: string; image_url: string;
-  link_url?: string | null; sort_order?: number; is_active?: boolean;
-}): Promise<string | null> {
+export async function supabaseUpsertBanner(banner: { id?: string; title: string; image_url: string; link_url?: string | null; sort_order?: number; is_active?: boolean }): Promise<string | null> {
   try {
     const { data, error } = await supabase.rpc('admin_upsert_banner', {
       p_id: banner.id ?? null, p_title: banner.title, p_image_url: banner.image_url,
@@ -269,10 +225,7 @@ export async function supabaseUpsertBanner(banner: {
     });
     if (error) throw error;
     return data as string;
-  } catch (e) {
-    console.error('[supabase] upsertBanner error:', e);
-    return null;
-  }
+  } catch (e) { console.error('[supabase] upsertBanner error:', e); return null; }
 }
 
 export async function supabaseDeleteBanner(id: string): Promise<void> {
@@ -291,10 +244,7 @@ export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
     const { data, error } = await supabase.rpc('admin_get_tickets');
     if (error) throw error;
     return (data ?? []) as SupabaseTicket[];
-  } catch (e) {
-    console.error('[supabase] getTickets error:', e);
-    return [];
-  }
+  } catch (e) { console.error('[supabase] getTickets error:', e); return []; }
 }
 
 export async function supabaseUpdateTicketStatus(ticketId: string, status: string): Promise<void> {
@@ -302,7 +252,7 @@ export async function supabaseUpdateTicketStatus(ticketId: string, status: strin
   if (error) throw error;
 }
 
-// ---- Bets History ----
+// ---- Bets ----
 export interface SupabaseBet {
   id: string; user_id: string | null; game_id: string | null; round_id: string | null;
   bet_amount: number; bet_details: Record<string, unknown>; win_amount: number;
@@ -314,8 +264,57 @@ export async function supabaseGetBets(): Promise<SupabaseBet[]> {
     const { data, error } = await supabase.rpc('admin_get_bets', { p_limit: 200 });
     if (error) throw error;
     return (data ?? []) as SupabaseBet[];
-  } catch (e) {
-    console.error('[supabase] getBets error:', e);
-    return [];
-  }
+  } catch (e) { console.error('[supabase] getBets error:', e); return []; }
+}
+
+export async function getUserBets(userId: string): Promise<SupabaseBet[]> {
+  try {
+    const { data, error } = await supabase.from('bets').select('*').eq('user_id', userId);
+    if (error) throw error;
+    return (data ?? []) as SupabaseBet[];
+  } catch { return []; }
+}
+
+export interface BetEvent { id: string; name: string; markets?: BetMarket[]; [key: string]: unknown; }
+export interface BetMarket { id: string; name: string; [key: string]: unknown; }
+
+export async function getEvents(): Promise<BetEvent[]> { return []; }
+export async function getEventDetails(_eventId: string): Promise<BetEvent | null> { return null; }
+
+export async function placeBet(betData: { userId: string; eventId: string; marketId: string; selectionId: string; stake: number; odds: number; betType: 'back' | 'lay' }): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.from('bets').insert({
+      user_id: betData.userId, bet_amount: betData.stake, win_amount: 0,
+      multiplier: betData.odds, status: 'active',
+      bet_details: { eventId: betData.eventId, marketId: betData.marketId, selectionId: betData.selectionId, betType: betData.betType },
+    });
+    if (error) return { success: false, error: error.message };
+    return { success: true };
+  } catch (e) { return { success: false, error: e instanceof Error ? e.message : 'Unknown error' }; }
+}
+
+// ---- Wallet ----
+export interface WalletRecord {
+  id: string; user_id: string; balance: number;
+  bonus_balance: number; locked_balance: number;
+  [key: string]: unknown;
+}
+
+export async function getUserWallet(userId: string): Promise<WalletRecord | null> {
+  try {
+    const { data, error } = await supabase.from('profiles').select('id, balance').eq('id', userId).single();
+    if (error || !data) return null;
+    return { id: data.id, user_id: userId, balance: data.balance ?? 0, bonus_balance: 0, locked_balance: 0 };
+  } catch { return null; }
+}
+
+export async function updateWalletBalance(userId: string, amount: number, type: 'deposit' | 'withdrawal' | 'bet_placed' | 'bet_won'): Promise<{ success: boolean; newBalance: number; error?: string }> {
+  try {
+    const wallet = await getUserWallet(userId);
+    const current = wallet?.balance ?? 0;
+    const newBalance = (type === 'deposit' || type === 'bet_won') ? current + amount : current - amount;
+    const { error } = await supabase.from('profiles').update({ balance: newBalance }).eq('id', userId);
+    if (error) return { success: false, newBalance: current, error: error.message };
+    return { success: true, newBalance };
+  } catch (e) { return { success: false, newBalance: 0, error: e instanceof Error ? e.message : 'Unknown error' }; }
 }
