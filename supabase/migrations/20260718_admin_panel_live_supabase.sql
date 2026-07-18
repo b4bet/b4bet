@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS public.crm_campaigns (
 );
 ALTER TABLE public.crm_campaigns ENABLE ROW LEVEL SECURITY;
 -- Only service_role (Edge Functions / admin RPCs) can read/write
+DROP POLICY IF EXISTS "service_role full access crm_campaigns" ON public.crm_campaigns;
 CREATE POLICY "service_role full access crm_campaigns"
   ON public.crm_campaigns FOR ALL TO service_role
   USING (true) WITH CHECK (true);
