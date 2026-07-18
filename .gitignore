@@ -6,8 +6,12 @@ __v0_jsx-dev-runtime.ts
 .v0-trash/
 .vercel/
 
-# Environment variables
-.env*.local
+# Environment variables - NEVER commit these
+.env
+.env.*
+!.env.example
+!.env.local.example
+!.env.production.example
 
 # Ignore bun lockfile so Cloudflare uses pnpm
 bun.lock
