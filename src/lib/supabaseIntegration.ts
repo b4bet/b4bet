@@ -51,6 +51,9 @@ export interface SupabaseProfile {
   total_withdrawal: number;
   vip_level: number;
   is_admin: boolean;
+  is_active: boolean;
+  account_id: string;        // 6-digit client-side ID
+  signup_bonus_granted: boolean;
   created_at: string;
   updated_at: string;
   email?: string;
@@ -197,7 +200,6 @@ export async function supabaseGetSettings(): Promise<SupabaseSetting[]> {
 }
 
 export async function supabaseUpdateSetting(key: string, value: unknown): Promise<void> {
-  // Cast to string since Supabase RPC expects a serializable value
   const { error } = await supabase.rpc('admin_update_setting', { p_key: key, p_value: value as string });
   if (error) throw error;
 }
@@ -236,7 +238,7 @@ export async function supabaseDeleteBanner(id: string): Promise<void> {
 // ---- Support Tickets ----
 export interface SupabaseTicket {
   id: string; user_id: string | null; subject: string; message: string;
-  status: string; priority: string; created_at: string; updated_at: string;
+  status: string; admin_reply: string | null; created_at: string; updated_at: string;
 }
 
 export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
@@ -247,74 +249,27 @@ export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
   } catch (e) { console.error('[supabase] getTickets error:', e); return []; }
 }
 
+export async function supabaseReplyTicket(ticketId: string, reply: string): Promise<void> {
+  const { error } = await supabase.rpc('admin_reply_ticket', { p_ticket_id: ticketId, p_reply: reply });
+  if (error) throw error;
+}
+
 export async function supabaseUpdateTicketStatus(ticketId: string, status: string): Promise<void> {
   const { error } = await supabase.rpc('admin_update_ticket_status', { p_ticket_id: ticketId, p_status: status });
   if (error) throw error;
 }
 
-// ---- Bets ----
-export interface SupabaseBet {
-  id: string; user_id: string | null; game_id: string | null; round_id: string | null;
-  bet_amount: number; bet_details: Record<string, unknown>; win_amount: number;
-  multiplier: number; status: string; placed_at: string; resolved_at: string | null;
+// ---- Payment Methods ----
+export interface SupabasePaymentMethod {
+  id: string; name: string; type: string; min_amount: number; max_amount: number;
+  instructions: string | null; is_active: boolean; sort_order: number;
+  metadata: Record<string, unknown>; created_at: string;
 }
 
-export async function supabaseGetBets(): Promise<SupabaseBet[]> {
+export async function supabaseGetPaymentMethods(): Promise<SupabasePaymentMethod[]> {
   try {
-    const { data, error } = await supabase.rpc('admin_get_bets', { p_limit: 200 });
+    const { data, error } = await supabase.rpc('admin_get_payment_methods');
     if (error) throw error;
-    return (data ?? []) as SupabaseBet[];
-  } catch (e) { console.error('[supabase] getBets error:', e); return []; }
-}
-
-export async function getUserBets(userId: string): Promise<SupabaseBet[]> {
-  try {
-    const { data, error } = await supabase.from('bets').select('*').eq('user_id', userId);
-    if (error) throw error;
-    return (data ?? []) as SupabaseBet[];
-  } catch { return []; }
-}
-
-export interface BetEvent { id: string; name: string; markets?: BetMarket[]; [key: string]: unknown; }
-export interface BetMarket { id: string; name: string; [key: string]: unknown; }
-
-export async function getEvents(): Promise<BetEvent[]> { return []; }
-export async function getEventDetails(_eventId: string): Promise<BetEvent | null> { return null; }
-
-export async function placeBet(betData: { userId: string; eventId: string; marketId: string; selectionId: string; stake: number; odds: number; betType: 'back' | 'lay' }): Promise<{ success: boolean; error?: string }> {
-  try {
-    const { error } = await supabase.from('bets').insert({
-      user_id: betData.userId, bet_amount: betData.stake, win_amount: 0,
-      multiplier: betData.odds, status: 'active',
-      bet_details: { eventId: betData.eventId, marketId: betData.marketId, selectionId: betData.selectionId, betType: betData.betType },
-    });
-    if (error) return { success: false, error: error.message };
-    return { success: true };
-  } catch (e) { return { success: false, error: e instanceof Error ? e.message : 'Unknown error' }; }
-}
-
-// ---- Wallet ----
-export interface WalletRecord {
-  id: string; user_id: string; balance: number;
-  bonus_balance: number; locked_balance: number;
-  [key: string]: unknown;
-}
-
-export async function getUserWallet(userId: string): Promise<WalletRecord | null> {
-  try {
-    const { data, error } = await supabase.from('profiles').select('id, balance').eq('id', userId).single();
-    if (error || !data) return null;
-    return { id: data.id, user_id: userId, balance: data.balance ?? 0, bonus_balance: 0, locked_balance: 0 };
-  } catch { return null; }
-}
-
-export async function updateWalletBalance(userId: string, amount: number, type: 'deposit' | 'withdrawal' | 'bet_placed' | 'bet_won'): Promise<{ success: boolean; newBalance: number; error?: string }> {
-  try {
-    const wallet = await getUserWallet(userId);
-    const current = wallet?.balance ?? 0;
-    const newBalance = (type === 'deposit' || type === 'bet_won') ? current + amount : current - amount;
-    const { error } = await supabase.from('profiles').update({ balance: newBalance }).eq('id', userId);
-    if (error) return { success: false, newBalance: current, error: error.message };
-    return { success: true, newBalance };
-  } catch (e) { return { success: false, newBalance: 0, error: e instanceof Error ? e.message : 'Unknown error' }; }
+    return (data ?? []) as SupabasePaymentMethod[];
+  } catch (e) { console.error('[supabase] getPaymentMethods error:', e); return []; }
 }

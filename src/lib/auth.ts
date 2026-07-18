@@ -15,6 +15,7 @@ export interface AuthSession {
 }
 
 export interface BanRecord {
+  id?: string; // Supabase ban row id
   userId: string; username: string; email: string; ip: string;
   banDate: number; banReason: string; bannedBy: 'system' | 'admin';
   unbanDate?: number; unbanReason?: string;
@@ -37,16 +38,49 @@ function getOrCreateClientIp(): string {
 class AuthManager {
   private session: AuthSession | null = null;
   private usersCache: AuthUser[] = [];
+  // In-memory cache of bans; source of truth is Supabase `bans` table
   private bannedUsers: BanRecord[] = [];
+  private bansLoaded = false;
 
   constructor() {
     this.loadSession();
     this.applyPendingReferralRewards();
+    // Load bans from Supabase on startup
+    void this.loadBansFromSupabase();
     bus.on(Topics.ReferralDepositApproved, (payload) => {
       const { username, amount } = payload as { username: string; amount: number };
       const user = this.usersCache.find(u => u.username.toLowerCase() === username.toLowerCase());
       if (user && user.referralCode) this.processReferralReward(user, amount);
     });
+  }
+
+  // ---- Supabase bans sync ----
+  async loadBansFromSupabase() {
+    try {
+      const { data, error } = await supabase.rpc('admin_get_bans');
+      if (error) throw error;
+      const rows = (data ?? []) as {
+        id: string; user_id: string; username: string; email: string;
+        ip: string; ban_reason: string; banned_by: string;
+        ban_date: string; unban_date: string | null; unban_reason: string | null;
+      }[];
+      this.bannedUsers = rows.map(r => ({
+        id: r.id,
+        userId: r.user_id,
+        username: r.username,
+        email: r.email,
+        ip: r.ip,
+        banReason: r.ban_reason,
+        bannedBy: (r.banned_by === 'system' ? 'system' : 'admin') as 'system' | 'admin',
+        banDate: new Date(r.ban_date).getTime(),
+        unbanDate: r.unban_date ? new Date(r.unban_date).getTime() : undefined,
+        unbanReason: r.unban_reason ?? undefined,
+      }));
+      this.bansLoaded = true;
+      bus.emit('auth:bans', this.bannedUsers);
+    } catch (e) {
+      console.error('[auth] loadBansFromSupabase error:', e);
+    }
   }
 
   private async loadSession() {
@@ -103,9 +137,11 @@ class AuthManager {
       return { ok: false, error: error.message };
     }
     if (!data.user) return { ok: false, error: 'Registration failed. Please try again.' };
+    // Save profile WITH account_id and is_active
     await supabase.from('profiles').upsert({
       id: data.user.id, username: uname, display_name: uname, phone: umobile,
       balance: 0, total_deposit: 0, total_withdrawal: 0, vip_level: 0, is_admin: false,
+      account_id: accountId, is_active: true, signup_bonus_granted: false,
     });
     try { store.grantSignupBonus(data.user.id, uname); } catch { /* ignore */ }
     this.session = { userId: data.user.id, accountId, username: uname, email: umail, loggedInAt: Date.now() };
@@ -137,13 +173,17 @@ class AuthManager {
         });
         if (e2) return { ok: false, error: 'Invalid email/username or password.' };
         if (d2.user) {
+          const accountId = (d2.user.user_metadata['accountId'] as string) || '';
           this.session = {
-            userId: d2.user.id,
-            accountId: (d2.user.user_metadata['accountId'] as string) || '',
+            userId: d2.user.id, accountId,
             username: (d2.user.user_metadata['username'] as string) || id,
             email: d2.user.email || '', loggedInAt: Date.now(),
           };
           this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
+          // Ensure account_id is synced in profiles
+          if (accountId) {
+            void supabase.from('profiles').update({ account_id: accountId }).eq('id', d2.user.id).then(() => {}).catch(() => {});
+          }
           cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
           return { ok: true };
         }
@@ -151,13 +191,17 @@ class AuthManager {
       return { ok: false, error: 'Invalid email/username or password.' };
     }
     if (!data.user) return { ok: false, error: 'Login failed.' };
+    const accountId = (data.user.user_metadata['accountId'] as string) || '';
     this.session = {
-      userId: data.user.id,
-      accountId: (data.user.user_metadata['accountId'] as string) || '',
+      userId: data.user.id, accountId,
       username: (data.user.user_metadata['username'] as string) || id,
       email: data.user.email || '', loggedInAt: Date.now(),
     };
     this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
+    // Ensure account_id is synced in profiles
+    if (accountId) {
+      void supabase.from('profiles').update({ account_id: accountId }).eq('id', data.user.id).then(() => {}).catch(() => {});
+    }
     cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
     return { ok: true };
   }
@@ -212,23 +256,51 @@ class AuthManager {
     return true;
   }
 
+  // Ban user — persists to Supabase `bans` table
   banUser(id: string, reason: string, bannedBy: 'system' | 'admin' = 'admin'): boolean {
     const user = this.usersCache.find(u => u.id === id);
-    if (!user) return false;
-    user.isActive = false;
-    this.bannedUsers.push({ userId: user.id, username: user.username, email: user.email, ip: user.registrationIp ?? '\u2014', banDate: Date.now(), banReason: reason, bannedBy });
+    // Allow banning even if not in cache (use id directly)
+    const username = user?.username ?? id;
+    const email = user?.email ?? '';
+    const ip = user?.registrationIp ?? localStorage.getItem('b4bet.clientIp') ?? '';
+    void supabase.rpc('admin_ban_user', {
+      p_user_id: id, p_username: username, p_email: email,
+      p_ip: ip, p_reason: reason, p_banned_by: bannedBy,
+    }).then(({ data }) => {
+      // Reload bans from Supabase to keep cache fresh
+      void this.loadBansFromSupabase();
+      if (data && typeof data === 'string') {
+        // data is the new ban row id
+      }
+    }).catch(e => console.error('[auth] banUser error:', e));
+    // Optimistic local update
+    if (user) user.isActive = false;
+    this.bannedUsers.push({
+      userId: id, username, email, ip,
+      banDate: Date.now(), banReason: reason, bannedBy,
+    });
+    bus.emit('auth:bans', this.bannedUsers);
     if (this.session?.userId === id) void this.logout();
-    else bus.emit(Topics.AuthState, this.session);
     return true;
   }
 
-  unbanUser(id: string, reason: string): boolean {
-    const user = this.usersCache.find(u => u.id === id);
-    if (!user) return false;
-    user.isActive = true;
-    const activeBan = this.bannedUsers.find(b => b.userId === id && !b.unbanDate);
-    if (activeBan) { activeBan.unbanDate = Date.now(); activeBan.unbanReason = reason; }
-    bus.emit(Topics.AuthState, this.session);
+  // Unban user by ban row id — persists to Supabase
+  unbanUser(userId: string, reason: string): boolean {
+    // Find the active ban record for this user
+    const banRecord = this.bannedUsers.find(b => b.userId === userId && !b.unbanDate);
+    if (!banRecord) return false;
+    const banId = banRecord.id;
+    if (banId) {
+      void supabase.rpc('admin_unban_user', { p_ban_id: banId, p_reason: reason })
+        .then(() => void this.loadBansFromSupabase())
+        .catch(e => console.error('[auth] unbanUser error:', e));
+    }
+    // Optimistic local update
+    banRecord.unbanDate = Date.now();
+    banRecord.unbanReason = reason;
+    const user = this.usersCache.find(u => u.id === userId);
+    if (user) user.isActive = true;
+    bus.emit('auth:bans', this.bannedUsers);
     return true;
   }
 
@@ -237,34 +309,27 @@ class AuthManager {
 
   private processReferralReward(user: AuthUser, amount: number) {
     const cfg = cms.referralConfig;
-    const ref = cms.referrals.find(r => r.referredUserId === user.id && !r.firstDepositApproved);
-    if (!ref) return;
-    if (amount < cfg.minDeposit) { ref.depositAmount = amount; bus.emit(Topics.Referrals, cms.referrals); return; }
-    const totalRefs = cms.referrals.filter(r => r.referrerId === ref.referrerId).length;
-    const rewardAmount = totalRefs > cfg.tierThreshold ? Math.round((amount * cfg.tierPercent) / 100) : cfg.rewardAmount;
-    ref.firstDepositApproved = true; ref.depositAmount = amount; ref.rewardAmount = rewardAmount; ref.rewardPaid = true;
-    const sess = this.getSession();
-    if (sess && sess.userId === ref.referrerId) {
-      store.credit(rewardAmount);
-      ref.rewardCredited = true; ref.paidAt = Date.now();
-      cms.pushFromTemplate('nt_referral_reward', 'Referral Reward', `${ref.referredUsername} deposited ${store.currency}${amount.toFixed(2)}. You earned ${store.currency}${rewardAmount.toFixed(2)}!`, 'success');
-    } else { ref.rewardCredited = false; }
-    bus.emit(Topics.Referrals, cms.referrals);
+    if (!cfg || !user.referralCode) return;
+    let reward = 0;
+    if (cfg.model === 'CPA') reward = cfg.cpaAmount ?? 0;
+    else if (cfg.model === 'RevShare') reward = Math.round(amount * ((cfg.revSharePercent ?? 0) / 100) * 100) / 100;
+    else if (cfg.model === 'Hybrid') {
+      reward = (cfg.cpaAmount ?? 0) + Math.round(amount * ((cfg.revSharePercent ?? 0) / 100) * 100) / 100;
+    }
+    if (reward > 0) {
+      store.creditUser(user.referralCode, reward);
+      store.pushNotification({ title: 'Referral Reward', body: `You earned ${store.currency}${reward.toFixed(2)} from a referral deposit.`, kind: 'success' });
+    }
   }
 
-  applyPendingReferralRewards() {
-    const sess = this.getSession();
-    if (!sess) return;
-    let credited = 0; let total = 0;
-    for (const ref of cms.referrals) {
-      if (ref.referrerId !== sess.userId || !ref.firstDepositApproved || ref.rewardCredited) continue;
-      total += ref.rewardAmount; store.credit(ref.rewardAmount);
-      ref.rewardCredited = true; ref.paidAt = Date.now(); credited++;
+  private pendingReferralRewards: Array<{ username: string; amount: number }> = [];
+
+  private applyPendingReferralRewards() {
+    for (const r of this.pendingReferralRewards) {
+      const user = this.usersCache.find(u => u.username.toLowerCase() === r.username.toLowerCase());
+      if (user && user.referralCode) this.processReferralReward(user, r.amount);
     }
-    if (credited > 0) {
-      bus.emit(Topics.Referrals, cms.referrals);
-      cms.pushFromTemplate('nt_pending_rewards', 'Pending Rewards Credited', `${credited} referral(s) added ${store.currency}${total.toFixed(2)} to your balance.`, 'success');
-    }
+    this.pendingReferralRewards = [];
   }
 }
 

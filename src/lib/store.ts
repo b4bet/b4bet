@@ -198,29 +198,27 @@ class Store {
   signupBonusHistory: SignupBonusRecord[] = [];
   private static SIGNUP_BONUS_KEY = 'b4bet.signupBonus';
   private static SIGNUP_BONUS_HISTORY_KEY = 'b4bet.signupBonusHistory';
-  private static SIGNUP_BONUS_GRANTED_KEY = 'b4bet.signupBonusGranted';
-  private signupBonusGranted: Record<string, number> = {};
+  // granted tracking is now Supabase-backed via signup_bonus_granted column
+  // Keep a local cache to avoid extra DB calls within the same session
+  private signupBonusGrantedCache: Set<string> = new Set();
 
   redeemCodes: Record<string, RedeemCode> = { ...DEFAULT_REDEEM_CODES };
 
   constructor() {
     this.restoreBalances();
     this.restoreSignupBonus();
-    // Load redeem codes and admin config from Supabase on startup
     void this.loadRedeemCodesFromSupabase();
     void this.loadAdminConfigFromSupabase();
 
     bus.on(Topics.AuthState, async (payload: unknown) => {
       const session = payload as { userId?: string; username?: string } | null;
 
-      // Remove old user-specific realtime subscription
       if (this.userBalanceChannel) {
         await supabase.removeChannel(this.userBalanceChannel);
         this.userBalanceChannel = null;
       }
 
       if (session && session.username) {
-        // Load current balance from Supabase
         const { data: profile } = await supabase.from('profiles')
           .select('balance').eq('username', session.username).single();
         if (profile) {
@@ -228,8 +226,6 @@ class Store {
         }
         bus.emit(Topics.Balance, this.balance);
 
-        // Subscribe to realtime updates on this user's profile row
-        // so admin balance changes are reflected instantly
         if (session.userId) {
           this.userBalanceChannel = supabase
             .channel(`user_profile_${session.userId}`)
@@ -347,9 +343,7 @@ class Store {
         const rows = data as { key: string; value: unknown }[];
         const row = rows.find(r => r.key === 'admin_config');
         if (row?.value && typeof row.value === 'object') {
-          // Deep merge with defaults so new fields are always present
           this.admin = { ...DEFAULT_ADMIN_CONFIG, ...(row.value as Partial<AdminConfig>) };
-          // Ensure gameHandlers defaults are set
           this.admin.gameHandlers = {
             ...DEFAULT_ADMIN_CONFIG.gameHandlers,
             ...(this.admin.gameHandlers ?? {}),
@@ -363,7 +357,6 @@ class Store {
   setAdmin(patch: Partial<AdminConfig>) {
     this.admin = { ...this.admin, ...patch };
     bus.emit(Topics.AdminConfig, this.admin);
-    // Persist to Supabase
     void supabase.rpc('admin_update_setting', {
       p_key: 'admin_config',
       p_value: this.admin as unknown as string,
@@ -513,7 +506,6 @@ class Store {
         const row = rows.find(r => r.key === 'redeem_codes');
         if (row?.value && typeof row.value === 'object') {
           const loaded = row.value as Record<string, RedeemCode>;
-          // Merge with defaults only if Supabase has data
           if (Object.keys(loaded).length > 0) {
             this.redeemCodes = loaded;
             bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
@@ -573,26 +565,22 @@ class Store {
     }));
   }
 
-  // ---- Signup Bonus ----
-  private persistSignupBonus() {
-    try {
-      localStorage.setItem(Store.SIGNUP_BONUS_KEY, JSON.stringify(this.signupBonus));
-      localStorage.setItem(Store.SIGNUP_BONUS_HISTORY_KEY, JSON.stringify(this.signupBonusHistory));
-      localStorage.setItem(Store.SIGNUP_BONUS_GRANTED_KEY, JSON.stringify(this.signupBonusGranted));
-    } catch { /* ignore */ }
-  }
-
+  // ---- Signup Bonus (Supabase-backed grant tracking) ----
   private restoreSignupBonus() {
     try {
       const b = localStorage.getItem(Store.SIGNUP_BONUS_KEY);
       if (b) this.signupBonus = Math.max(0, Number(JSON.parse(b)) || 0);
       const h = localStorage.getItem(Store.SIGNUP_BONUS_HISTORY_KEY);
       if (h) this.signupBonusHistory = JSON.parse(h);
-      const g = localStorage.getItem(Store.SIGNUP_BONUS_GRANTED_KEY);
-      if (g) this.signupBonusGranted = JSON.parse(g);
     } catch { /* ignore */ }
-    // Also load from Supabase (async, non-blocking)
     void this.loadSignupBonusFromSupabase();
+  }
+
+  private persistSignupBonus() {
+    try {
+      localStorage.setItem(Store.SIGNUP_BONUS_KEY, JSON.stringify(this.signupBonus));
+      localStorage.setItem(Store.SIGNUP_BONUS_HISTORY_KEY, JSON.stringify(this.signupBonusHistory));
+    } catch { /* ignore */ }
   }
 
   async loadSignupBonusFromSupabase() {
@@ -619,23 +607,40 @@ class Store {
       .catch(() => {});
   }
 
-  grantSignupBonus(userId: string, username: string): number {
+  // Grant signup bonus — checks Supabase profiles.signup_bonus_granted
+  async grantSignupBonusAsync(userId: string, username: string): Promise<number> {
     if (!userId || !username) return 0;
-    if (this.signupBonusGranted[userId]) return 0;
+    // Check local cache first
+    if (this.signupBonusGrantedCache.has(userId)) return 0;
+    // Check Supabase
+    try {
+      const { data } = await supabase.from('profiles')
+        .select('signup_bonus_granted').eq('id', userId).single();
+      const row = data as { signup_bonus_granted: boolean } | null;
+      if (row?.signup_bonus_granted) {
+        this.signupBonusGrantedCache.add(userId);
+        return 0;
+      }
+    } catch { /* ignore */ }
     const amount = this.signupBonus;
-    if (amount <= 0) {
-      this.signupBonusGranted[userId] = Date.now();
-      this.persistSignupBonus();
-      return 0;
+    if (amount > 0) {
+      this.creditUser(username, amount);
+      const rec: SignupBonusRecord = { id: Math.random().toString(36).slice(2), userId, username, amount, ts: Date.now() };
+      this.signupBonusHistory = [rec, ...this.signupBonusHistory].slice(0, 1000);
+      this.pushBalanceHistory({ userId, username, type: 'credit', amount, reason: 'Signup bonus (auto)' });
     }
-    this.creditUser(username, amount);
-    const rec: SignupBonusRecord = { id: Math.random().toString(36).slice(2), userId, username, amount, ts: Date.now() };
-    this.signupBonusHistory = [rec, ...this.signupBonusHistory].slice(0, 1000);
-    this.signupBonusGranted[userId] = rec.ts;
-    this.pushBalanceHistory({ userId, username, type: 'credit', amount, reason: 'Signup bonus (auto)' });
+    // Mark granted in Supabase
+    void supabase.rpc('mark_signup_bonus_granted', { p_user_id: userId }).catch(() => {});
+    this.signupBonusGrantedCache.add(userId);
     this.persistSignupBonus();
     bus.emit(Topics.SignupBonus, { amount: this.signupBonus, history: this.signupBonusHistory });
     return amount;
+  }
+
+  // Sync wrapper — called from register() which is async anyway
+  grantSignupBonus(userId: string, username: string): number {
+    void this.grantSignupBonusAsync(userId, username);
+    return this.signupBonus; // optimistic return
   }
 
   getSignupBonusHistory(opts: { search?: string; period?: 'all' | 'today' | 'day' | 'week' | 'month' | 'year' } = {}): SignupBonusRecord[] {
@@ -659,7 +664,6 @@ export const store = new Store();
 
 /**
  * Compute a simulated next-round outcome for admin preview.
- * Returns a RoundOutcomePreview with a human-readable outcome + detail string.
  */
 export function computeAutoOutcome(
   gameKey: string,

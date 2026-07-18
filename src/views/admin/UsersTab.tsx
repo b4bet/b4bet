@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Plus, Minus, ShieldAlert, Search, Eye, RefreshCw, Shield, ShieldOff } from 'lucide-react';
+import { Users, Plus, Minus, ShieldAlert, Search, Eye, RefreshCw, Shield, ShieldOff, Hash } from 'lucide-react';
 import { supabaseGetUsers, supabaseUpdateBalance, supabaseToggleAdmin, type SupabaseProfile } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
-  return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '\u20B9' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export default function UsersTab() {
@@ -34,6 +34,8 @@ export default function UsersTab() {
     return (
       (u.username ?? '').toLowerCase().includes(query) ||
       (u.display_name ?? '').toLowerCase().includes(query) ||
+      // Search by 6-digit account_id
+      (u.account_id ?? '').includes(query) ||
       u.id.toLowerCase().includes(query)
     );
   });
@@ -69,9 +71,11 @@ export default function UsersTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="font-display font-bold text-lg text-white">User Profiles</h2>
+          <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
+            <Users className="w-5 h-5 text-neon-300" /> User Profiles
+          </h2>
           <p className="text-xs text-slate-500">Live data from Supabase database.</p>
         </div>
         <button
@@ -89,90 +93,111 @@ export default function UsersTab() {
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search by username, display name or user ID…"
+          placeholder="Search by username, name, 6-digit ID or UUID…"
           className="input pl-10"
         />
       </div>
 
-      <div className="panel overflow-hidden">
-        <div className="overflow-x-auto scrollbar-thin">
-          <table className="w-full text-sm">
-            <thead className="bg-midnight-850 border-b border-borderline-900">
-              <tr className="text-left text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
-                <th className="p-3">Username</th>
-                <th className="p-3">User ID</th>
-                <th className="p-3">Phone</th>
-                <th className="p-3">Balance</th>
-                <th className="p-3">Deposit</th>
-                <th className="p-3">Withdraw</th>
-                <th className="p-3">VIP</th>
-                <th className="p-3">Joined</th>
-                <th className="p-3">Admin</th>
-                <th className="p-3 text-right">Actions</th>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12px]">
+          <thead className="text-slate-500 uppercase tracking-wider text-[10px] border-b border-borderline-900">
+            <tr>
+              <th className="text-left py-2 pr-3">Username</th>
+              <th className="text-left py-2 pr-3">
+                <span className="flex items-center gap-1">
+                  <Hash className="w-3 h-3" /> ID
+                </span>
+              </th>
+              <th className="text-left py-2 pr-3">Phone</th>
+              <th className="text-right py-2 pr-3">Balance</th>
+              <th className="text-right py-2 pr-3">Deposit</th>
+              <th className="text-right py-2 pr-3">Withdraw</th>
+              <th className="text-center py-2 pr-3">VIP</th>
+              <th className="text-left py-2 pr-3">Joined</th>
+              <th className="text-center py-2 pr-3">Status</th>
+              <th className="text-center py-2 pr-3">Admin</th>
+              <th className="text-right py-2">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-borderline-900/60">
+            {loading ? (
+              <tr>
+                <td colSpan={11} className="py-6 text-center text-slate-500">
+                  <RefreshCw className="w-4 h-4 animate-spin inline mr-2" />
+                  Loading from Supabase…
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-borderline-900">
-              {loading ? (
-                <tr>
-                  <td colSpan={10} className="p-8 text-center text-slate-400 text-sm">
-                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2" />
-                    Loading from Supabase…
+            ) : filtered.length === 0 ? (
+              <tr>
+                <td colSpan={11} className="py-6 text-center text-slate-500">
+                  {users.length === 0 ? 'No users found in database.' : 'No users match your search.'}
+                </td>
+              </tr>
+            ) : (
+              filtered.map((u) => (
+                <tr key={u.id} className="hover:bg-slatepanel-800/50 transition-colors">
+                  <td className="py-2 pr-3">
+                    <div className="font-semibold text-white">{u.display_name ?? u.username ?? '—'}</div>
+                    <div className="text-[10px] text-slate-500">{u.username}</div>
                   </td>
-                </tr>
-              ) : filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={10} className="p-8 text-center text-slate-500 text-sm">
-                    {users.length === 0 ? 'No users found in database.' : 'No users match your search.'}
+                  {/* 6-digit Account ID — prominent badge */}
+                  <td className="py-2 pr-3">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-neon-500/15 border border-neon-500/30 font-mono font-bold text-neon-300 text-[11px]">
+                      <Hash className="w-2.5 h-2.5" />{u.account_id || '——'}
+                    </span>
                   </td>
-                </tr>
-              ) : (
-                filtered.map((u) => (
-                  <tr key={u.id} className="hover:bg-slatepanel-800/50">
-                    <td className="p-3 font-semibold text-white">{u.display_name ?? u.username ?? '—'}</td>
-                    <td className="p-3 font-mono text-[11px] text-neon-200 tabular">{u.id.slice(0, 8)}…</td>
-                    <td className="p-3 font-mono text-[11px] text-slate-300">{u.phone ?? '—'}</td>
-                    <td className="p-3 font-semibold text-emeraldwin-300 tabular">{fmt(u.balance)}</td>
-                    <td className="p-3 text-[11px] text-slate-300 tabular">{fmt(u.total_deposit)}</td>
-                    <td className="p-3 text-[11px] text-slate-300 tabular">{fmt(u.total_withdrawal)}</td>
-                    <td className="p-3 text-[11px] text-slate-300">{u.vip_level}</td>
-                    <td className="p-3 text-[11px] text-slate-400 whitespace-nowrap">
-                      {new Date(u.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
-                    </td>
-                    <td className="p-3">
-                      <button
-                        onClick={() => void toggleAdmin(u.id, u.is_admin)}
-                        title={u.is_admin ? 'Remove admin' : 'Make admin'}
-                        className={`w-7 h-7 rounded-lg grid place-items-center border transition-colors ${
-                          u.is_admin
-                            ? 'bg-neon-500/20 border-neon-500/40 text-neon-300'
-                            : 'bg-slatepanel-800 border-borderline-900 text-slate-500 hover:text-slate-300'
-                        }`}
-                      >
-                        {u.is_admin ? <Shield className="w-3.5 h-3.5" /> : <ShieldOff className="w-3.5 h-3.5" />}
-                      </button>
-                    </td>
-                    <td className="p-3 text-right">
+                  <td className="py-2 pr-3 text-slate-300">{u.phone ?? '—'}</td>
+                  <td className="py-2 pr-3 text-right font-semibold tabular text-white">{fmt(u.balance)}</td>
+                  <td className="py-2 pr-3 text-right tabular text-emeraldwin-300">{fmt(u.total_deposit)}</td>
+                  <td className="py-2 pr-3 text-right tabular text-coral-300">{fmt(u.total_withdrawal)}</td>
+                  <td className="py-2 pr-3 text-center">
+                    <span className="text-amberx-300 font-bold">{u.vip_level}</span>
+                  </td>
+                  <td className="py-2 pr-3 text-slate-400">
+                    {new Date(u.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </td>
+                  <td className="py-2 pr-3 text-center">
+                    <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
+                      u.is_active
+                        ? 'bg-emeraldwin-500/15 border-emeraldwin-500/30 text-emeraldwin-300'
+                        : 'bg-coral-500/15 border-coral-500/30 text-coral-300'
+                    }`}>
+                      {u.is_active ? 'Active' : 'Banned'}
+                    </span>
+                  </td>
+                  <td className="py-2 pr-3 text-center">
+                    <button
+                      onClick={() => void toggleAdmin(u.id, u.is_admin)}
+                      title={u.is_admin ? 'Remove admin' : 'Make admin'}
+                      className={`w-7 h-7 rounded-lg grid place-items-center border transition-colors ${
+                        u.is_admin
+                          ? 'bg-neon-500/20 border-neon-500/40 text-neon-300'
+                          : 'bg-slatepanel-800 border-borderline-900 text-slate-500 hover:text-slate-300'
+                      }`}
+                    >
+                      {u.is_admin ? <Shield className="w-3.5 h-3.5" /> : <ShieldOff className="w-3.5 h-3.5" />}
+                    </button>
+                  </td>
+                  <td className="py-2 text-right">
+                    <div className="flex items-center justify-end gap-1.5">
                       {adjustId === u.id ? (
-                        <div className="flex flex-col gap-1.5 justify-end">
-                          <div className="flex items-center gap-1.5">
-                            <input
-                              type="number" value={amount}
-                              onChange={(e) => setAmount(e.target.value)}
-                              placeholder="Amt"
-                              className="w-20 input py-1 text-xs tabular"
-                            />
-                            <button onClick={() => void adjust(u.id, 'credit')} className="w-7 h-7 rounded-lg bg-emeraldwin-500/20 border border-emeraldwin-500/40 grid place-items-center">
-                              <Plus className="w-3.5 h-3.5 text-emeraldwin-400" />
-                            </button>
-                            <button onClick={() => void adjust(u.id, 'debit')} className="w-7 h-7 rounded-lg bg-coral-500/20 border border-coral-500/40 grid place-items-center">
-                              <Minus className="w-3.5 h-3.5 text-coral-400" />
-                            </button>
-                            <button onClick={() => { setAdjustId(null); setAmount(''); setReason(''); }} className="text-[10px] text-slate-400 hover:text-white px-1">✕</button>
-                          </div>
-                          <input type="text" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason…" className="input py-1 text-xs w-full" />
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number" value={amount} onChange={(e) => setAmount(e.target.value)}
+                            placeholder="Amt"
+                            className="w-20 input py-1 text-xs tabular"
+                          />
+                          <button onClick={() => void adjust(u.id, 'credit')} className="w-7 h-7 rounded-lg bg-emeraldwin-500/20 border border-emeraldwin-500/40 grid place-items-center">
+                            <Plus className="w-3.5 h-3.5 text-emeraldwin-300" />
+                          </button>
+                          <button onClick={() => void adjust(u.id, 'debit')} className="w-7 h-7 rounded-lg bg-coral-500/20 border border-coral-500/40 grid place-items-center">
+                            <Minus className="w-3.5 h-3.5 text-coral-300" />
+                          </button>
+                          <button onClick={() => { setAdjustId(null); setAmount(''); setReason(''); }} className="text-[10px] text-slate-400 hover:text-white px-1">✕</button>
+                          <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason…" className="input py-1 text-xs w-24" />
                         </div>
                       ) : (
-                        <div className="flex items-center gap-1.5 justify-end">
+                        <div className="flex items-center gap-1">
                           <button
                             onClick={() => setAdjustId(u.id)}
                             className="text-xs font-semibold text-neon-300 hover:text-neon-200"
@@ -183,43 +208,59 @@ export default function UsersTab() {
                             onClick={() => setViewingId(u.id)}
                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-neon-500/15 border border-neon-500/40 text-neon-300 hover:text-neon-200 text-xs font-semibold"
                           >
-                            <Eye className="w-3.5 h-3.5" /> View
+                            <Eye className="w-3 h-3" /> View
                           </button>
                         </div>
                       )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
+                    </div>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
 
-      <div className="panel p-4">
-        <h3 className="font-display font-bold text-sm text-white mb-2 flex items-center gap-2">
-          <Users className="w-4 h-4 text-neon-300" /> Total Registered Users
-        </h3>
-        <p className="text-2xl font-display font-extrabold text-white">{users.length}</p>
+      <div className="flex items-center gap-2 text-xs text-slate-500 border-t border-borderline-900 pt-3">
+        <Users className="w-3.5 h-3.5" />
+        <span>Total Registered Users: <span className="font-bold text-white">{users.length}</span></span>
+        <span className="mx-2 text-borderline-900">|</span>
+        <ShieldAlert className="w-3.5 h-3.5 text-coral-400" />
+        <span>Banned: <span className="font-bold text-coral-300">{users.filter(u => !u.is_active).length}</span></span>
       </div>
 
       {/* User detail modal */}
       {viewing && (
-        <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={() => setViewingId(null)}>
-          <div className="panel w-full max-w-md p-6 space-y-3" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 grid place-items-center p-4" onClick={() => setViewingId(null)}>
+          <div className="panel p-5 w-full max-w-md space-y-3" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h3 className="font-display font-bold text-white text-lg">{viewing.display_name ?? viewing.username}</h3>
+              <div>
+                <h3 className="font-display font-bold text-white text-lg">{viewing.display_name ?? viewing.username}</h3>
+                {/* 6-digit ID prominently shown */}
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-neon-500/15 border border-neon-500/30 font-mono font-bold text-neon-300 text-sm">
+                    <Hash className="w-3.5 h-3.5" />{viewing.account_id || 'No ID'}
+                  </span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                    viewing.is_active
+                      ? 'bg-emeraldwin-500/15 border-emeraldwin-500/30 text-emeraldwin-300'
+                      : 'bg-coral-500/15 border-coral-500/30 text-coral-300'
+                  }`}>{viewing.is_active ? 'Active' : 'Banned'}</span>
+                </div>
+              </div>
               <button onClick={() => setViewingId(null)} className="text-slate-400 hover:text-white text-sm">✕ Close</button>
             </div>
-            <div className="space-y-2 text-sm">
-              <Row label="User ID" value={viewing.id} mono />
+            <div className="space-y-1.5 text-[12px]">
               <Row label="Username" value={viewing.username ?? '—'} />
+              <Row label="Account ID" value={viewing.account_id || '——'} mono />
+              <Row label="UUID" value={viewing.id.slice(0, 16) + '…'} mono />
               <Row label="Phone" value={viewing.phone ?? '—'} />
               <Row label="Balance" value={fmt(viewing.balance)} />
               <Row label="Total Deposit" value={fmt(viewing.total_deposit)} />
               <Row label="Total Withdrawal" value={fmt(viewing.total_withdrawal)} />
               <Row label="VIP Level" value={String(viewing.vip_level)} />
               <Row label="Admin" value={viewing.is_admin ? 'Yes' : 'No'} />
+              <Row label="Signup Bonus" value={viewing.signup_bonus_granted ? 'Granted' : 'Not yet'} />
               <Row label="Joined" value={new Date(viewing.created_at).toLocaleString('en-IN')} />
             </div>
           </div>
@@ -231,9 +272,9 @@ export default function UsersTab() {
 
 function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex justify-between gap-2">
+    <div className="flex items-center justify-between py-1 border-b border-borderline-900/40">
       <span className="text-slate-500">{label}</span>
-      <span className={`text-white text-right ${mono ? 'font-mono text-[11px]' : ''}`}>{value}</span>
+      <span className={`font-semibold text-white ${mono ? 'font-mono' : ''}`}>{value}</span>
     </div>
   );
 }

@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { auth, type BanRecord } from '../../lib/auth';
 import { bus } from '../../lib/bus';
-import { ShieldBan, Search, Unlock, AlertTriangle, Activity, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { supabase } from '../../integrations/supabase/client';
+import { ShieldBan, Search, Unlock, AlertTriangle, Activity, ShieldAlert, ShieldCheck, RefreshCw, Wifi } from 'lucide-react';
 
 function useBannedUsers() {
   const [bans, setBans] = useState<BanRecord[]>(() => auth.getBannedUsers());
   useEffect(() => {
+    // Load fresh from Supabase on mount
+    void auth.loadBansFromSupabase();
     const unsub = bus.on('auth:bans', (payload) => {
       const all = payload as BanRecord[];
       setBans(all.filter((b) => !b.unbanDate));
@@ -13,18 +16,6 @@ function useBannedUsers() {
     return () => unsub();
   }, []);
   return bans;
-}
-
-/** Subscribes to any user/ban change so IP Activity re-renders live. */
-function useAllUsers() {
-  const [users, setUsers] = useState(() => auth.getUsers());
-  useEffect(() => {
-    const refresh = () => setUsers(auth.getUsers());
-    const unsubBans = bus.on('auth:bans', refresh);
-    const unsubAuth = bus.on('auth:state', refresh);
-    return () => { unsubBans(); unsubAuth(); };
-  }, []);
-  return users;
 }
 
 function useAllBanHistory() {
@@ -38,63 +29,77 @@ function useAllBanHistory() {
   return history;
 }
 
-function getUserForBan(id: string) {
-  return auth.getUserById(id) || auth.getUserByAccountId(id);
+// Live Supabase users for Ban by ID search
+function useLiveUsers() {
+  const [users, setUsers] = useState<{ id: string; username: string; account_id: string; email?: string; is_active: boolean }[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const { data } = await supabase.rpc('admin_get_profiles');
+      if (data) {
+        setUsers((data as { id: string; username: string | null; account_id: string; is_active: boolean }[]).map(u => ({
+          id: u.id,
+          username: u.username ?? '',
+          account_id: u.account_id ?? '',
+          is_active: u.is_active ?? true,
+        })));
+      }
+    } catch (e) {
+      console.error('[BanSection] useLiveUsers error:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  return { users, loading, reload: load };
 }
 
 export default function BanSectionTab() {
   const bans = useBannedUsers();
-  const allUsers = useAllUsers();
+  const banHistory = useAllBanHistory();
+  const { users: liveUsers, loading: usersLoading } = useLiveUsers();
+
   const [search, setSearch] = useState('');
+  // Ban by ID input accepts 6-digit account_id OR UUID
   const [banIdInput, setBanIdInput] = useState('');
   const [banReason, setBanReason] = useState('');
-  const [unbanId, setUnbanId] = useState<string | null>(null);
+  const [unbanId, setUnbanId] = useState<string | null>(null); // userId
   const [unbanReason, setUnbanReason] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [ipSearch, setIpSearch] = useState('');
   const [ipActionModal, setIpActionModal] = useState<{ userId: string; action: 'ban' | 'unban' } | null>(null);
   const [ipActionReason, setIpActionReason] = useState('');
-  const banHistory = useAllBanHistory();
 
-  // Group all registered users by their registration IP.
-  // Each group shows every account created from that IP with time/date and
-  // current ban status + latest ban/unban reason.
+  // Group all registered users by their IP (from ban history)
   const ipGroups = useMemo(() => {
-    const groups = new Map<string, typeof allUsers>();
-    for (const u of allUsers) {
-      const ip = u.registrationIp ?? 'unknown';
+    const groups = new Map<string, typeof bans>();
+    for (const b of banHistory) {
+      const ip = b.ip || 'unknown';
       const arr = groups.get(ip) ?? [];
-      arr.push(u);
+      arr.push(b);
       groups.set(ip, arr);
     }
     return Array.from(groups.entries())
-      .map(([ip, users]) => ({
-        ip,
-        users: [...users].sort((a, b) => a.createdAt - b.createdAt),
-      }))
-      .sort((a, b) => b.users.length - a.users.length);
-  }, [allUsers]);
+      .map(([ip, records]) => ({ ip, records: [...records].sort((a, b) => a.banDate - b.banDate) }))
+      .sort((a, b) => b.records.length - a.records.length);
+  }, [banHistory]);
 
-  const multiAccountIpGroups = ipGroups.filter((g) => g.users.length > 1);
-  const filteredIpGroups = multiAccountIpGroups.filter((g) => {
+  const multiIpGroups = ipGroups.filter(g => g.records.length > 1);
+  const filteredIpGroups = multiIpGroups.filter((g) => {
     const q = ipSearch.trim().toLowerCase();
     if (!q) return true;
     if (g.ip.toLowerCase().includes(q)) return true;
-    return g.users.some(
-      (u) =>
-        u.username.toLowerCase().includes(q) ||
-        u.email.toLowerCase().includes(q) ||
-        u.accountId.toLowerCase().includes(q),
+    return g.records.some(r =>
+      r.username.toLowerCase().includes(q) ||
+      r.email.toLowerCase().includes(q) ||
+      r.userId.toLowerCase().includes(q)
     );
   });
-
-  function latestBanRecordFor(userId: string): BanRecord | undefined {
-    const recs = banHistory.filter((b) => b.userId === userId);
-    if (!recs.length) return undefined;
-    return [...recs].sort((a, b) => b.banDate - a.banDate)[0];
-  }
-
 
   const filtered = bans.filter((b) => {
     const q = search.toLowerCase();
@@ -113,17 +118,31 @@ export default function BanSectionTab() {
     setTimeout(() => { setSuccess(''); setError(''); }, 3000);
   }
 
+  function resolveUserByInput(input: string) {
+    const trimmed = input.trim();
+    // Try 6-digit account_id first
+    const byAccountId = liveUsers.find(u => u.account_id === trimmed);
+    if (byAccountId) return byAccountId;
+    // Try UUID
+    const byId = liveUsers.find(u => u.id === trimmed);
+    if (byId) return byId;
+    // Try username
+    const byUsername = liveUsers.find(u => u.username.toLowerCase() === trimmed.toLowerCase());
+    if (byUsername) return byUsername;
+    return null;
+  }
+
   function handleBanById() {
     const id = banIdInput.trim();
-    if (!id) { flash(false, 'Please enter a User ID.'); return; }
+    if (!id) { flash(false, 'Please enter a User ID or Account ID.'); return; }
     if (!banReason.trim()) { flash(false, 'A ban reason is required.'); return; }
-    const user = getUserForBan(id);
-    if (!user) { flash(false, `No user found with ID "${id}".`); return; }
+    const user = resolveUserByInput(id);
+    if (!user) { flash(false, `No user found with ID "${id}". Make sure you use the 6-digit Account ID shown in the Users tab.`); return; }
     const alreadyBanned = bans.find((b) => b.userId === user.id);
     if (alreadyBanned) { flash(false, `${user.username} is already banned.`); return; }
     const ok = auth.banUser(user.id, banReason.trim());
     if (ok) {
-      flash(true, `${user.username} has been banned.`);
+      flash(true, `${user.username} (ID: ${user.account_id}) has been banned.`);
       setBanIdInput('');
       setBanReason('');
     } else {
@@ -148,11 +167,14 @@ export default function BanSectionTab() {
     if (!ipActionModal) return;
     const reason = ipActionReason.trim();
     if (!reason) { flash(false, 'A reason is required.'); return; }
+    const user = liveUsers.find(u => u.id === ipActionModal.userId);
     const ok = ipActionModal.action === 'ban'
       ? auth.banUser(ipActionModal.userId, reason)
       : auth.unbanUser(ipActionModal.userId, reason);
     if (ok) {
-      flash(true, ipActionModal.action === 'ban' ? 'User has been banned.' : 'User has been unbanned.');
+      flash(true, ipActionModal.action === 'ban'
+        ? `${user?.username ?? ipActionModal.userId} has been banned.`
+        : 'User has been unbanned.');
       setIpActionModal(null);
       setIpActionReason('');
     } else {
@@ -161,49 +183,76 @@ export default function BanSectionTab() {
   }
 
   return (
-    <div className="space-y-5 animate-fade-in">
-      <div className="flex items-center gap-2">
-        <ShieldBan className="w-5 h-5 text-coral-400" />
-        <h2 className="font-display font-bold text-white text-lg">Ban Section</h2>
-        <span className="chip bg-coral-500/20 text-coral-300 text-[10px]">{bans.length} banned</span>
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
+            <ShieldBan className="w-5 h-5 text-coral-400" /> Ban Section
+          </h2>
+          <p className="text-xs text-slate-500">Bans are saved permanently to Supabase — survive server restarts.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold text-emeraldwin-300 bg-emeraldwin-500/10 border border-emeraldwin-500/20 px-2 py-0.5 rounded-full">
+            <Wifi className="w-2.5 h-2.5" /> Supabase
+          </span>
+          <span className="text-[10px] font-bold text-coral-300 bg-coral-500/10 border border-coral-500/20 px-2 py-0.5 rounded-full">
+            {bans.length} banned
+          </span>
+        </div>
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-coral-500/15 border border-coral-500/30 text-coral-300 text-sm">
-          <AlertTriangle className="w-4 h-4 flex-shrink-0" /> {error}
+        <div className="flex items-center gap-2 p-3 rounded-xl bg-coral-500/10 border border-coral-500/30 text-coral-300 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />{error}
         </div>
       )}
       {success && (
-        <div className="px-4 py-2 rounded-xl bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-sm">
-          {success}
+        <div className="flex items-center gap-2 p-3 rounded-xl bg-emeraldwin-500/10 border border-emeraldwin-500/30 text-emeraldwin-300 text-sm">
+          <ShieldCheck className="w-4 h-4 flex-shrink-0" />{success}
         </div>
       )}
 
-      {/* Search-to-Ban by User ID */}
+      {/* Ban User by ID Panel */}
       <div className="panel p-4 space-y-3">
-        <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Ban User by ID</p>
-        <div className="flex gap-2">
-          <input
-            className="input flex-1 text-sm"
-            placeholder="User ID (6-digit, e.g. 123456)"
-            value={banIdInput}
-            onChange={(e) => setBanIdInput(e.target.value)}
-            list="user-id-list"
-          />
-          <datalist id="user-id-list">
-            {allUsers.map((u) => (
-              <option key={u.id} value={u.accountId}>{u.username} (#{u.accountId})</option>
-            ))}
-          </datalist>
+        <div>
+          <h3 className="font-display font-bold text-white text-sm flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4 text-coral-400" /> Ban User by Account ID
+          </h3>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            Enter the <span className="text-neon-300 font-semibold">6-digit Account ID</span> shown in the Users tab.
+            You can also use their username or UUID.
+          </p>
         </div>
-        <input
-          className="input w-full text-sm"
-          placeholder="Ban reason (required)"
-          value={banReason}
-          onChange={(e) => setBanReason(e.target.value)}
-        />
-        <button onClick={handleBanById} className="btn-primary bg-coral-500 hover:bg-coral-400 text-sm px-4 py-2 rounded-xl flex items-center gap-2">
-          <ShieldBan className="w-4 h-4" /> Ban User
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <p className="text-[9px] uppercase tracking-wider text-slate-500 mb-1">Account ID / Username / UUID</p>
+            <input
+              value={banIdInput}
+              onChange={(e) => setBanIdInput(e.target.value)}
+              placeholder="e.g. 483920 or username"
+              className="input"
+              list="live-user-list"
+            />
+            <datalist id="live-user-list">
+              {liveUsers.map((u) => (
+                <option key={u.id} value={u.account_id}>{u.username} (#{u.account_id})</option>
+              ))}
+            </datalist>
+            {usersLoading && <p className="text-[10px] text-slate-500 mt-0.5">Loading users…</p>}
+          </div>
+          <div>
+            <p className="text-[9px] uppercase tracking-wider text-slate-500 mb-1">Ban Reason</p>
+            <input
+              value={banReason}
+              onChange={(e) => setBanReason(e.target.value)}
+              placeholder="Reason for ban"
+              className="input"
+            />
+          </div>
+        </div>
+        <button onClick={handleBanById} className="btn-coral px-4 py-2 text-sm">
+          Ban User
         </button>
       </div>
 
@@ -211,74 +260,89 @@ export default function BanSectionTab() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
         <input
-          className="input w-full pl-9 text-sm"
-          placeholder="Search banned users…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search banned users…"
+          className="input pl-10"
         />
       </div>
 
       {/* Banned list */}
-      <div className="space-y-3">
+      <div className="space-y-2">
         {filtered.length === 0 && (
-          <div className="panel p-6 text-center text-slate-500 text-sm">
+          <div className="text-center py-8 text-slate-500 text-sm">
             {search ? 'No banned users match your search.' : 'No banned users.'}
           </div>
         )}
         {filtered.map((ban) => (
-          <div key={ban.userId} className="panel p-4 space-y-2">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold text-white text-sm">{ban.username}</span>
-                  <span className={`chip text-[10px] ${ban.bannedBy === 'system' ? 'bg-yellow-500/20 text-yellow-300' : 'bg-coral-500/20 text-coral-300'}`}>
-                    {ban.bannedBy === 'system' ? 'Auto-Ban' : 'Admin'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-0.5">{ban.email}</p>
-                <p className="text-xs text-slate-600 font-mono mt-0.5">ID: {auth.getUserById(ban.userId)?.accountId ?? ban.userId}</p>
+          <div key={ban.userId} className="panel p-4 flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-coral-500/15 border border-coral-500/30 grid place-items-center flex-shrink-0">
+              <ShieldBan className="w-4 h-4 text-coral-400" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold text-white">{ban.username}</span>
+                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full border ${
+                  ban.bannedBy === 'system'
+                    ? 'bg-amberx-500/15 border-amberx-500/30 text-amberx-300'
+                    : 'bg-coral-500/15 border-coral-500/30 text-coral-300'
+                }`}>
+                  {ban.bannedBy === 'system' ? 'Auto-Ban' : 'Admin'}
+                </span>
+                {/* Show 6-digit account ID from liveUsers */}
+                {(() => {
+                  const lu = liveUsers.find(u => u.id === ban.userId);
+                  return lu?.account_id ? (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-neon-500/10 border border-neon-500/20 font-mono font-bold text-neon-300 text-[10px]">
+                      #{lu.account_id}
+                    </span>
+                  ) : null;
+                })()}
               </div>
-              <button
-                onClick={() => { setUnbanId(ban.userId); setUnbanReason(''); }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-xs font-semibold hover:bg-emeraldwin-500/25 transition-colors"
-              >
-                <Unlock className="w-3.5 h-3.5" /> Unban
-              </button>
+              <p className="text-[11px] text-slate-400 mt-0.5">{ban.email}</p>
+              <p className="text-[11px] text-slate-500">
+                Reason: <span className="text-slate-300">{ban.banReason}</span>
+              </p>
+              <p className="text-[10px] text-slate-600 mt-0.5">
+                IP: {ban.ip} · {new Date(ban.banDate).toLocaleString()}
+              </p>
             </div>
-            <div className="text-xs text-slate-400 bg-midnight-900/60 rounded-lg px-3 py-2">
-              <span className="text-slate-500">Reason: </span>{ban.banReason}
-            </div>
-            <div className="flex items-center justify-between text-[10px] text-slate-600">
-              <span>IP: <span className="text-slate-500 font-mono">{ban.ip}</span></span>
-              <span>{new Date(ban.banDate).toLocaleString()}</span>
-            </div>
+            <button
+              onClick={() => { setUnbanId(ban.userId); setUnbanReason(''); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-xs font-semibold hover:bg-emeraldwin-500/25 transition-colors flex-shrink-0"
+            >
+              <Unlock className="w-3 h-3" /> Unban
+            </button>
           </div>
         ))}
       </div>
 
       {/* Unban modal */}
       {unbanId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="panel w-full max-w-sm p-6 space-y-4">
-            <div className="flex items-center gap-2">
-              <Unlock className="w-5 h-5 text-emeraldwin-400" />
-              <h3 className="font-bold text-white">Unban User</h3>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 grid place-items-center p-4">
+          <div className="panel p-5 w-full max-w-sm space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emeraldwin-500/15 border border-emeraldwin-500/30 grid place-items-center">
+                <Unlock className="w-5 h-5 text-emeraldwin-300" />
+              </div>
+              <div>
+                <h3 className="font-display font-bold text-white">Unban User</h3>
+                <p className="text-xs text-slate-500">
+                  {bans.find((b) => b.userId === unbanId)?.username} will be reactivated.
+                </p>
+              </div>
             </div>
-            <p className="text-sm text-slate-400">
-              You are unbanning <span className="text-white font-semibold">{bans.find((b) => b.userId === unbanId)?.username}</span>.
-              Please provide a reason.
-            </p>
-            <textarea
-              className="input w-full text-sm h-20 resize-none"
-              placeholder="Unban reason (required)"
+            <input
               value={unbanReason}
               onChange={(e) => setUnbanReason(e.target.value)}
+              placeholder="Unban reason…"
+              className="input"
             />
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <button onClick={() => { setUnbanId(null); setUnbanReason(''); }} className="flex-1 py-2 rounded-xl bg-slatepanel-700 text-slate-300 text-sm hover:bg-slatepanel-600 transition-colors">
                 Cancel
               </button>
-              <button onClick={handleUnban} className="flex-1 py-2 rounded-xl bg-emeraldwin-500 text-white text-sm font-semibold hover:bg-emeraldwin-400 transition-colors">
+              <button onClick={handleUnban} className="flex-1 py-2 rounded-xl bg-emeraldwin-500/20 border border-emeraldwin-500/30 text-emeraldwin-300 font-semibold text-sm hover:bg-emeraldwin-500/30 transition-colors">
                 Confirm Unban
               </button>
             </div>
@@ -286,138 +350,106 @@ export default function BanSectionTab() {
         </div>
       )}
 
-      {/* ── Activity: accounts grouped by registration IP ────────────────── */}
-      <div className="pt-2 space-y-3">
-        <div className="flex items-center gap-2">
-          <Activity className="w-5 h-5 text-neon-400" />
-          <h3 className="font-display font-bold text-white text-base">IP Activity</h3>
-          <span className="chip bg-neon-500/20 text-neon-300 text-[10px]">
-            {multiAccountIpGroups.length} multi-account IPs
-          </span>
+      {/* IP Activity section */}
+      <div className="panel p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-display font-bold text-white flex items-center gap-2">
+            <Activity className="w-4 h-4 text-amberx-400" /> IP Activity
+            <span className="text-[9px] bg-amberx-500/15 border border-amberx-500/30 text-amberx-300 px-1.5 py-0.5 rounded-full">
+              {multiIpGroups.length} multi-account IPs
+            </span>
+          </h3>
         </div>
         <p className="text-xs text-slate-500">
-          All accounts grouped by the IP they were registered from — with
-          registration time and current ban / unban status.
+          Users grouped by ban registration IP. Shows potential multi-account activity.
         </p>
-
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
           <input
-            className="input w-full pl-9 text-sm"
-            placeholder="Search by IP, username, email or ID…"
             value={ipSearch}
             onChange={(e) => setIpSearch(e.target.value)}
+            placeholder="Search by IP or username…"
+            className="input pl-9 text-sm"
           />
         </div>
-
         <div className="space-y-3">
           {filteredIpGroups.length === 0 && (
-            <div className="panel p-6 text-center text-slate-500 text-sm">
-              {ipSearch ? 'No IP activity matches your search.' : 'No registration activity yet.'}
-            </div>
+            <p className="text-xs text-slate-500 text-center py-4">
+              {ipSearch ? 'No IP activity matches your search.' : 'No multi-account activity in ban history.'}
+            </p>
           )}
-          {filteredIpGroups.map((group) => {
-            const isMulti = group.users.length > 1;
-            return (
-              <div key={group.ip} className={`panel p-4 space-y-3 ${isMulti ? 'border border-yellow-500/30' : ''}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-500">IP</span>
-                    <span className="font-mono text-sm text-white">{group.ip}</span>
-                  </div>
-                  <span className={`chip text-[10px] ${isMulti ? 'bg-yellow-500/20 text-yellow-300' : 'bg-slatepanel-700 text-slate-400'}`}>
-                    {group.users.length} account{group.users.length === 1 ? '' : 's'}
-                  </span>
+          {filteredIpGroups.map((group) => (
+            <div key={group.ip} className="bg-slatepanel-800 rounded-xl border border-borderline-900 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider">IP</span>
+                  <span className="font-mono text-xs text-white font-semibold">{group.ip}</span>
                 </div>
-
-                <div className="space-y-2">
-                  {group.users.map((u) => {
-                    const rec = latestBanRecordFor(u.id);
-                    const isBanned = u.isActive === false;
-                    return (
-                      <div key={u.id} className="rounded-lg bg-midnight-900/60 p-3 space-y-1.5">
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-semibold text-white text-sm truncate">{u.username}</span>
-                              <span className={`chip text-[10px] ${isBanned ? 'bg-coral-500/20 text-coral-300' : 'bg-emeraldwin-500/15 text-emeraldwin-300'}`}>
-                                {isBanned ? 'Banned' : 'Active'}
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-slate-500 truncate">{u.email}</p>
-                            <p className="text-[10px] text-slate-600 font-mono">
-                              ID: {u.accountId} · Registered {new Date(u.createdAt).toLocaleString()}
-                            </p>
-                          </div>
-                          {isBanned ? (
-                            <button
-                              onClick={() => { setIpActionModal({ userId: u.id, action: 'unban' }); setIpActionReason(''); }}
-                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-[11px] font-semibold hover:bg-emeraldwin-500/25 transition-colors flex-shrink-0"
-                            >
-                              <ShieldCheck className="w-3 h-3" /> Unban
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => { setIpActionModal({ userId: u.id, action: 'ban' }); setIpActionReason(''); }}
-                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-coral-500/15 border border-coral-500/30 text-coral-300 text-[11px] font-semibold hover:bg-coral-500/25 transition-colors flex-shrink-0"
-                            >
-                              <ShieldAlert className="w-3 h-3" /> Ban
-                            </button>
-                          )}
-                        </div>
-
-                        {rec && (
-                          <div className="text-[10px] text-slate-400 border-t border-white/5 pt-1.5 space-y-0.5">
-                            <div>
-                              <span className="text-coral-400">Ban:</span>{' '}
-                              <span className="text-slate-500">{new Date(rec.banDate).toLocaleString()}</span>
-                              {' — '}
-                              <span className="text-slate-300">{rec.banReason}</span>
-                            </div>
-                            {rec.unbanDate && (
-                              <div>
-                                <span className="text-emeraldwin-400">Unban:</span>{' '}
-                                <span className="text-slate-500">{new Date(rec.unbanDate).toLocaleString()}</span>
-                                {rec.unbanReason ? <>{' — '}<span className="text-slate-300">{rec.unbanReason}</span></> : null}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                <span className="text-[9px] bg-amberx-500/10 border border-amberx-500/20 text-amberx-300 px-1.5 py-0.5 rounded-full">
+                  {group.records.length} bans from this IP
+                </span>
               </div>
-            );
-          })}
+              <div className="space-y-2">
+                {group.records.map((ban, i) => (
+                  <div key={i} className="flex items-start gap-2 text-[11px]">
+                    <div className={`w-2 h-2 mt-1 rounded-full flex-shrink-0 ${!ban.unbanDate ? 'bg-coral-400' : 'bg-slate-600'}`} />
+                    <div className="flex-1 min-w-0">
+                      <span className="font-semibold text-white">{ban.username}</span>
+                      <span className="text-slate-500 ml-1">{ban.email}</span>
+                      <p className="text-slate-600">{new Date(ban.banDate).toLocaleString()} — {ban.banReason}</p>
+                    </div>
+                    {!ban.unbanDate ? (
+                      <button
+                        onClick={() => { setIpActionModal({ userId: ban.userId, action: 'unban' }); setIpActionReason(''); }}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-[10px] font-semibold flex-shrink-0"
+                      >
+                        Unban
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => { setIpActionModal({ userId: ban.userId, action: 'ban' }); setIpActionReason(''); }}
+                        className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-coral-500/15 border border-coral-500/30 text-coral-300 text-[10px] font-semibold flex-shrink-0"
+                      >
+                        Re-ban
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* IP Activity ban/unban modal */}
+      {/* IP Action modal */}
       {ipActionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="panel w-full max-w-sm p-6 space-y-4">
-            <div className="flex items-center gap-2">
-              {ipActionModal.action === 'ban' ? (
-                <ShieldAlert className="w-5 h-5 text-coral-400" />
-              ) : (
-                <ShieldCheck className="w-5 h-5 text-emeraldwin-400" />
-              )}
-              <h3 className="font-bold text-white capitalize">{ipActionModal.action} User</h3>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 grid place-items-center p-4">
+          <div className="panel p-5 w-full max-w-sm space-y-4">
+            <div className="flex items-center gap-3">
+              <div className={`w-10 h-10 rounded-xl grid place-items-center ${
+                ipActionModal.action === 'ban'
+                  ? 'bg-coral-500/15 border border-coral-500/30'
+                  : 'bg-emeraldwin-500/15 border border-emeraldwin-500/30'
+              }`}>
+                {ipActionModal.action === 'ban'
+                  ? <ShieldBan className="w-5 h-5 text-coral-400" />
+                  : <Unlock className="w-5 h-5 text-emeraldwin-300" />
+                }
+              </div>
+              <div>
+                <h3 className="font-display font-bold text-white capitalize">{ipActionModal.action} User</h3>
+                <p className="text-xs text-slate-500">
+                  {liveUsers.find(u => u.id === ipActionModal.userId)?.username ?? ipActionModal.userId}
+                </p>
+              </div>
             </div>
-            <p className="text-sm text-slate-400">
-              You are {ipActionModal.action === 'ban' ? 'banning' : 'unbanning'}{' '}
-              <span className="text-white font-semibold">
-                {auth.getUserById(ipActionModal.userId)?.username}
-              </span>. Please provide a reason.
-            </p>
-            <textarea
-              className="input w-full text-sm h-20 resize-none"
-              placeholder={`${ipActionModal.action === 'ban' ? 'Ban' : 'Unban'} reason (required)`}
+            <input
               value={ipActionReason}
               onChange={(e) => setIpActionReason(e.target.value)}
+              placeholder="Reason…"
+              className="input"
             />
-            <div className="flex gap-3">
+            <div className="flex gap-2">
               <button
                 onClick={() => { setIpActionModal(null); setIpActionReason(''); }}
                 className="flex-1 py-2 rounded-xl bg-slatepanel-700 text-slate-300 text-sm hover:bg-slatepanel-600 transition-colors"
@@ -426,10 +458,10 @@ export default function BanSectionTab() {
               </button>
               <button
                 onClick={confirmIpAction}
-                className={`flex-1 py-2 rounded-xl text-white text-sm font-semibold transition-colors ${
+                className={`flex-1 py-2 rounded-xl font-semibold text-sm transition-colors ${
                   ipActionModal.action === 'ban'
-                    ? 'bg-coral-500 hover:bg-coral-400'
-                    : 'bg-emeraldwin-500 hover:bg-emeraldwin-400'
+                    ? 'bg-coral-500/20 border border-coral-500/30 text-coral-300 hover:bg-coral-500/30'
+                    : 'bg-emeraldwin-500/20 border border-emeraldwin-500/30 text-emeraldwin-300 hover:bg-emeraldwin-500/30'
                 }`}
               >
                 Confirm {ipActionModal.action === 'ban' ? 'Ban' : 'Unban'}
