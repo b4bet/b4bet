@@ -5,8 +5,8 @@ import AdminSupportNotification from '../components/AdminSupportNotification';
 import {
   Cpu, Users, Mail, Coins, Megaphone, Headphones, ShieldCheck,
   Image as ImageIcon, TrendingUp, Wallet, UserCog, Bell, Banknote, MessageSquare, Zap, History,
-  TrendingDown, Ticket, Sliders, CreditCard, FileText, ShieldBan, BellRing, Gamepad2, Trophy, Gift,
-  User as UserIcon, KeyRound, LogOut, ChevronDown, LayoutDashboard,
+  Ticket, Sliders, CreditCard, FileText, ShieldBan, BellRing, Gamepad2, Trophy, Gift,
+  User as UserIcon, KeyRound, LogOut, LayoutDashboard,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -18,7 +18,6 @@ import DashboardOverviewTab from './admin/DashboardOverviewTab';
 import BannerLogoTab from './admin/BannerLogoTab';
 import FinanceTab from './admin/FinanceTab';
 import RequestsTab from './admin/RequestsTab';
-
 import EmailManagerTab from './admin/EmailManagerTab';
 import StaffTab from './admin/StaffTab';
 import MarketingTab from './admin/MarketingTab';
@@ -40,7 +39,6 @@ import BanSectionTab from './admin/BanSectionTab';
 import IntercomTab from './admin/IntercomTab';
 import BalanceHistoryTab from './admin/BalanceHistoryTab';
 
-// Extend Tab to cover all tab keys used in the tabs array (some are not PermissionKey)
 type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager' | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory' | 'requests' | 'signupBonus' | 'dashboard';
 
 const tabs: { key: Tab; label: string; icon: typeof Cpu }[] = [
@@ -75,12 +73,10 @@ const tabs: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'manageProfile', label: 'Profile', icon: UserCog },
 ];
 
-
 export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: Route) => void; onOpenMenu?: () => void }) {
   const sessionId = useStaffSession();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [notifOpen, setNotifOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
   const [changePassOpen, setChangePassOpen] = useState(false);
 
   const profileRef = useRef<HTMLDivElement | null>(null);
@@ -89,7 +85,6 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
   const staff = useStaff();
   const me = staff.find((s) => s.id === sessionId);
 
-  // Listen for quick-action navigation events from DashboardOverviewTab
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail as Tab;
@@ -99,24 +94,8 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
     return () => window.removeEventListener('admin-tab', handler);
   }, []);
 
-  // Close profile dropdown when clicking outside
-  useEffect(() => {
-    if (!profileOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
-        setProfileOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [profileOpen]);
+  if (!sessionId) return <AdminLoginPage />;
 
-  // Gate: require staff login for admin panel
-  if (!sessionId) {
-    return <AdminLoginPage />;
-  }
-
-  // Staff data still loading (session was restored from localStorage on page refresh)
   if (!me) {
     if (staff.length === 0) {
       return (
@@ -128,7 +107,6 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
         </div>
       );
     }
-    // Staff loaded but session ID not found — session is invalid, clear it
     cms.setStaffSession(null);
     return <AdminLoginPage />;
   }
@@ -143,11 +121,13 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
 
   return (
     <div className="flex h-screen bg-midnight-900 text-white overflow-hidden">
-      {/* Sidebar */}
+      {/* Sidebar — desktop */}
       <aside className="hidden md:flex flex-col w-56 border-r border-borderline-900 bg-midnight-950 shrink-0">
         <div className="p-4 border-b border-borderline-900">
           <span className="font-display font-extrabold text-neon-400 text-lg tracking-tight">B4Bet Admin</span>
         </div>
+
+        {/* All tabs */}
         <nav className="flex-1 overflow-y-auto py-2 scrollbar-thin">
           {tabs.map((t) => {
             const Icon = t.icon;
@@ -177,43 +157,37 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
           })}
         </nav>
 
-        {/* Profile section */}
-        <div className="p-3 border-t border-borderline-900 relative" ref={profileRef}>
-          <button
-            onClick={() => setProfileOpen((o) => !o)}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl hover:bg-slatepanel-800 transition-colors"
-          >
+        {/* Profile section — always visible, no dropdown */}
+        <div className="border-t border-borderline-900 shrink-0" ref={profileRef}>
+          <div className="flex items-center gap-2.5 px-4 py-3">
             <div className="w-7 h-7 rounded-full bg-neon-500/20 border border-neon-500/40 grid place-items-center shrink-0">
               <UserIcon className="w-3.5 h-3.5 text-neon-400" />
             </div>
-            <div className="flex-1 text-left min-w-0">
-              <div className="text-xs font-semibold text-white truncate">{me.name}</div>
-              <div className="text-[10px] text-slate-500 capitalize">{me.role}</div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-white truncate">{me.name}</p>
+              <p className="text-[10px] text-slate-500 truncate">{me.email ?? me.role}</p>
             </div>
-            <ChevronDown className={`w-3.5 h-3.5 text-slate-500 transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
-          </button>
-          {profileOpen && (
-            <div className="absolute bottom-full left-3 right-3 mb-1 panel p-1 space-y-0.5 z-50">
-              <button
-                onClick={() => { setChangePassOpen(true); setProfileOpen(false); }}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-slatepanel-800 text-sm text-slate-300 hover:text-white"
-              >
-                <KeyRound className="w-3.5 h-3.5" /> Change Password
-              </button>
-              <button
-                onClick={() => { cms.setStaffSession(null); setProfileOpen(false); }}
-                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-coral-500/10 text-sm text-coral-400 hover:text-coral-300"
-              >
-                <LogOut className="w-3.5 h-3.5" /> Logout
-              </button>
-            </div>
-          )}
+          </div>
+          <div className="px-3 pb-3 space-y-1">
+            <button
+              onClick={() => setChangePassOpen(true)}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-slatepanel-800 text-sm text-slate-300 hover:text-white transition-colors"
+            >
+              <KeyRound className="w-3.5 h-3.5 shrink-0" /> Change Password
+            </button>
+            <button
+              onClick={() => cms.setStaffSession(null)}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-coral-500/10 text-sm text-coral-400 hover:text-coral-300 transition-colors"
+            >
+              <LogOut className="w-3.5 h-3.5 shrink-0" /> Logout
+            </button>
+          </div>
         </div>
       </aside>
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top bar (mobile) */}
+        {/* Mobile top bar */}
         <header className="md:hidden flex items-center justify-between p-3 border-b border-borderline-900 bg-midnight-950">
           <button onClick={onOpenMenu} className="text-slate-400 hover:text-white">
             <Cpu className="w-5 h-5" />
@@ -229,9 +203,9 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
           </button>
         </header>
 
-        {/* Mobile tab bar */}
+        {/* Mobile tab bar — ALL tabs scrollable */}
         <nav className="md:hidden flex overflow-x-auto scrollbar-thin border-b border-borderline-900 bg-midnight-950">
-          {tabs.slice(0, 8).map((t) => {
+          {tabs.map((t) => {
             const Icon = t.icon;
             return (
               <button
@@ -253,7 +227,6 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
           {tab === 'dashboard' && <DashboardOverviewTab />}
           {tab === 'finance' && <FinanceTab />}
           {tab === 'requests' && <RequestsTab />}
-
           {tab === 'tickets' && <TicketsTab />}
           {tab === 'gateways' && <AutoGatewaysTab />}
           {tab === 'handlers' && (
@@ -298,7 +271,7 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
         </main>
       </div>
 
-      {/* Notification panel */}
+      {/* Notification panel — mobile */}
       {notifOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-end justify-center p-4" onClick={() => setNotifOpen(false)}>
           <div className="w-full max-w-sm panel p-4 space-y-3" onClick={(e) => e.stopPropagation()}>
@@ -311,10 +284,8 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
         </div>
       )}
 
-      {/* Ticket alert overlay */}
       <TicketAlertOverlay onOpenTickets={() => setTab('tickets')} />
 
-      {/* Change password modal — staff can change their own password */}
       {changePassOpen && (
         <AdminChangePasswordModal
           staffId={sessionId}
