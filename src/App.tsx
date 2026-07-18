@@ -53,13 +53,10 @@ export default function App() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
 
-  // Persist Supabase session: listen for auth state changes so user stays logged in
+  // Session persistence
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') {
-        auth.logout();
-      }
-      // Session is persisted automatically by supabase client (persistSession: true)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') auth.logout();
     });
     return () => subscription.unsubscribe();
   }, []);
@@ -72,11 +69,7 @@ export default function App() {
     return off;
   }, []);
 
-  const openAuthModal = (mode: AuthModalMode) => {
-    setAuthModalMode(mode);
-    setAuthModalOpen(true);
-  };
-
+  const openAuthModal = (mode: AuthModalMode) => { setAuthModalMode(mode); setAuthModalOpen(true); };
   const navigate = (r: Route) => setRoute(r);
 
   useEffect(() => {
@@ -137,9 +130,7 @@ export default function App() {
         {route === 'landing' && <LandingPage onNavigate={navigate} />}
       </div>
 
-      {showBottomNav && (
-        <BottomNav current={route} onNavigate={navigate} />
-      )}
+      {showBottomNav && <BottomNav route={route} onNavigate={navigate} />}
 
       <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
       <ProfileDrawer
@@ -150,13 +141,7 @@ export default function App() {
         onOpenAuthModal={openAuthModal}
       />
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
-
-      <AuthModal
-        open={authModalOpen}
-        mode={authModalMode}
-        onClose={() => setAuthModalOpen(false)}
-      />
-
+      <AuthModal open={authModalOpen} mode={authModalMode} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
     </div>
   );

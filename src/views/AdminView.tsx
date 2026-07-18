@@ -4,7 +4,7 @@ import {
   Cpu, Bell, Megaphone, Wallet, Trophy, Mail, Server, Coins,
   CreditCard, FileText, Image, Gift, Settings, History,
   ShieldBan, MessageSquare, Zap, BarChart2, LogOut, Menu, X,
-  KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown, Link2,
+  KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown, Link2, Share2,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -44,16 +44,15 @@ import TicketAlertOverlay from '../components/TicketAlertOverlay';
 import AdminSupportNotification from '../components/AdminSupportNotification';
 import AffiliatesTab from './admin/AffiliatesTab';
 import TopRankingsTab from './admin/TopRankingsTab';
+import SocialLinksTab from './admin/SocialLinksTab';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
 type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager'
   | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory'
-  | 'requests' | 'signupBonus' | 'dashboard' | 'affiliates';
+  | 'requests' | 'signupBonus' | 'dashboard' | 'affiliates' | 'socialLinks';
 
 type GameHandlerKey = 'crash' | 'wingo' | 'k3' | 'fived' | 'sunvsmoon' | 'aviator';
 type FloatToast = { id: number; message: string; icon: 'deposit' | 'withdrawal' | 'support' };
 
-// ─── Sidebar tabs ─────────────────────────────────────────────────────────────
 const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'dashboard',           label: 'Dashboard',        icon: LayoutDashboard },
   { key: 'finance',             label: 'Finance',          icon: DollarSign },
@@ -62,6 +61,7 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'users',               label: 'Users',            icon: Users },
   { key: 'staff',               label: 'Staff',            icon: ShieldCheck },
   { key: 'affiliates',          label: 'Affiliates',       icon: Link2 },
+  { key: 'socialLinks',         label: 'Social Links',     icon: Share2 },
   { key: 'gateways',            label: 'Auto Gateways',    icon: Zap },
   { key: 'algos',               label: 'Game Algos',       icon: Cpu },
   { key: 'games',               label: 'Game Handlers',    icon: Settings },
@@ -101,21 +101,21 @@ async function sha256Hex(plain: string): Promise<string> {
 }
 
 function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () => void }) {
-  const [old, setOld]         = useState('');
-  const [next, setNext]       = useState('');
+  const [old, setOld] = useState('');
+  const [next, setNext] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [showOld,  setShowOld]  = useState(false);
+  const [showOld, setShowOld] = useState(false);
   const [showNext, setShowNext] = useState(false);
   const [showConf, setShowConf] = useState(false);
-  const [loading, setLoading]   = useState(false);
-  const [error, setError]       = useState('');
-  const [ok, setOk]             = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [ok, setOk] = useState(false);
 
   const submit = async () => {
     setError('');
     if (!old || !next || !confirm) { setError('All fields required'); return; }
-    if (next !== confirm)          { setError('Passwords do not match'); return; }
-    if (next.length < 6)           { setError('Min 6 characters'); return; }
+    if (next !== confirm) { setError('Passwords do not match'); return; }
+    if (next.length < 6) { setError('Min 6 characters'); return; }
     setLoading(true);
     try {
       const staff = await supabaseStaffLogin(staffId, await sha256Hex(old)).catch(() => null);
@@ -127,13 +127,11 @@ function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () =
     finally { setLoading(false); }
   };
 
-  const FieldRow = ({ label, val, set, show, toggle }: {
-    label: string; val: string; set: (v: string) => void; show: boolean; toggle: () => void;
-  }) => (
+  const FieldRow = ({ label, val, set, show, toggle }: { label: string; val: string; set: (v: string) => void; show: boolean; toggle: () => void }) => (
     <div className="space-y-1">
       <label className="text-[11px] text-slate-400">{label}</label>
       <div className="relative">
-        <input type={show ? 'text' : 'password'} value={val} onChange={(e) => set(e.target.value)}
+        <input type={show ? 'text' : 'password'} value={val} onChange={e => set(e.target.value)}
           className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white pr-9 outline-none" />
         <button type="button" onClick={toggle} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
           {show ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
@@ -145,9 +143,9 @@ function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () =
   if (ok) return <p className="text-green-400 text-xs text-center py-2">Password changed!</p>;
   return (
     <div className="space-y-2.5 pt-2">
-      <FieldRow label="Current Password" val={old}     set={setOld}     show={showOld}   toggle={() => setShowOld(v => !v)} />
-      <FieldRow label="New Password"     val={next}    set={setNext}    show={showNext}  toggle={() => setShowNext(v => !v)} />
-      <FieldRow label="Confirm New"      val={confirm} set={setConfirm} show={showConf}  toggle={() => setShowConf(v => !v)} />
+      <FieldRow label="Current Password" val={old} set={setOld} show={showOld} toggle={() => setShowOld(v => !v)} />
+      <FieldRow label="New Password" val={next} set={setNext} show={showNext} toggle={() => setShowNext(v => !v)} />
+      <FieldRow label="Confirm New" val={confirm} set={setConfirm} show={showConf} toggle={() => setShowConf(v => !v)} />
       {error && <p className="text-red-400 text-[11px]">{error}</p>}
       <button onClick={submit} disabled={loading}
         className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-xs rounded-lg py-2 transition-colors">
@@ -157,15 +155,10 @@ function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () =
   );
 }
 
-function NotifRow({ icon: Icon, label, count, onClick, accent }: {
-  icon: typeof Bell; label: string; count: number; onClick: () => void; accent: string;
-}) {
+function NotifRow({ icon: Icon, label, count, onClick, accent }: { icon: typeof Bell; label: string; count: number; onClick: () => void; accent: string }) {
   return (
-    <button onClick={onClick}
-      className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors text-left">
-      <span className="flex items-center gap-2 text-sm text-slate-300">
-        <Icon className={`w-4 h-4 ${accent}`} /> {label}
-      </span>
+    <button onClick={onClick} className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors text-left">
+      <span className="flex items-center gap-2 text-sm text-slate-300"><Icon className={`w-4 h-4 ${accent}`} /> {label}</span>
       <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-red-500/20 text-red-300">{count}</span>
     </button>
   );
@@ -180,7 +173,7 @@ function FloatingToasts({ toasts, onDismiss }: { toasts: FloatToast[]; onDismiss
   } as const;
   return (
     <div className="fixed bottom-6 right-4 z-[300] flex flex-col gap-2 w-[min(300px,calc(100vw-2rem))]" style={{ pointerEvents: 'none' }}>
-      {toasts.map((t) => {
+      {toasts.map(t => {
         const { Icon, bg, color } = MAP[t.icon];
         return (
           <div key={t.id} onClick={() => onDismiss(t.id)} style={{ pointerEvents: 'auto' }}
@@ -208,7 +201,6 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [open]);
-
   return (
     <div className="relative" ref={ref}>
       <button onClick={() => setOpen(v => !v)}
@@ -235,34 +227,33 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
 
 export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r: Route) => void; onOpenMenu?: () => void }) {
   const sessionId = useStaffSession();
-  const [tab, setTab]                      = useState<Tab>('dashboard');
+  const [tab, setTab] = useState<Tab>('dashboard');
   const [gameHandlerTab, setGameHandlerTab] = useState<GameHandlerKey>('crash');
-  const [sidebarOpen, setSidebarOpen]      = useState(false);
-  const [profileOpen, setProfileOpen]      = useState(false);
-  const [showPwForm, setShowPwForm]        = useState(false);
-  const [floatToasts, setFloatToasts]      = useState<FloatToast[]>([]);
-  const toastCounterRef                    = useRef(0);
-  const profileRef                         = useRef<HTMLDivElement>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [showPwForm, setShowPwForm] = useState(false);
+  const [floatToasts, setFloatToasts] = useState<FloatToast[]>([]);
+  const toastCounterRef = useRef(0);
+  const profileRef = useRef<HTMLDivElement>(null);
 
   const staff = useStaff();
-  const me    = staff.find((s) => s.id === sessionId);
-
+  const me = staff.find(s => s.id === sessionId);
   const finance = useFinance();
   const support = useSupport();
 
-  const pendingDeposits    = finance.deposits.filter((d) => d.status === 'pending' || d.status === 'processing').length;
-  const pendingWithdrawals = finance.withdrawals.filter((w) => w.status === 'pending' || w.status === 'processing').length;
-  const unreadSupport      = support.filter((s) => !s.read).length;
-  const totalUnread        = pendingDeposits + pendingWithdrawals + unreadSupport;
+  const pendingDeposits = finance.deposits.filter(d => d.status === 'pending' || d.status === 'processing').length;
+  const pendingWithdrawals = finance.withdrawals.filter(w => w.status === 'pending' || w.status === 'processing').length;
+  const unreadSupport = support.filter(s => !s.read).length;
+  const totalUnread = pendingDeposits + pendingWithdrawals + unreadSupport;
 
   const prevDepRef = useRef(pendingDeposits);
-  const prevWdRef  = useRef(pendingWithdrawals);
+  const prevWdRef = useRef(pendingWithdrawals);
   const prevSupRef = useRef(unreadSupport);
 
   const pushToast = useCallback((message: string, icon: FloatToast['icon']) => {
     const id = ++toastCounterRef.current;
-    setFloatToasts((prev) => [...prev, { id, message, icon }]);
-    setTimeout(() => setFloatToasts((prev) => prev.filter((t) => t.id !== id)), 2000);
+    setFloatToasts(prev => [...prev, { id, message, icon }]);
+    setTimeout(() => setFloatToasts(prev => prev.filter(t => t.id !== id)), 2000);
   }, []);
 
   useEffect(() => {
@@ -281,21 +272,14 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   }, [unreadSupport, pushToast]);
 
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<string>).detail as Tab;
-      if (detail) setTab(detail);
-    };
+    const handler = (e: Event) => { const d = (e as CustomEvent<string>).detail as Tab; if (d) setTab(d); };
     window.addEventListener('admin-navigate', handler);
     return () => window.removeEventListener('admin-navigate', handler);
   }, []);
 
   useEffect(() => {
     if (!profileOpen) return;
-    const close = (e: MouseEvent) => {
-      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
-        setProfileOpen(false); setShowPwForm(false);
-      }
-    };
+    const close = (e: MouseEvent) => { if (profileRef.current && !profileRef.current.contains(e.target as Node)) { setProfileOpen(false); setShowPwForm(false); } };
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [profileOpen]);
@@ -309,17 +293,16 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   if (!sessionId) return <AdminLoginPage />;
 
   const navigate = (t: Tab) => { setTab(t); setSidebarOpen(false); };
-  const ActiveGamePanel = GAME_HANDLER_TABS.find((g) => g.key === gameHandlerTab)?.Panel ?? CrashHandlingPanel;
+  const ActiveGamePanel = GAME_HANDLER_TABS.find(g => g.key === gameHandlerTab)?.Panel ?? CrashHandlingPanel;
 
   const SidebarNav = () => (
     <nav className="flex-1 overflow-y-auto py-2">
-      {TABS.map((t) => (
+      {TABS.map(t => (
         <button key={t.key} onClick={() => navigate(t.key)}
           className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
             tab === t.key ? 'bg-violet-600/20 text-violet-300 border-r-2 border-violet-500' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
           }`}>
-          <t.icon className="w-4 h-4 shrink-0" />
-          <span>{t.label}</span>
+          <t.icon className="w-4 h-4 shrink-0" /><span>{t.label}</span>
         </button>
       ))}
     </nav>
@@ -329,9 +312,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     <div className="flex flex-col min-h-screen h-screen bg-slate-950 text-white overflow-hidden">
       <header className="fixed top-0 left-0 right-0 z-50 flex items-center bg-slate-900 border-b border-slate-800" style={{ height: '56px' }}>
         <div className="flex items-center gap-3 pl-4 pr-2">
-          <button className="md:hidden text-slate-400 hover:text-white" onClick={() => setSidebarOpen(true)}>
-            <Menu className="w-5 h-5" />
-          </button>
+          <button className="md:hidden text-slate-400 hover:text-white" onClick={() => setSidebarOpen(true)}><Menu className="w-5 h-5" /></button>
           <ShieldCheck className="w-5 h-5 text-violet-400 shrink-0" />
           <span className="font-bold text-sm tracking-wide text-white hidden sm:block select-none">Admin Panel</span>
         </div>
@@ -350,9 +331,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
               <div className="absolute right-0 top-full mt-2 w-[272px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] overflow-hidden">
                 <div className="px-4 py-3 border-b border-slate-800">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-violet-600 grid place-items-center text-base font-bold shrink-0">
-                      {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
-                    </div>
+                    <div className="w-10 h-10 rounded-full bg-violet-600 grid place-items-center text-base font-bold shrink-0">{(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}</div>
                     <div>
                       <p className="text-sm font-semibold text-white">{me?.name ?? '—'}</p>
                       <p className="text-xs text-slate-400">{me?.email ?? '—'}</p>
@@ -403,14 +382,15 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           {tab === 'requests'             && <RequestsTab />}
           {tab === 'tickets'              && <TicketsTab />}
           {tab === 'affiliates'           && <AffiliatesTab />}
+          {tab === 'socialLinks'          && <SocialLinksTab />}
           {tab === 'gateways'             && <AutoGatewaysTab />}
           {tab === 'handlers'             && <div className="space-y-4"><h2 className="font-bold text-lg">Payment Handlers</h2><p className="text-slate-500 text-sm">Configure deposit/withdrawal handler logic here.</p></div>}
-          {tab === 'algos'               && <GameAlgosTab />}
+          {tab === 'algos'                && <GameAlgosTab />}
           {tab === 'games'               && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><OnlineCountPanel /><TopWinPaidOutPanel /></div>
               <div className="flex flex-wrap gap-2">
-                {GAME_HANDLER_TABS.map((g) => (
+                {GAME_HANDLER_TABS.map(g => (
                   <button key={g.key} onClick={() => setGameHandlerTab(g.key)}
                     className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
                       gameHandlerTab === g.key ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
@@ -446,7 +426,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
 
       <TicketAlertOverlay />
       <AdminSupportNotification />
-      <FloatingToasts toasts={floatToasts} onDismiss={(id) => setFloatToasts((prev) => prev.filter((t) => t.id !== id))} />
+      <FloatingToasts toasts={floatToasts} onDismiss={id => setFloatToasts(prev => prev.filter(t => t.id !== id))} />
     </div>
   );
 }
