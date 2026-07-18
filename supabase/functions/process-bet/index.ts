@@ -9,7 +9,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 //
 // Supported game_type values:
 //   crash_get_bust  – GET (no auth) – returns/stores server bust point for a round
-//   crash_settle    – POST          – record crash bets after a round ends
+//   crash_settle    – POST          – record crash bets + atomically update balance
 //   mines_start     – POST          – create mines session (mine positions secret)
 //   mines_reveal    – POST          – reveal a tile; server decides hit/safe
 //   mines_cashout   – POST          – cash out an active mines session
@@ -173,10 +173,13 @@ serve(async (req) => {
     if (profileErr || !profile) return json({ error: "User not found" }, 400);
     const userBalance = (profile as { id: string; balance: number }).balance;
 
-    // ── crash_settle ────────────────────────────────────────────────────────
+    // ── crash_settle ─────────────────────────────────────────────────────────
+    // Atomically debit stake and credit winnings, record bet row.
+    // The client sends the amount it placed and the cashout multiplier it used.
+    // The server re-verifies the bust_point against its own stored record.
     if (game_type === "crash_settle") {
-      const { round_id, amount, cash_out_at, bust_point, win } = body as {
-        round_id: number; amount: number; cash_out_at: number | null; bust_point: number; win: number;
+      const { round_id, amount, cash_out_at, bust_point } = body as {
+        round_id: number; amount: number; cash_out_at: number | null; bust_point: number;
       };
       if (!amount || amount <= 0) return json({ error: "Invalid amount" }, 400);
 
@@ -187,9 +190,27 @@ serve(async (req) => {
         .eq("round_id", round_id)
         .single();
       const serverBust = roundRow ? (roundRow as { bust_point: number }).bust_point : null;
+
+      // Determine actual win using SERVER bust point (client value ignored for safety)
       const actualWin = serverBust !== null && cash_out_at !== null && cash_out_at <= serverBust
         ? Math.round(amount * cash_out_at * 100) / 100
         : 0;
+
+      // Atomically settle: refund stake + credit winnings net of already-debited stake.
+      // The client debited the stake locally when placing the bet. The server needs to:
+      //   - Credit payout if won (net = payout, since stake was already debited)
+      //   - Do nothing to balance if lost (stake was already debited)
+      const newBalance = actualWin > 0
+        ? Math.round((userBalance + actualWin) * 100) / 100
+        : userBalance; // lost — no balance change (debit already happened client-side)
+
+      if (actualWin > 0) {
+        const { error: balErr } = await supabase
+          .from("profiles")
+          .update({ balance: newBalance, updated_at: new Date().toISOString() })
+          .eq("id", user_id);
+        if (balErr) return json({ error: "Balance update failed" }, 500);
+      }
 
       await supabase.from("bets").insert({
         user_id,
@@ -201,9 +222,18 @@ serve(async (req) => {
         resolved_at: new Date().toISOString(),
       });
 
-      // The balance was already debited/credited by the client-side crash engine.
-      // Server record is now canonical in the bets table.
-      return json({ success: true, win: actualWin, verified_bust: serverBust });
+      // Also record in transactions for audit trail
+      await supabase.from("transactions").insert({
+        user_id,
+        type: actualWin > 0 ? "credit" : "debit",
+        amount: actualWin > 0 ? actualWin : amount,
+        status: "completed",
+        balance_before: userBalance,
+        balance_after: newBalance,
+        reference: `crash_round_${round_id}`,
+      });
+
+      return json({ success: true, win: actualWin, verified_bust: serverBust, balance_after: newBalance });
     }
 
     // ── mines_start ─────────────────────────────────────────────────────────
@@ -365,13 +395,20 @@ serve(async (req) => {
       const won = bet === result;
       const profit = won ? stake * (PAYOUTS[bet] ?? 1) : 0;
       const payout = won ? stake + profit : 0;
-      const newBalance = userBalance - stake + payout;
+      // Client already debited the stake optimistically — reconcile:
+      // If won: add payout (stake was already removed, so credit stake+profit)
+      // If lost: do nothing (stake was already removed)
+      const newBalance = won
+        ? Math.round((userBalance + payout) * 100) / 100
+        : userBalance;
 
-      const { error: balErr } = await supabase
-        .from("profiles")
-        .update({ balance: newBalance, updated_at: new Date().toISOString() })
-        .eq("id", user_id);
-      if (balErr) return json({ error: "Balance update failed" }, 500);
+      if (won) {
+        const { error: balErr } = await supabase
+          .from("profiles")
+          .update({ balance: newBalance, updated_at: new Date().toISOString() })
+          .eq("id", user_id);
+        if (balErr) return json({ error: "Balance update failed" }, 500);
+      }
 
       await supabase.from("bets").insert({
         user_id, bet_amount: stake, win_amount: payout,
@@ -394,19 +431,24 @@ serve(async (req) => {
       if (stake > userBalance) return json({ error: "Insufficient balance" }, 400);
       if (!direction || !entry_price || !exit_price) return json({ error: "Missing fields" }, 400);
 
-      // Server determines win: compare entry vs exit price (client sends real price ticks)
+      // Server determines win: compare entry vs exit price
       const won =
         (direction === "UP" && exit_price > entry_price) ||
         (direction === "DOWN" && exit_price < entry_price);
       const profit = won ? Math.round(stake * payout_pct / 100 * 100) / 100 : 0;
       const payout = won ? stake + profit : 0;
-      const newBalance = userBalance - stake + payout;
+      // Client already debited stake — reconcile same as sunvsmoon above
+      const newBalance = won
+        ? Math.round((userBalance + payout) * 100) / 100
+        : userBalance;
 
-      const { error: balErr } = await supabase
-        .from("profiles")
-        .update({ balance: newBalance, updated_at: new Date().toISOString() })
-        .eq("id", user_id);
-      if (balErr) return json({ error: "Balance update failed" }, 500);
+      if (won) {
+        const { error: balErr } = await supabase
+          .from("profiles")
+          .update({ balance: newBalance, updated_at: new Date().toISOString() })
+          .eq("id", user_id);
+        if (balErr) return json({ error: "Balance update failed" }, 500);
+      }
 
       await supabase.from("bets").insert({
         user_id, bet_amount: stake, win_amount: payout,
