@@ -320,6 +320,46 @@ class Store {
     return true;
   }
 
+  /**
+   * Deduct balance locally only (no Supabase write) — used when the server
+   * will handle the deduction atomically and we just need the UI to reflect it
+   * immediately (optimistic update). Always follow with syncBalanceFromServer.
+   */
+  debitLocalOnly(amount: number): boolean {
+    if (!auth.getSession()) {
+      bus.emit(Topics.AuthOpenModal, 'login');
+      return false;
+    }
+    if (amount > this.balance) return false;
+    this.balance = Math.max(0, Math.round((this.balance - amount) * 100) / 100);
+    try {
+      const session = auth.getSession();
+      if (session) {
+        this.balancesByUser[session.username.toLowerCase()] = this.balance;
+        this.persistBalances();
+      }
+    } catch { /* ignore */ }
+    bus.emit(Topics.Balance, this.balance);
+    return true;
+  }
+
+  /**
+   * Sync local balance from a server response value WITHOUT writing back to
+   * Supabase — the server already updated the DB atomically. This should be
+   * called after every process-bet response that includes a balance_after field.
+   */
+  syncBalanceFromServer(amount: number) {
+    this.balance = Math.max(0, Math.round(amount * 100) / 100);
+    try {
+      const session = auth.getSession();
+      if (session) {
+        this.balancesByUser[session.username.toLowerCase()] = this.balance;
+        this.persistBalances();
+      }
+    } catch { /* ignore */ }
+    bus.emit(Topics.Balance, this.balance);
+  }
+
   addBalance(amount: number) { this.credit(amount); }
   deductBalance(amount: number): boolean { return this.debit(amount); }
 
@@ -440,7 +480,12 @@ class Store {
     return rows.slice(0, 200);
   }
 
-  // ---- Bet Recording ----
+  // ---- Bet Recording (display/history only — server handles DB inserts) ----
+
+  /**
+   * Updates local UI history and admin panel. Does NOT insert to the bets
+   * table — that is done atomically by the process-bet edge function.
+   */
   recordCrashBet(rec: Omit<CrashBetRecord, 'id' | 'ts'>) {
     const item: CrashBetRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.crashMyBets = [item, ...this.crashMyBets].slice(0, 100);
@@ -448,13 +493,13 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'crash', amount: rec.amount, win: rec.win,
       result: rec.cashOutAt ? `${rec.cashOutAt.toFixed(2)}x cashout` : `${rec.bustPoint.toFixed(2)}x bust` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.amount, win_amount: rec.win,
-      multiplier: rec.cashOutAt || rec.bustPoint, status: rec.win > 0 ? 'won' : 'lost',
-      bet_details: { cashOutAt: rec.cashOutAt, bustPoint: rec.bustPoint },
-    }).then(() => {}).catch(() => {});
+    // NOTE: bets table insert handled server-side by crash_settle edge function.
   }
 
+  /**
+   * Updates local UI history and admin panel. Does NOT insert to the bets
+   * table — that is done atomically by the process-bet edge function.
+   */
   recordMinesRound(rec: Omit<MinesRoundRecord, 'id' | 'ts'>) {
     const item: MinesRoundRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.minesMyHistory = [item, ...this.minesMyHistory].slice(0, 100);
@@ -462,13 +507,13 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'mines', amount: rec.stake, win: rec.win,
       result: rec.busted ? 'busted' : `${rec.multiplier.toFixed(2)}x` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
-      multiplier: rec.multiplier, status: rec.busted ? 'lost' : 'won',
-      bet_details: { mines: rec.mines, gems: rec.gems },
-    }).then(() => {}).catch(() => {});
+    // NOTE: bets table insert handled server-side by mines_reveal/mines_cashout edge function.
   }
 
+  /**
+   * Updates local UI history and admin panel. Does NOT insert to the bets
+   * table — that is done atomically by the process-bet edge function.
+   */
   recordSunMoonRound(rec: Omit<SunMoonRoundRecord, 'id' | 'ts'>) {
     const item: SunMoonRoundRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.sunMoonHistory = [item, ...this.sunMoonHistory].slice(0, 100);
@@ -476,13 +521,13 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'sunvsmoon', amount: rec.stake, win: rec.win,
       result: `${rec.bet === 'tie' ? 'Eclipse' : rec.bet.toUpperCase()} \u2192 ${rec.result === 'tie' ? 'Eclipse' : rec.result.toUpperCase()}` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
-      multiplier: rec.payout, status: rec.win > 0 ? 'won' : 'lost',
-      bet_details: { bet: rec.bet, result: rec.result },
-    }).then(() => {}).catch(() => {});
+    // NOTE: bets table insert handled server-side by sunvsmoon_settle edge function.
   }
 
+  /**
+   * Updates local UI history and admin panel. Does NOT insert to the bets
+   * table — that is done atomically by the process-bet edge function.
+   */
   recordTradingBet(rec: Omit<TradingBetRecord, 'id' | 'ts'>) {
     const item: TradingBetRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.tradingHistory = [item, ...this.tradingHistory].slice(0, 100);
@@ -490,11 +535,7 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'trading', amount: rec.stake, win: rec.win,
       result: `${rec.symbol} ${rec.direction} \u00B7 ${rec.won ? 'win' : 'loss'}` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
-      multiplier: rec.payout, status: rec.won ? 'won' : 'lost',
-      bet_details: { symbol: rec.symbol, direction: rec.direction, entryPrice: rec.entryPrice, exitPrice: rec.exitPrice },
-    }).then(() => {}).catch(() => {});
+    // NOTE: bets table insert handled server-side by trading_settle edge function.
   }
 
   // ---- Redeem Codes (Supabase-persisted) ----
