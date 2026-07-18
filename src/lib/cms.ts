@@ -237,22 +237,16 @@ class Cms {
 
   constructor() {
     this.loadNotificationTemplates();
-    // Restore staff session from localStorage (survives page refresh)
     try {
       const savedId = localStorage.getItem(ADMIN_SESSION_KEY);
       if (savedId) this.staffSessionId = savedId;
     } catch { /* ignore */ }
-    // Load all data from Supabase on startup
     this.syncAllFromSupabase();
-    // Start realtime subscriptions for live updates across all browsers/tabs
     this.startRealtimeSubscriptions();
   }
 
-  // ---- Realtime subscriptions for live data ----
-  // CRITICAL: Every table that admin can edit must have a subscription here
-  // so the client (user-facing app) sees changes instantly without page refresh.
+  // ---- Realtime subscriptions ----
   private startRealtimeSubscriptions() {
-    // Transactions table - auto refresh on any deposit/withdrawal change
     supabase
       .channel('cms_transactions')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
@@ -260,7 +254,6 @@ class Cms {
       })
       .subscribe();
 
-    // Profiles table - user data changes (balance, ban status, etc.)
     supabase
       .channel('cms_profiles')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
@@ -268,7 +261,6 @@ class Cms {
       })
       .subscribe();
 
-    // Support tickets
     supabase
       .channel('cms_tickets')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets' }, () => {
@@ -276,7 +268,6 @@ class Cms {
       })
       .subscribe();
 
-    // Staff
     supabase
       .channel('cms_staff')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'staff' }, () => {
@@ -284,7 +275,6 @@ class Cms {
       })
       .subscribe();
 
-    // Payment methods — client sees methods added/updated by admin in real-time
     supabase
       .channel('cms_payment_methods')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, () => {
@@ -292,7 +282,7 @@ class Cms {
       })
       .subscribe();
 
-    // Banners — CRITICAL: client slider updates instantly when admin adds/edits/deletes banners
+    // Banners — client slider updates instantly when admin adds/edits/deletes banners
     supabase
       .channel('cms_banners')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'banners' }, () => {
@@ -300,7 +290,7 @@ class Cms {
       })
       .subscribe();
 
-    // Settings — client reflects admin setting changes instantly (referral bonus, signup bonus, etc.)
+    // Settings — logo, smtp, referral config all reload instantly on any settings change
     supabase
       .channel('cms_settings')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => {
@@ -309,7 +299,7 @@ class Cms {
       .subscribe();
   }
 
-  // ---- Master sync: loads everything ----
+  // ---- Master sync ----
   async syncAllFromSupabase() {
     await Promise.all([
       this.syncBannersFromSupabase(),
@@ -334,16 +324,43 @@ class Cms {
     } catch { /* use defaults */ }
   }
 
+  // Loads ALL settings from the `settings` table:
+  // - referral_bonus → referralConfig.rewardAmount
+  // - site_logo_data_url / site_text_logo_data_url / site_favicon_data_url → logo emitters
+  // - smtp_host/port/user/pass/tls/active → smtpConfig
   private async syncSettingsFromSupabase() {
     try {
       const { data } = await supabase.rpc('admin_get_settings');
-      if (data) {
-        for (const s of data as Array<{ key: string; value: unknown }>) {
-          if (s.key === 'referral_bonus' && s.value) this.referralConfig.rewardAmount = s.value as number;
-        }
-        // Emit updated referral config so components using it re-render
-        bus.emit(Topics.ReferralConfig, this.referralConfig);
-      }
+      if (!data) return;
+      const rows = data as Array<{ key: string; value: unknown }>;
+      const find = (k: string) => rows.find(r => r.key === k)?.value;
+
+      // Referral config
+      const refBonus = find('referral_bonus');
+      if (refBonus !== undefined && refBonus !== null) this.referralConfig.rewardAmount = refBonus as number;
+      bus.emit(Topics.ReferralConfig, this.referralConfig);
+
+      // Logos/favicon — emit so header/components using useLogo etc. update instantly
+      const logo = find('site_logo_data_url') as string | null;
+      const textLogo = find('site_text_logo_data_url') as string | null;
+      const favicon = find('site_favicon_data_url') as string | null;
+      if (logo !== undefined) { this.logoDataUrl = logo; this.emitLogo(); }
+      if (textLogo !== undefined) { this.textLogoDataUrl = textLogo; bus.emit(Topics.TextLogo, this.textLogoDataUrl); }
+      if (favicon !== undefined) { this.faviconDataUrl = favicon; bus.emit(Topics.Favicon, this.faviconDataUrl); }
+
+      // SMTP config
+      const smtpHost = find('smtp_host') as string | undefined;
+      const smtpPort = find('smtp_port') as string | undefined;
+      const smtpUser = find('smtp_user') as string | undefined;
+      const smtpPass = find('smtp_pass') as string | undefined;
+      const smtpTls = find('smtp_tls');
+      const smtpActive = find('smtp_active');
+      if (smtpHost !== undefined) this.smtpConfig.host = smtpHost || this.smtpConfig.host;
+      if (smtpPort !== undefined) this.smtpConfig.port = smtpPort || this.smtpConfig.port;
+      if (smtpUser !== undefined) this.smtpConfig.user = smtpUser || this.smtpConfig.user;
+      if (smtpPass !== undefined) this.smtpConfig.pass = smtpPass || '';
+      if (smtpTls !== undefined && smtpTls !== null) this.smtpConfig.tls = smtpTls as boolean;
+      if (smtpActive !== undefined && smtpActive !== null) this.smtpConfig.active = smtpActive as boolean;
     } catch { /* ignore */ }
   }
 
@@ -392,10 +409,8 @@ class Cms {
 
   async syncPaymentMethodsFromSupabase() {
     try {
-      // Try the admin RPC first
       const { data, error } = await supabase.rpc('admin_get_payment_methods');
       if (error) {
-        // Fallback: direct table query for active methods
         const { data: rows2, error: err2 } = await supabase
           .from('payment_methods')
           .select('*')
@@ -493,7 +508,6 @@ class Cms {
   addBanner(imageDataUrl: string, linkUrl = '') {
     const rec = { id: Math.random().toString(36).slice(2), imageDataUrl, linkUrl };
     this.banners = [...this.banners, rec]; this.emitBanners();
-    // Persist to Supabase — realtime subscription will push update to all connected clients
     supabase.rpc('admin_upsert_banner', { p_id: null, p_title: 'Banner', p_image_url: imageDataUrl, p_link_url: linkUrl, p_sort_order: this.banners.length, p_is_active: true })
       .then(() => { void this.syncBannersFromSupabase(); })
       .catch(() => {});
@@ -637,7 +651,7 @@ class Cms {
   }
   ackTicket(id: string) { this.tickets = this.tickets.map(t => t.id === id ? { ...t, acknowledged: true } : t); this.emitTickets(); }
 
-  // ---- Staff (Supabase-backed via SECURITY DEFINER RPCs) ----
+  // ---- Staff ----
   async addStaff(name: string, password: string, role: StaffRole, permissions: Partial<Record<PermissionKey, boolean>> = {}): Promise<StaffAccount | null> {
     const email = name.toLowerCase().replace(/\s+/g, '.') + '@b4bet.local';
     const hash = await this.hashPassword(password);
@@ -855,12 +869,10 @@ class Cms {
       const mapped = mapPaymentMethod(row);
       this.manualMethods = [...this.manualMethods, mapped];
     } else {
-      // Fallback: add in-memory with temp id
       const fallback: ManualMethod = { ...m, id: 'mm_' + Math.random().toString(36).slice(2, 8) };
       this.manualMethods = [...this.manualMethods, fallback];
     }
     this.emitManual();
-    // Re-sync from Supabase to ensure data consistency
     void this.syncPaymentMethodsFromSupabase();
   }
 
