@@ -40,7 +40,8 @@ import BanSectionTab from './admin/BanSectionTab';
 import IntercomTab from './admin/IntercomTab';
 import BalanceHistoryTab from './admin/BalanceHistoryTab';
 
-type Tab = PermissionKey | 'handlers' | 'topRankings' | 'balanceHistory' | 'requests' | 'signupBonus' | 'dashboard';
+// Extend Tab to cover all tab keys used in the tabs array (some are not PermissionKey)
+type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager' | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory' | 'requests' | 'signupBonus' | 'dashboard';
 
 const tabs: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -111,7 +112,24 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
   }, [profileOpen]);
 
   // Gate: require staff login for admin panel
-  if (!sessionId || !me) {
+  if (!sessionId) {
+    return <AdminLoginPage />;
+  }
+
+  // Staff data still loading (session was restored from localStorage on page refresh)
+  if (!me) {
+    if (staff.length === 0) {
+      return (
+        <div className="min-h-screen bg-midnight-900 flex items-center justify-center">
+          <div className="text-center space-y-3">
+            <div className="w-8 h-8 border-2 border-neon-500/60 border-t-neon-400 rounded-full animate-spin mx-auto" />
+            <p className="text-slate-400 text-sm">Loading admin panel…</p>
+          </div>
+        </div>
+      );
+    }
+    // Staff loaded but session ID not found — session is invalid, clear it
+    cms.setStaffSession(null);
     return <AdminLoginPage />;
   }
 
@@ -301,10 +319,12 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
       {/* Ticket alert overlay */}
       <TicketAlertOverlay onOpenTickets={() => setTab('tickets')} />
 
-      {/* Change password modal */}
+      {/* Change password modal — staff can change their own password */}
       {changePassOpen && (
         <AdminChangePasswordModal
           staffId={sessionId}
+          staffName={me.name}
+          staffEmail={me.email}
           onClose={() => setChangePassOpen(false)}
         />
       )}

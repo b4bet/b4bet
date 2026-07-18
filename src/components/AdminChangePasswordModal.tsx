@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { X, KeyRound, CheckCircle2 } from 'lucide-react';
-import { supabaseUpdateStaffPassword } from '../lib/supabaseIntegration';
+import { supabaseStaffLogin, supabaseUpdateStaffPassword } from '../lib/supabaseIntegration';
 import { cms } from '../lib/cms';
 import PasswordInput from './PasswordInput';
 
 interface Props {
   staffId: string;
   staffName?: string;
+  staffEmail?: string;
   onClose: () => void;
 }
 
@@ -19,13 +20,15 @@ async function sha256Hex(plain: string): Promise<string> {
     .join('');
 }
 
-export default function AdminChangePasswordModal({ staffId, staffName, onClose }: Props) {
+export default function AdminChangePasswordModal({ staffId, staffName, staffEmail, onClose }: Props) {
+  const [currentPass, setCurrentPass] = useState('');
   const [newPass, setNewPass] = useState('');
   const [confirmPass, setConfirmPass] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const reset = () => {
+    setCurrentPass('');
     setNewPass('');
     setConfirmPass('');
     setError(null);
@@ -34,8 +37,12 @@ export default function AdminChangePasswordModal({ staffId, staffName, onClose }
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (!currentPass.trim()) {
+      setError('Please enter your current password.');
+      return;
+    }
     if (newPass.length < 4) {
-      setError('Password must be at least 4 characters.');
+      setError('New password must be at least 4 characters.');
       return;
     }
     if (newPass !== confirmPass) {
@@ -44,9 +51,18 @@ export default function AdminChangePasswordModal({ staffId, staffName, onClose }
     }
     setBusy(true);
     try {
+      // Verify current password first (if email is available)
+      if (staffEmail) {
+        const currentHash = await sha256Hex(currentPass.trim());
+        const verified = await supabaseStaffLogin(staffEmail.toLowerCase(), currentHash);
+        if (!verified) {
+          setError('Current password is incorrect.');
+          return;
+        }
+      }
       const hash = await sha256Hex(newPass);
       await supabaseUpdateStaffPassword(staffId, hash);
-      cms.toast({ title: 'Password updated', body: 'Your password has been changed.', kind: 'success' });
+      cms.toast({ title: 'Password updated', body: 'Your password has been changed successfully.', kind: 'success' });
       reset();
       onClose();
     } catch {
@@ -79,6 +95,17 @@ export default function AdminChangePasswordModal({ staffId, staffName, onClose }
         </div>
 
         <form onSubmit={(e) => { void submit(e); }} className="space-y-3">
+          <div>
+            <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Current Password</label>
+            <PasswordInput
+              value={currentPass}
+              onChange={(e) => setCurrentPass(e.target.value)}
+              autoComplete="current-password"
+              placeholder="Enter your current password"
+              className="mt-1 w-full"
+              required
+            />
+          </div>
           <div>
             <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">New Password</label>
             <PasswordInput

@@ -8,10 +8,14 @@ import {
   supabaseDeleteStaff,
   type SupabaseStaff,
 } from '@/lib/supabaseIntegration';
+import AdminChangePasswordModal from '@/components/AdminChangePasswordModal';
 
+// Use the same permission keys as cms.ts for consistency
 const ALL_PERMISSIONS = [
-  'dashboard', 'users', 'finance', 'games', 'staff',
-  'banners', 'tickets', 'settings', 'marketing', 'notifications',
+  'finance', 'banner', 'deposit', 'emails', 'staff', 'marketing',
+  'algos', 'users', 'smtp', 'currencies', 'crm', 'intercom', 'notify',
+  'gateways', 'tickets', 'history', 'withdrawals', 'redeem',
+  'gameSettings', 'paymentMethods', 'dynamicPages', 'ban', 'notifyManager',
 ] as const;
 
 type PermKey = typeof ALL_PERMISSIONS[number];
@@ -28,6 +32,7 @@ export default function StaffTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [changePassTarget, setChangePassTarget] = useState<SupabaseStaff | null>(null);
   const selected = staff.find((s) => s.id === selectedId) ?? null;
 
   const [name, setName] = useState('');
@@ -53,10 +58,9 @@ export default function StaffTab() {
     setSaving(true);
     try {
       const hash = await hashPassword(pwd.trim());
-      const defaultPerms: Record<string, boolean> = {
-        dashboard: true, users: false, finance: false, games: false, staff: false,
-        banners: false, tickets: false, settings: false, marketing: false, notifications: false,
-      };
+      const defaultPerms: Record<string, boolean> = Object.fromEntries(
+        ALL_PERMISSIONS.map((k) => [k, false])
+      );
       const newId = await supabaseCreateStaff(email.trim(), name.trim(), role, hash, defaultPerms);
       if (!newId) throw new Error('Create failed');
       setName(''); setEmail(''); setPwd(''); setRole('staff'); setShowAdd(false);
@@ -99,6 +103,17 @@ export default function StaffTab() {
     } catch (e) {
       console.error('updatePermission error:', e);
     }
+  };
+
+  // Human-readable labels for permission keys
+  const permLabel: Record<PermKey, string> = {
+    finance: 'Finance', banner: 'Banners', deposit: 'Deposits', emails: 'Emails',
+    staff: 'Staff', marketing: 'Marketing', algos: 'Algorithms', users: 'Users',
+    smtp: 'SMTP', currencies: 'Currencies', crm: 'CRM', intercom: 'Intercom',
+    notify: 'Notifications', gateways: 'Auto Gateways', tickets: 'Tickets',
+    history: 'History', withdrawals: 'Withdrawals', redeem: 'Redeem Codes',
+    gameSettings: 'Game Settings', paymentMethods: 'Payment Methods',
+    dynamicPages: 'Dynamic Pages', ban: 'Ban Section', notifyManager: 'Notif Manager',
   };
 
   return (
@@ -200,6 +215,13 @@ export default function StaffTab() {
                             {s.is_active ? <ShieldOff className="w-3.5 h-3.5" /> : <Shield className="w-3.5 h-3.5" />}
                           </button>
                           <button
+                            onClick={(e) => { e.stopPropagation(); setChangePassTarget(s); }}
+                            title="Change Password"
+                            className="w-7 h-7 rounded-lg border grid place-items-center bg-slatepanel-800 border-borderline-900 text-slate-400 hover:text-neon-300"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" /></svg>
+                          </button>
+                          <button
                             onClick={(e) => { e.stopPropagation(); void removeStaff(s.id); }}
                             className="w-7 h-7 rounded-lg border grid place-items-center bg-coral-500/10 border-coral-500/30 text-coral-400 hover:text-coral-300"
                           >
@@ -218,10 +240,10 @@ export default function StaffTab() {
         {selected && (
           <div className="panel p-4 space-y-3">
             <h3 className="font-display font-bold text-sm text-white">Permissions — {selected.name}</h3>
-            <div className="space-y-2">
+            <div className="grid grid-cols-2 gap-y-2 gap-x-4">
               {ALL_PERMISSIONS.map((key) => (
                 <label key={key} className="flex items-center justify-between cursor-pointer">
-                  <span className="text-sm text-slate-300 capitalize">{key}</span>
+                  <span className="text-xs text-slate-300">{permLabel[key]}</span>
                   <button
                     onClick={() => void updatePermission(selected.id, key, !selected.permissions[key])}
                     className={`w-10 h-5 rounded-full border transition-all ${
@@ -238,6 +260,16 @@ export default function StaffTab() {
           </div>
         )}
       </div>
+
+      {/* Change password modal for any staff member (admin-initiated) */}
+      {changePassTarget && (
+        <AdminChangePasswordModal
+          staffId={changePassTarget.id}
+          staffName={changePassTarget.name}
+          staffEmail={changePassTarget.email}
+          onClose={() => setChangePassTarget(null)}
+        />
+      )}
     </div>
   );
 }

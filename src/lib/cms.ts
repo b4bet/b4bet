@@ -182,6 +182,8 @@ function mapPaymentMethod(row: Record<string, unknown>): ManualMethod {
   };
 }
 
+const ADMIN_SESSION_KEY = 'b4bet.admin.session';
+
 class Cms {
   banners: BannerSlide[] = defaultBanners;
   logoDataUrl: string | null = null;
@@ -235,6 +237,11 @@ class Cms {
 
   constructor() {
     this.loadNotificationTemplates();
+    // Restore staff session from localStorage (survives page refresh)
+    try {
+      const savedId = localStorage.getItem(ADMIN_SESSION_KEY);
+      if (savedId) this.staffSessionId = savedId;
+    } catch { /* ignore */ }
     // Load all data from Supabase on startup
     this.syncAllFromSupabase();
     // Start realtime subscriptions for live updates
@@ -697,6 +704,11 @@ class Cms {
     this.staff = this.staff.map(s => ({ ...s, online: s.id === id ? true : s.online }));
     this.emitStaff();
     bus.emit(Topics.StaffSession, id);
+    // Persist session to localStorage so it survives page refresh
+    try {
+      if (id) localStorage.setItem(ADMIN_SESSION_KEY, id);
+      else localStorage.removeItem(ADMIN_SESSION_KEY);
+    } catch { /* ignore */ }
     // When staff logs in, refresh all data
     if (id) void this.syncAllFromSupabase();
   }
