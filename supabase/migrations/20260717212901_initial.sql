@@ -1,3 +1,0 @@
--- Migration applied directly to remote database on 2026-07-17.
--- This file is a tracking stub so local migration history matches remote.
--- The schema changes are already live in the database.
