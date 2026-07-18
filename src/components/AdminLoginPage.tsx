@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { LogIn, Eye, EyeOff, ShieldAlert, Bug } from 'lucide-react';
-import { supabaseStaffLogin } from '../lib/supabaseIntegration';
+import { LogIn, Eye, EyeOff, ShieldAlert } from 'lucide-react';
 import { supabase } from '../integrations/supabase/client';
 import { cms } from '../lib/cms';
 import type { StaffRole, PermissionKey } from '../lib/cms';
@@ -14,9 +13,22 @@ async function sha256Hex(plain: string): Promise<string> {
     .join('');
 }
 
+interface StaffRow {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  permissions: Record<PermissionKey, boolean> | null;
+  is_active: boolean;
+  password_hash?: string;
+}
+
 /**
- * Admin login page. Shown whenever no staff session is active.
- * Authenticates against Supabase `staff` table (email + SHA-256 password_hash).
+ * Admin login page. Authenticates against Supabase staff table.
+ * Strategy:
+ *  1. Try admin_staff_login RPC (SECURITY DEFINER, recommended)
+ *  2. If RPC missing/errors → direct staff table query with password_hash compare
+ * Debug info always visible below the error.
  */
 export default function AdminLoginPage() {
   const [email, setEmail] = useState('');
@@ -24,8 +36,9 @@ export default function AdminLoginPage() {
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [debugInfo, setDebugInfo] = useState<string | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
+  const [debugLines, setDebugLines] = useState<string[]>([]);
+
+  const addDebug = (lines: string[], msg: string) => { lines.push(msg); };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,41 +48,83 @@ export default function AdminLoginPage() {
     }
     setLoading(true);
     setError('');
-    setDebugInfo(null);
+    setDebugLines([]);
+    const dbg: string[] = [];
+
     try {
-      const hash = await sha256Hex(password.trim());
       const emailLower = email.trim().toLowerCase();
-      
-      // Try the RPC first
-      const acc = await supabaseStaffLogin(emailLower, hash);
-      
-      if (!acc) {
-        // Try to get more info about why login failed
-        const { data: rpcData, error: rpcError } = await supabase.rpc('admin_staff_login', {
-          p_email: emailLower,
-          p_password_hash: hash,
-        });
-        
-        let debugMsg = `Email: ${emailLower}\nHash (SHA-256): ${hash.slice(0, 16)}...`;
-        if (rpcError) {
-          debugMsg += `\nRPC Error: ${rpcError.message} (${rpcError.code})`;
-          // Check if RPC doesn't exist
-          if (rpcError.code === '42883' || rpcError.message.includes('does not exist')) {
-            setError('Admin RPC function not found in database. Please check Supabase setup.');
-          } else {
-            setError(`Login failed: ${rpcError.message}`);
-          }
-        } else {
-          debugMsg += `\nRPC returned: ${JSON.stringify(rpcData)}`;
-          setError('Invalid email or password.');
+      const hash = await sha256Hex(password.trim());
+      addDebug(dbg, `Email: ${emailLower}`);
+      addDebug(dbg, `SHA-256: ${hash.slice(0, 20)}...`);
+
+      let staffRow: StaffRow | null = null;
+
+      // --- Strategy 1: RPC ---
+      addDebug(dbg, 'Trying RPC admin_staff_login...');
+      const { data: rpcData, error: rpcError } = await supabase.rpc('admin_staff_login', {
+        p_email: emailLower,
+        p_password_hash: hash,
+      });
+
+      if (rpcError) {
+        addDebug(dbg, `RPC error: ${rpcError.code} - ${rpcError.message}`);
+        addDebug(dbg, 'Falling back to direct table query...');
+
+        // --- Strategy 2: Direct table query ---
+        const { data: tableData, error: tableError } = await supabase
+          .from('staff')
+          .select('id, name, email, role, permissions, is_active, password_hash')
+          .eq('email', emailLower)
+          .eq('is_active', true)
+          .single();
+
+        if (tableError) {
+          addDebug(dbg, `Table query error: ${tableError.code} - ${tableError.message}`);
+          setError(`Login failed. Check debug info below.`);
+          setDebugLines([...dbg]);
+          return;
         }
-        setDebugInfo(debugMsg);
+
+        if (!tableData) {
+          addDebug(dbg, 'No staff row found for this email.');
+          setError('Invalid email or password.');
+          setDebugLines([...dbg]);
+          return;
+        }
+
+        const row = tableData as StaffRow;
+        addDebug(dbg, `Found staff: ${row.name} (role: ${row.role})`);
+        addDebug(dbg, `Stored hash: ${(row.password_hash ?? '').slice(0, 20)}...`);
+        addDebug(dbg, `Input hash:  ${hash.slice(0, 20)}...`);
+        addDebug(dbg, `Hash match: ${row.password_hash === hash}`);
+
+        if (row.password_hash !== hash) {
+          setError('Invalid email or password.');
+          setDebugLines([...dbg]);
+          return;
+        }
+        staffRow = row;
+      } else {
+        const rows = rpcData as StaffRow[] | null;
+        if (!rows || rows.length === 0) {
+          addDebug(dbg, 'RPC returned empty result (wrong credentials).');
+          setError('Invalid email or password.');
+          setDebugLines([...dbg]);
+          return;
+        }
+        addDebug(dbg, `RPC success! Got staff: ${rows[0].name}`);
+        staffRow = rows[0];
+      }
+
+      if (!staffRow) {
+        setError('Login failed: no staff row.');
+        setDebugLines([...dbg]);
         return;
       }
 
-      // Map Supabase staff row to CMS StaffAccount and register it
-      const isOwner = acc.role === 'super_admin';
-      const role: StaffRole = (acc.role === 'super_admin' || acc.role === 'admin') ? 'finance' : 'support';
+      // Build CMS account
+      const isOwner = staffRow.role === 'super_admin';
+      const role: StaffRole = (staffRow.role === 'super_admin' || staffRow.role === 'admin') ? 'finance' : 'support';
       const permissions = isOwner
         ? Object.fromEntries(
             ['finance','banner','deposit','emails','staff','marketing','algos','users','smtp',
@@ -77,12 +132,12 @@ export default function AdminLoginPage() {
              'redeem','gameSettings','paymentMethods','dynamicPages','ban','notifyManager']
               .map((k) => [k, true])
           ) as Record<PermissionKey, boolean>
-        : (acc.permissions as Record<PermissionKey, boolean>) ?? {};
+        : (staffRow.permissions ?? {}) as Record<PermissionKey, boolean>;
 
       const staffAccount = {
-        id: acc.id,
-        name: acc.name,
-        email: acc.email,
+        id: staffRow.id,
+        name: staffRow.name,
+        email: staffRow.email,
         password: '',
         role,
         online: true,
@@ -90,19 +145,19 @@ export default function AdminLoginPage() {
         isOwner,
       };
 
-      // Ensure the account is in cms.staff before setting session
-      if (!cms.staff.find((s) => s.id === acc.id)) {
+      if (!cms.staff.find((s) => s.id === staffRow!.id)) {
         cms.staff = [...cms.staff, staffAccount];
       } else {
-        cms.staff = cms.staff.map((s) => s.id === acc.id ? { ...s, ...staffAccount } : s);
+        cms.staff = cms.staff.map((s) => s.id === staffRow!.id ? { ...s, ...staffAccount } : s);
       }
 
-      // Set session by ID (string) — this is what cms.setStaffSession expects
-      cms.setStaffSession(acc.id);
+      addDebug(dbg, 'Login successful! Setting session...');
+      cms.setStaffSession(staffRow.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      addDebug(dbg, `Exception: ${msg}`);
       setError(`Login error: ${msg}`);
-      setDebugInfo(`Exception: ${msg}`);
+      setDebugLines([...dbg]);
     } finally {
       setLoading(false);
     }
@@ -111,7 +166,6 @@ export default function AdminLoginPage() {
   return (
     <div className="min-h-screen bg-midnight-900 flex items-center justify-center p-4">
       <div className="w-full max-w-sm space-y-6">
-        {/* Logo / brand */}
         <div className="text-center space-y-2">
           <div className="w-14 h-14 rounded-2xl bg-neon-500/20 border border-neon-500/40 grid place-items-center mx-auto">
             <ShieldAlert className="w-7 h-7 text-neon-400" />
@@ -120,7 +174,6 @@ export default function AdminLoginPage() {
           <p className="text-sm text-slate-500">Sign in to manage your platform</p>
         </div>
 
-        {/* Form */}
         <form onSubmit={(e) => { void handleLogin(e); }} className="panel p-6 space-y-4">
           <div className="space-y-1.5">
             <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Email</label>
@@ -158,22 +211,12 @@ export default function AdminLoginPage() {
 
           {error && (
             <div className="space-y-2">
-              <p className="text-sm text-coral-400 bg-coral-500/10 border border-coral-500/30 rounded-lg px-3 py-2">
+              <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
                 {error}
               </p>
-              {debugInfo && (
-                <button
-                  type="button"
-                  onClick={() => setShowDebug((o) => !o)}
-                  className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-400"
-                >
-                  <Bug className="w-3 h-3" />
-                  {showDebug ? 'Hide debug info' : 'Show debug info'}
-                </button>
-              )}
-              {showDebug && debugInfo && (
-                <pre className="text-[10px] text-slate-500 bg-midnight-950 border border-borderline-900 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap">
-                  {debugInfo}
+              {debugLines.length > 0 && (
+                <pre className="text-[11px] text-slate-400 bg-black/40 border border-white/10 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap">
+                  {debugLines.join('\n')}
                 </pre>
               )}
             </div>
