@@ -32,6 +32,7 @@ ALTER TABLE aviator_rounds ENABLE ROW LEVEL SECURITY;
 -- Policy: anon/authenticated roles can only read round_id, phase, started_at.
 -- crash_point is intentionally excluded from SELECT — clients must call the
 -- Edge Function which uses the service role.
+DROP POLICY IF EXISTS "aviator_rounds_read_safe_cols" ON aviator_rounds;
 CREATE POLICY "aviator_rounds_read_safe_cols" ON aviator_rounds
   FOR SELECT
   TO authenticated, anon
@@ -61,6 +62,7 @@ ALTER TABLE mines_sessions ENABLE ROW LEVEL SECURITY;
 -- Users can read only their own sessions. mine_positions are in the row but
 -- the Edge Function handles reveal logic — clients should NOT query this table
 -- directly for mine_positions during an active session.
+DROP POLICY IF EXISTS "mines_sessions_own" ON mines_sessions;
 CREATE POLICY "mines_sessions_own" ON mines_sessions
   FOR ALL
   TO authenticated
@@ -81,6 +83,7 @@ ALTER TABLE crash_rounds ENABLE ROW LEVEL SECURITY;
 
 -- Public read (bust_point is revealed after round ends — the engine only
 -- queries this to verify a client-submitted cashout claim)
+DROP POLICY IF EXISTS "crash_rounds_read" ON crash_rounds;
 CREATE POLICY "crash_rounds_read" ON crash_rounds
   FOR SELECT
   TO authenticated, anon
@@ -98,5 +101,6 @@ CREATE INDEX IF NOT EXISTS sunvsmoon_rounds_round_id_idx ON sunvsmoon_rounds (ro
 
 ALTER TABLE sunvsmoon_rounds ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "sunvsmoon_rounds_read" ON sunvsmoon_rounds;
 CREATE POLICY "sunvsmoon_rounds_read" ON sunvsmoon_rounds
   FOR SELECT TO authenticated, anon USING (true);
