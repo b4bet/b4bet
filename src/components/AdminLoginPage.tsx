@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LogIn, Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { LogIn, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '../integrations/supabase/client';
 import { cms } from '../lib/cms';
 import type { StaffRole, PermissionKey } from '../lib/cms';
@@ -52,7 +52,7 @@ export default function AdminLoginPage() {
       });
 
       if (rpcError) {
-        // Strategy 2: Direct table query fallback
+        // Strategy 2: Direct table query
         const { data: tableData, error: tableError } = await supabase
           .from('staff')
           .select('id, name, email, role, permissions, is_active, password_hash')
@@ -81,11 +81,10 @@ export default function AdminLoginPage() {
       }
 
       if (!staffRow) {
-        setError('Invalid email or password.');
+        setError('Login failed. Please try again.');
         return;
       }
 
-      // Build CMS account
       const isOwner = staffRow.role === 'super_admin';
       const role: StaffRole = (staffRow.role === 'super_admin' || staffRow.role === 'admin') ? 'finance' : 'support';
       const permissions = isOwner
@@ -126,20 +125,16 @@ export default function AdminLoginPage() {
   return (
     <div className="min-h-screen bg-midnight-900 flex items-center justify-center p-4">
       <div className="w-full max-w-sm space-y-6">
-        <div className="text-center space-y-2">
-          <div className="w-14 h-14 rounded-2xl bg-neon-500/20 border border-neon-500/40 grid place-items-center mx-auto">
-            <ShieldAlert className="w-7 h-7 text-neon-400" />
-          </div>
-          <h1 className="font-display font-extrabold text-2xl text-white">Admin Panel</h1>
-          <p className="text-sm text-slate-500">Sign in to manage your platform</p>
+        <div className="text-center space-y-1">
+          <h1 className="text-2xl font-display font-extrabold text-white">Admin Panel</h1>
+          <p className="text-slate-400 text-sm">Sign in to manage your platform</p>
         </div>
 
         <form onSubmit={(e) => { void handleLogin(e); }} className="panel p-6 space-y-4">
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Email</label>
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Email</label>
             <input
               type="email"
-              autoComplete="username"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="admin@b4bet.com"
@@ -147,12 +142,12 @@ export default function AdminLoginPage() {
               disabled={loading}
             />
           </div>
+
           <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wide">Password</label>
+            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Password</label>
             <div className="relative">
               <input
                 type={showPwd ? 'text' : 'password'}
-                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="········"
@@ -170,18 +165,18 @@ export default function AdminLoginPage() {
           </div>
 
           {error && (
-            <p className="text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+            <div className="bg-coral-500/10 border border-coral-500/30 rounded-lg px-3 py-2 text-coral-400 text-sm">
               {error}
-            </p>
+            </div>
           )}
 
           <button
             type="submit"
             disabled={loading}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-neon-500 hover:bg-neon-400 text-midnight-900 font-bold text-sm transition-colors disabled:opacity-50"
+            className="btn-primary w-full flex items-center justify-center gap-2"
           >
             {loading ? (
-              <><span className="w-4 h-4 border-2 border-midnight-900/40 border-t-midnight-900 rounded-full animate-spin" /> Signing in...</>
+              <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Signing in...</>
             ) : (
               <><LogIn className="w-4 h-4" /> Sign In</>
             )}
