@@ -87,7 +87,7 @@ export interface NotificationTemplate { id: string; title: string; body: string;
 
 // ---- Defaults ----
 const defaultBanners: BannerSlide[] = [
-  { id: 'b1', imageDataUrl: 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300"><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="%23b15eff"/><stop offset="1" stop-color="%2300ff88"/></linearGradient></defs><rect width="800" height="300" fill="url(%23g)"/><text x="40" y="160" fill="white" font-family="Inter" font-size="48" font-weight="800">Welcome Bonus \u20B915,000</text></svg>'), linkUrl: 'https://b4bet.com/promo/welcome' },
+  { id: 'b1', imageDataUrl: 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300"><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="%23b15eff"/><stop offset="1" stop-color="%2300ff88"/></linearGradient></defs><rect width="800" height="300" fill="url(%23g)"/><text x="40" y="160" fill="white" font-family="Inter" font-size="48" font-weight="800">Welcome Bonus ₹15,000</text></svg>'), linkUrl: 'https://b4bet.com/promo/welcome' },
 ];
 const defaultDepositHtml = `<div style="font-family:Inter,sans-serif;padding:16px;background:#0f1225;color:#fff;border-radius:14px"><h2 style="margin:0 0 8px;color:#00ff88">Manual UPI Deposit</h2><p style="margin:0 0 8px">1. Scan the UPI QR above with any UPI app.</p><p style="margin:0 0 8px">2. Pay the exact amount you entered.</p><p style="margin:0">3. Submit the UTR / Transaction ID below for credit.</p></div>`;
 const defaultUpiQr = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="white"/><g fill="black"><rect x="10" y="10" width="60" height="60"/><rect x="20" y="20" width="40" height="40" fill="white"/><rect x="30" y="30" width="20" height="20"/><rect x="130" y="10" width="60" height="60"/><rect x="140" y="20" width="40" height="40" fill="white"/><rect x="150" y="30" width="20" height="20"/><rect x="10" y="130" width="60" height="60"/><rect x="20" y="140" width="40" height="40" fill="white"/><rect x="30" y="150" width="20" height="20"/><rect x="90" y="90" width="20" height="20"/><rect x="120" y="120" width="10" height="10"/><rect x="140" y="100" width="10" height="10"/></g></svg>');
@@ -204,9 +204,9 @@ class Cms {
   adminUsers: AdminUser[] = [];
 
   countries: Country[] = [
-    { id: 'c_in', name: 'India', code: 'IN', isActive: true, currency: '\u20B9', manualDepositMethods: ['UPI','IMPS'], manualWithdrawalMethods: ['UPI','Bank'] },
+    { id: 'c_in', name: 'India', code: 'IN', isActive: true, currency: '₹', manualDepositMethods: ['UPI','IMPS'], manualWithdrawalMethods: ['UPI','Bank'] },
     { id: 'c_us', name: 'United States', code: 'US', isActive: false, currency: '$', manualDepositMethods: ['Wire'], manualWithdrawalMethods: ['Wire'] },
-    { id: 'c_uk', name: 'United Kingdom', code: 'GB', isActive: true, currency: '\u00A3', manualDepositMethods: ['Bank'], manualWithdrawalMethods: ['Bank'] },
+    { id: 'c_uk', name: 'United Kingdom', code: 'GB', isActive: true, currency: '£', manualDepositMethods: ['Bank'], manualWithdrawalMethods: ['Bank'] },
   ];
   detectedCountryId: string = 'c_in';
   referralConfig: ReferralConfig = { rewardAmount: 100, minDeposit: 500, tierPercent: 10, tierThreshold: 3 };
@@ -236,7 +236,7 @@ class Cms {
   private static NOTIF_TEMPLATES_KEY = 'b4bet.cms.notifTemplates';
 
   constructor() {
-    this.loadNotificationTemplates();
+    this.loadNotificationTemplatesFromLocalStorage();
     try {
       const savedId = localStorage.getItem(ADMIN_SESSION_KEY);
       if (savedId) this.staffSessionId = savedId;
@@ -324,10 +324,7 @@ class Cms {
     } catch { /* use defaults */ }
   }
 
-  // Loads ALL settings from the `settings` table:
-  // - referral_bonus → referralConfig.rewardAmount
-  // - site_logo_data_url / site_text_logo_data_url / site_favicon_data_url → logo emitters
-  // - smtp_host/port/user/pass/tls/active → smtpConfig
+  // Loads ALL settings from the `settings` table.
   private async syncSettingsFromSupabase() {
     try {
       const { data } = await supabase.rpc('admin_get_settings');
@@ -335,12 +332,18 @@ class Cms {
       const rows = data as Array<{ key: string; value: unknown }>;
       const find = (k: string) => rows.find(r => r.key === k)?.value;
 
-      // Referral config
+      // Referral config (legacy single-value key)
       const refBonus = find('referral_bonus');
       if (refBonus !== undefined && refBonus !== null) this.referralConfig.rewardAmount = refBonus as number;
+
+      // Full referral config object (new)
+      const refConfig = find('referral_config');
+      if (refConfig !== undefined && refConfig !== null && typeof refConfig === 'object') {
+        this.referralConfig = { ...this.referralConfig, ...(refConfig as Partial<ReferralConfig>) };
+      }
       bus.emit(Topics.ReferralConfig, this.referralConfig);
 
-      // Logos/favicon — emit so header/components using useLogo etc. update instantly
+      // Logos/favicon
       const logo = find('site_logo_data_url') as string | null;
       const textLogo = find('site_text_logo_data_url') as string | null;
       const favicon = find('site_favicon_data_url') as string | null;
@@ -361,6 +364,30 @@ class Cms {
       if (smtpPass !== undefined) this.smtpConfig.pass = smtpPass || '';
       if (smtpTls !== undefined && smtpTls !== null) this.smtpConfig.tls = smtpTls as boolean;
       if (smtpActive !== undefined && smtpActive !== null) this.smtpConfig.active = smtpActive as boolean;
+
+      // Dynamic pages
+      const dynPages = find('dynamic_pages');
+      if (dynPages !== undefined && dynPages !== null && Array.isArray(dynPages)) {
+        this.dynamicPages = dynPages as DynamicPage[];
+        this.emitDynamicPages();
+      }
+
+      // Email templates
+      const emailTpls = find('email_templates');
+      if (emailTpls !== undefined && emailTpls !== null && typeof emailTpls === 'object') {
+        this.emailTemplates = { ...defaultEmails, ...(emailTpls as Partial<EmailTemplates>) };
+        this.emitEmails();
+      }
+
+      // Notification templates — custom ones only; built-ins are hardcoded in memory
+      const notifTpls = find('notification_templates');
+      if (notifTpls !== undefined && notifTpls !== null && Array.isArray(notifTpls)) {
+        const custom = notifTpls as NotificationTemplate[];
+        const autoGen = this._notificationTemplates.filter(t => t.isAutoGenerated);
+        const dbCustom = custom.filter(t => !t.isAutoGenerated);
+        this._notificationTemplates = [...autoGen, ...dbCustom];
+        this.emitNotificationTemplates();
+      }
     } catch { /* ignore */ }
   }
 
@@ -469,32 +496,50 @@ class Cms {
   emitManual() { bus.emit(Topics.ManualMethods, this.manualMethods); }
 
   get notificationTemplates(): NotificationTemplate[] { return this._notificationTemplates; }
-  private loadNotificationTemplates() {
-    try { const raw = localStorage.getItem(Cms.NOTIF_TEMPLATES_KEY); if (raw) this._notificationTemplates = JSON.parse(raw) as NotificationTemplate[]; } catch { /* ignore */ }
+
+  private loadNotificationTemplatesFromLocalStorage() {
+    try {
+      const raw = localStorage.getItem(Cms.NOTIF_TEMPLATES_KEY);
+      if (raw) this._notificationTemplates = JSON.parse(raw) as NotificationTemplate[];
+    } catch { /* ignore */ }
   }
-  private persistNotificationTemplates() {
+
+  /** Persist custom (non-auto-generated) templates to Supabase settings table. */
+  private persistNotificationTemplatesToSupabase() {
+    const custom = this._notificationTemplates.filter(t => !t.isAutoGenerated);
+    void supabase.rpc('admin_update_setting', {
+      p_key: 'notification_templates',
+      p_value: custom as unknown as string,
+    }).catch(() => {});
+    // Also keep localStorage as local fallback
     try { localStorage.setItem(Cms.NOTIF_TEMPLATES_KEY, JSON.stringify(this._notificationTemplates)); } catch { /* ignore */ }
   }
+
   private emitNotificationTemplates() { bus.emit('cms:notif_templates', this._notificationTemplates); }
+
   addNotificationTemplate(t: Omit<NotificationTemplate, 'id' | 'createdAt' | 'isAutoGenerated'>): NotificationTemplate {
     const tpl: NotificationTemplate = { ...t, id: 'nt_' + Math.random().toString(36).slice(2), createdAt: Date.now(), isAutoGenerated: false };
     this._notificationTemplates = [...this._notificationTemplates, tpl];
-    this.persistNotificationTemplates(); this.emitNotificationTemplates();
+    this.persistNotificationTemplatesToSupabase();
+    this.emitNotificationTemplates();
     return tpl;
   }
   toggleNotificationTemplate(id: string, isActive: boolean) {
     this._notificationTemplates = this._notificationTemplates.map(t => t.id === id ? { ...t, isActive } : t);
-    this.persistNotificationTemplates(); this.emitNotificationTemplates();
+    this.persistNotificationTemplatesToSupabase();
+    this.emitNotificationTemplates();
   }
   deleteNotificationTemplate(id: string) {
     const tpl = this._notificationTemplates.find(t => t.id === id);
     if (tpl?.isAutoGenerated) return;
     this._notificationTemplates = this._notificationTemplates.filter(t => t.id !== id);
-    this.persistNotificationTemplates(); this.emitNotificationTemplates();
+    this.persistNotificationTemplatesToSupabase();
+    this.emitNotificationTemplates();
   }
   updateNotificationTemplate(id: string, patch: Partial<Pick<NotificationTemplate, 'title' | 'body' | 'kind'>>) {
     this._notificationTemplates = this._notificationTemplates.map(t => t.id === id ? { ...t, ...patch } : t);
-    this.persistNotificationTemplates(); this.emitNotificationTemplates();
+    this.persistNotificationTemplatesToSupabase();
+    this.emitNotificationTemplates();
   }
 
   toast(t: Omit<ToastEvent, 'id'>) { bus.emit(Topics.Toast, { ...t, id: Math.random().toString(36).slice(2) }); }
@@ -534,8 +579,42 @@ class Cms {
   setUpiQr(dataUrl: string) { this.upiQrDataUrl = dataUrl; this.emitUpi(); }
   setDepositHtml(html: string) { this.depositPageHtml = html; this.emitDepositHtml(); }
   setWithdrawalHtml(html: string) { this.withdrawalPageHtml = html; this.emitWithdrawalHtml(); }
-  setEmailTemplate(key: keyof EmailTemplates, html: string) { this.emailTemplates = { ...this.emailTemplates, [key]: html }; this.emitEmails(); }
+
+  setEmailTemplate(key: keyof EmailTemplates, html: string) {
+    this.emailTemplates = { ...this.emailTemplates, [key]: html };
+    this.emitEmails();
+    // Persist to Supabase settings
+    void supabase.rpc('admin_update_setting', {
+      p_key: 'email_templates',
+      p_value: this.emailTemplates as unknown as string,
+    }).catch(() => {});
+  }
+
   setSmtpConfig(patch: Partial<SmtpConfig>) { this.smtpConfig = { ...this.smtpConfig, ...patch }; }
+
+  // ---- Dynamic Pages (Supabase-persisted via settings) ----
+  addDynamicPage(title: string, html: string) {
+    const page: DynamicPage = { id: 'dp_' + Math.random().toString(36).slice(2), title, html, ts: Date.now() };
+    this.dynamicPages = [...this.dynamicPages, page];
+    this.emitDynamicPages();
+    this.persistDynamicPagesToSupabase();
+  }
+  updateDynamicPage(id: string, patch: Partial<Pick<DynamicPage, 'title' | 'html'>>) {
+    this.dynamicPages = this.dynamicPages.map(p => p.id === id ? { ...p, ...patch, ts: Date.now() } : p);
+    this.emitDynamicPages();
+    this.persistDynamicPagesToSupabase();
+  }
+  removeDynamicPage(id: string) {
+    this.dynamicPages = this.dynamicPages.filter(p => p.id !== id);
+    this.emitDynamicPages();
+    this.persistDynamicPagesToSupabase();
+  }
+  private persistDynamicPagesToSupabase() {
+    void supabase.rpc('admin_update_setting', {
+      p_key: 'dynamic_pages',
+      p_value: this.dynamicPages as unknown as string,
+    }).catch(() => {});
+  }
 
   // ---- Finance (Supabase-backed) ----
   submitDeposit(user: string, amount: number, method: string, utr?: string, details?: string, userId?: string) {
@@ -548,7 +627,7 @@ class Cms {
     }).catch(() => {});
     const rec: DepositRequest = { id: Math.random().toString(36).slice(2), user, userId, amount, method, utr, details, status: 'pending', ts: Date.now() };
     this.deposits = [rec, ...this.deposits]; this.emitFinance();
-    this.toast({ title: 'New deposit request', body: `${user} \u20B9${amount}`, kind: 'info' });
+    this.toast({ title: 'New deposit request', body: `${user} ₹${amount}`, kind: 'info' });
   }
 
   submitWithdrawal(user: string, amount: number, destination: string, details?: string, userId?: string) {
@@ -559,7 +638,7 @@ class Cms {
     }).then(() => { void this.syncTransactionsFromSupabase(); }).catch(() => {});
     const rec: WithdrawalRequest = { id: Math.random().toString(36).slice(2), user, userId, amount, destination, details, status: 'pending', ts: Date.now() };
     this.withdrawals = [rec, ...this.withdrawals]; this.emitFinance();
-    this.toast({ title: 'New withdrawal request', body: `${user} \u20B9${amount}`, kind: 'warn' });
+    this.toast({ title: 'New withdrawal request', body: `${user} ₹${amount}`, kind: 'warn' });
   }
 
   async setDepositStatus(id: string, status: DepositRequest['status'], utr?: string, reason?: string) {
@@ -819,6 +898,11 @@ class Cms {
   setReferralConfig(patch: Partial<ReferralConfig>) {
     this.referralConfig = { ...this.referralConfig, ...patch };
     bus.emit(Topics.ReferralConfig, this.referralConfig);
+    // Persist full config to Supabase settings
+    void supabase.rpc('admin_update_setting', {
+      p_key: 'referral_config',
+      p_value: this.referralConfig as unknown as string,
+    }).catch(() => {});
   }
   recordReferralSignup(referredUser: AuthUser, referrerId: string) {
     const rec: Referral = {
@@ -864,48 +948,23 @@ class Cms {
       .insert({ method_type: m.kind, account_details: { ...m }, is_active: m.active })
       .select()
       .single();
-    if (!error && data) {
-      const row = data as Record<string, unknown>;
-      const mapped = mapPaymentMethod(row);
-      this.manualMethods = [...this.manualMethods, mapped];
-    } else {
-      const fallback: ManualMethod = { ...m, id: 'mm_' + Math.random().toString(36).slice(2, 8) };
-      this.manualMethods = [...this.manualMethods, fallback];
-    }
-    this.emitManual();
-    void this.syncPaymentMethodsFromSupabase();
+    if (error) { console.warn('[cms] addManualMethod error:', error.message); return; }
+    if (data) await this.syncPaymentMethodsFromSupabase();
   }
-
   async updateManualMethod(id: string, patch: Partial<ManualMethod>) {
-    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m);
-    this.emitManual();
-    const updated = this.manualMethods.find(m => m.id === id);
-    if (updated) {
-      await supabase
-        .from('payment_methods')
-        .update({ account_details: { ...updated }, is_active: updated.active })
-        .eq('id', id)
-        .catch(() => {});
-    }
+    const existing = this.manualMethods.find(m => m.id === id);
+    if (!existing) return;
+    const updated = { ...existing, ...patch };
+    await supabase
+      .from('payment_methods')
+      .update({ account_details: { ...updated }, is_active: updated.active })
+      .eq('id', id);
+    await this.syncPaymentMethodsFromSupabase();
   }
-
   async removeManualMethod(id: string) {
+    await supabase.from('payment_methods').delete().eq('id', id);
     this.manualMethods = this.manualMethods.filter(m => m.id !== id);
     this.emitManual();
-    await supabase.from('payment_methods').update({ is_active: false }).eq('id', id).catch(() => {});
-  }
-
-  // ---- Dynamic Pages ----
-  addDynamicPage(title: string, html: string): DynamicPage {
-    const page: DynamicPage = { id: Math.random().toString(36).slice(2), title, html, ts: Date.now() };
-    this.dynamicPages = [page, ...this.dynamicPages]; this.emitDynamicPages();
-    return page;
-  }
-  updateDynamicPage(id: string, patch: Partial<Pick<DynamicPage, 'title' | 'html'>>) {
-    this.dynamicPages = this.dynamicPages.map(p => p.id === id ? { ...p, ...patch } : p); this.emitDynamicPages();
-  }
-  removeDynamicPage(id: string) {
-    this.dynamicPages = this.dynamicPages.filter(p => p.id !== id); this.emitDynamicPages();
   }
 }
 
