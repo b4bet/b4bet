@@ -12,7 +12,7 @@ async function getUserId(): Promise<string> {
   return session.user.id;
 }
 
-// ── Crash ────────────────────────────────────────────────────────────────────
+// ── Crash ──────────────────────────────────────────────────────────────────────────────────
 
 /** GET endpoint — no auth needed, idempotent per round_id. */
 export async function crashGetBust(roundId: number): Promise<number> {
@@ -44,7 +44,7 @@ export async function crashSettle(params: {
   return res.json() as Promise<CrashSettleResult>;
 }
 
-// ── Mines ────────────────────────────────────────────────────────────────────
+// ── Mines ─────────────────────────────────────────────────────────────────────────────────
 
 export interface MinesStartResult {
   success: boolean;
@@ -110,7 +110,7 @@ export async function minesCashout(sessionId: string): Promise<MinesCashoutResul
   return data;
 }
 
-// ── Sun vs Moon ──────────────────────────────────────────────────────────────
+// ── Sun vs Moon ────────────────────────────────────────────────────────────────────────
 
 export interface SunMoonSettleResult {
   success: boolean;
@@ -136,7 +136,7 @@ export async function sunMoonSettle(params: {
   return data;
 }
 
-// ── Trading ──────────────────────────────────────────────────────────────────
+// ── Trading ──────────────────────────────────────────────────────────────────────────────
 
 export interface TradingSettleResult {
   success: boolean;
@@ -159,5 +159,93 @@ export async function tradingSettle(params: {
   });
   const data = await res.json() as TradingSettleResult & { error?: string };
   if (!res.ok || data.error) throw new Error(data.error ?? `trading_settle HTTP ${res.status}`);
+  return data;
+}
+
+// ── Aviator ───────────────────────────────────────────────────────────────────────────────
+
+export interface AviatorInitResult {
+  round_id: number;
+  ready: boolean;
+}
+
+/**
+ * GET — initialises a round server-side and generates the crash point with
+ * secure RNG. Returns only { round_id, ready:true }. The crash_point is
+ * NEVER returned to the client.
+ */
+export async function aviatorInit(roundId: number): Promise<AviatorInitResult> {
+  const res = await fetch(`${EDGE_URL}?action=aviator_init&round_id=${roundId}`);
+  if (!res.ok) throw new Error(`aviator_init HTTP ${res.status}`);
+  return res.json() as Promise<AviatorInitResult>;
+}
+
+export interface AviatorPlaceResult {
+  success: boolean;
+  balance_after: number;
+}
+
+/**
+ * POST — places an Aviator bet for the current round.
+ * Server deducts stake atomically.
+ */
+export async function aviatorPlace(roundId: number, stake: number): Promise<AviatorPlaceResult> {
+  const user_id = await getUserId();
+  const res = await fetch(EDGE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ game_type: 'aviator_place', user_id, round_id: roundId, stake }),
+  });
+  const data = await res.json() as AviatorPlaceResult & { error?: string };
+  if (!res.ok || data.error) throw new Error(data.error ?? `aviator_place HTTP ${res.status}`);
+  return data;
+}
+
+export interface AviatorCashoutResult {
+  success: boolean;
+  won: boolean;
+  payout: number;
+  balance_after: number;
+}
+
+/**
+ * POST — cash out an active Aviator bet.
+ * Server validates that cash_out_at < server crash_point before crediting.
+ * If cash_out_at >= crash_point the player has already crashed and gets 0.
+ */
+export async function aviatorCashout(roundId: number, cashOutAt: number): Promise<AviatorCashoutResult> {
+  const user_id = await getUserId();
+  const res = await fetch(EDGE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ game_type: 'aviator_cashout', user_id, round_id: roundId, cash_out_at: cashOutAt }),
+  });
+  const data = await res.json() as AviatorCashoutResult & { error?: string };
+  if (!res.ok || data.error) throw new Error(data.error ?? `aviator_cashout HTTP ${res.status}`);
+  return data;
+}
+
+export interface AviatorBustResult {
+  success: boolean;
+  crash_point: number;
+  settled: number;
+}
+
+/**
+ * POST — marks a round as ended and settles all remaining "placed" bets as lost.
+ * Called by the AviatorLoop when the round crashes. Requires authenticated user_id
+ * (the round controller uses the player's session; real deployments would use a
+ * server-side cron, but this client-triggered approach is safe because the crash
+ * point is only revealed to the player after the round ends server-side).
+ */
+export async function aviatorBust(roundId: number): Promise<AviatorBustResult> {
+  const user_id = await getUserId();
+  const res = await fetch(EDGE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ game_type: 'aviator_bust', user_id, round_id: roundId }),
+  });
+  const data = await res.json() as AviatorBustResult & { error?: string };
+  if (!res.ok || data.error) throw new Error(data.error ?? `aviator_bust HTTP ${res.status}`);
   return data;
 }
