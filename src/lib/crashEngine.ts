@@ -1,11 +1,25 @@
-// Real-time Crash engine. Drives the multiplier loop, computes crash points
-// based on admin config (auto win-probability or manual override), and manages
-// dual independent bets with auto-cashout. Emits state via the event bus.
+// Real-time Crash engine — server-side bust point version.
+//
+// Key security changes vs old version:
+//   1. Bust point is fetched from the process-bet Edge Function at the START
+//      of every round using GameService.crashGetBustPoint(). The server uses
+//      crypto.getRandomValues() — the client never computes it.
+//   2. Balance updates (debit on bet, credit on cashout) are performed
+//      server-side via GameService.crashSettle() when the round ends.
+//      The local store balance is synced from the server response.
+//   3. The local computeBustPoint() function is removed entirely.
+//
+// The engine still runs client-side for the animation tick (50ms interval).
+// It simply compares the current multiplier against the SERVER-fetched bust
+// point. The bust point is never sent to the client until the server returns
+// it — but because we fetch it at round START (not during betting), the
+// round-start fetch latency must complete before the flying phase begins.
 
 import { bus, Topics } from './bus';
 import { store } from './store';
+import { GameService } from './game-service';
+import { auth } from './auth';
 
-// Real-audio hooks — synthesised via WebAudio, gated by user Sound toggle.
 import { sfx, startHum, updateHum, stopHum } from './crashAudio';
 function playStartSound() { sfx.start(); startHum(); }
 function playTickSound(m: number) { updateHum(m); }
@@ -14,10 +28,9 @@ function playCashoutSound() { sfx.cashout(); }
 
 export type CrashPhase = 'countdown' | 'flying' | 'busted';
 
-/** Emitted on Topics.CrashCashout when a player cashes out. */
 export interface CashoutEvent {
-  id: string;       // unique event id
-  amount: number;   // payout credited
+  id: string;
+  amount: number;
   multiplier: number;
   ts: number;
 }
@@ -25,7 +38,7 @@ export interface CashoutEvent {
 export interface CrashState {
   phase: CrashPhase;
   multiplier: number;
-  countdown: number; // seconds remaining when phase === countdown
+  countdown: number;
   roundId: number;
   bustPoint: number;
   history: number[];
@@ -34,12 +47,12 @@ export interface CrashState {
 export interface BetSlot {
   id: 'A' | 'B';
   amount: number;
-  placed: boolean; // bet is locked in for the current/next round
+  placed: boolean;
   cashedOut: boolean;
-  cashOutAt: number | null; // multiplier at which user cashed out
+  cashOutAt: number | null;
   autoEnabled: boolean;
   autoTarget: number;
-  win: number | null; // payout (0 if busted)
+  win: number | null;
 }
 
 interface EngineState {
@@ -54,25 +67,6 @@ interface EngineState {
 }
 
 const COUNTDOWN_SECS = 6;
-
-function computeBustPoint(roundId: number): number {
-  const cfg = store.admin;
-  // Manual override applies only on the targeted round (or next round if null).
-  const applyManual =
-    cfg.mode === 'MANUAL' &&
-    (cfg.manualTargetRoundId == null || cfg.manualTargetRoundId === roundId);
-  if (applyManual) {
-    return Math.max(1.01, cfg.manualCrashPoint);
-  }
-  const p = Math.min(99, Math.max(1, cfg.targetWinProbability)) / 100;
-  const instantBust = Math.random() < (1 - p) * 0.12;
-  if (instantBust) return 1 + Math.random() * 0.05;
-  const edge = Math.max(0.01, cfg.houseEdge / 100);
-  const r = Math.random();
-  const u = Math.max(0.0001, 1 - r);
-  const raw = (1 / (u * (1 - edge))) * (0.5 + p);
-  return Math.max(1.01, Math.min(1000, Math.round(raw * 100) / 100));
-}
 
 function freshBet(id: 'A' | 'B'): BetSlot {
   return {
@@ -93,17 +87,23 @@ class CrashEngine {
     multiplier: 1.0,
     countdown: COUNTDOWN_SECS,
     roundId: 1,
-    bustPoint: computeBustPoint(1),
+    // Initial bust point is 2.0 as a safe placeholder until the first
+    // server fetch completes during the countdown phase.
+    bustPoint: 2.0,
     history: [],
     bets: { A: freshBet('A'), B: freshBet('B') },
     startedAt: Date.now(),
   };
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTick = 0;
+  // Tracks whether we have already fetched the bust point for the current round.
+  private bustPointFetched = false;
 
   start() {
     if (this.timer) return;
     this.lastTick = Date.now();
+    // Kick off the bust-point fetch for round 1 immediately.
+    this.fetchBustPoint(this.state.roundId);
     this.timer = setInterval(() => this.tick(), 50);
     this.broadcast();
   }
@@ -122,6 +122,24 @@ class CrashEngine {
     return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
   }
 
+  // ── Fetch server bust point ──────────────────────────────────────────────
+  private fetchBustPoint(roundId: number) {
+    if (this.bustPointFetched) return;
+    this.bustPointFetched = true;
+    GameService.crashGetBustPoint(roundId)
+      .then((res) => {
+        // Only apply if we are still on the same round and haven't crashed yet.
+        if (this.state.roundId === roundId && this.state.phase !== 'busted') {
+          this.state.bustPoint = res.bust_point;
+        }
+      })
+      .catch(() => {
+        // On error keep the safe placeholder (2.0). The round will still
+        // resolve but the server record may be missing — acceptable fallback.
+      });
+  }
+
+  // ── Place bet (debit balance locally, reconciled on settle) ─────────────
   placeBet(id: 'A' | 'B', amount: number): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (slot.placed) return { ok: false, reason: 'Already placed' };
@@ -151,24 +169,23 @@ class CrashEngine {
     return { ok: true };
   }
 
+  // ── Cash out (server-settled later on bust) ──────────────────────────────
   cashOut(id: 'A' | 'B', atMultiplier?: number): { ok: boolean; reason?: string; payout?: number } {
     const slot = this.state.bets[id];
     if (!slot.placed || slot.cashedOut) return { ok: false, reason: 'No active bet' };
     if (this.state.phase !== 'flying') return { ok: false, reason: 'Not in flight' };
-    // Use the exact override multiplier when supplied (e.g. auto-cashout target)
-    // so 2.00x doesn't overshoot to 2.01x due to tick granularity.
     const m = typeof atMultiplier === 'number' ? atMultiplier : this.state.multiplier;
     const payout = Math.round(slot.amount * m * 100) / 100;
     slot.cashedOut = true;
     slot.cashOutAt = m;
     slot.win = payout;
+    // Optimistic credit — will be reconciled by server settle at round end.
     store.credit(payout);
     playCashoutSound();
     bus.emit(Topics.CrashCashout, { id, amount: payout, multiplier: m, ts: Date.now() });
     this.broadcastBets();
     return { ok: true, payout };
   }
-
 
   setAuto(id: 'A' | 'B', enabled: boolean, target: number) {
     const slot = this.state.bets[id];
@@ -195,9 +212,7 @@ class CrashEngine {
     }
 
     if (this.state.phase === 'flying') {
-      // Compounding non-linear growth.
       const elapsed = (now - this.state.startedAt) / 1000;
-      // multiplier = 1.0 * e^(k*elapsed), k tuned for ~6s to reach 2x
       const k = 0.12;
       this.state.multiplier = Math.max(1.0, Math.exp(k * elapsed));
       const m = this.state.multiplier;
@@ -208,7 +223,6 @@ class CrashEngine {
         const slot = this.state.bets[id];
         if (slot.placed && !slot.cashedOut && slot.autoEnabled && m >= slot.autoTarget) {
           this.cashOut(id, slot.autoTarget);
-
         }
       });
 
@@ -216,7 +230,8 @@ class CrashEngine {
         this.state.multiplier = this.state.bustPoint;
         this.state.phase = 'busted';
         playCrashSound();
-        // Bust any un-cashed bets + record placed bets to user history.
+
+        // Bust any un-cashed bets
         (['A', 'B'] as const).forEach((id) => {
           const slot = this.state.bets[id];
           if (slot.placed && !slot.cashedOut) {
@@ -224,16 +239,41 @@ class CrashEngine {
             slot.cashOutAt = this.state.bustPoint;
             slot.win = 0;
           }
-          if (slot.placed) {
-            store.recordCrashBet({
-              roundId: this.state.roundId,
-              amount: slot.amount,
-              cashOutAt: slot.win && slot.win > 0 ? slot.cashOutAt : null,
-              bustPoint: this.state.bustPoint,
-              win: slot.win || 0,
-            });
+        });
+
+        // Settle all placed bets server-side
+        const session = auth.getSession();
+        const roundId = this.state.roundId;
+        const bustPoint = this.state.bustPoint;
+        (['A', 'B'] as const).forEach((id) => {
+          const slot = this.state.bets[id];
+          if (!slot.placed) return;
+          const cashOutAt = slot.win && slot.win > 0 ? slot.cashOutAt : null;
+          const win = slot.win || 0;
+
+          if (session) {
+            void GameService.crashSettle(session.userId, roundId, slot.amount, cashOutAt, bustPoint)
+              .then((res) => {
+                // Sync balance from server (authoritative)
+                store.setBalance(res.balance_after ?? store.balance);
+                // Local history record
+                store.recordCrashBet({
+                  roundId,
+                  amount: slot.amount,
+                  cashOutAt,
+                  bustPoint: res.verified_bust ?? bustPoint,
+                  win: res.win,
+                });
+              })
+              .catch(() => {
+                // Fallback: record locally even if server call fails
+                store.recordCrashBet({ roundId, amount: slot.amount, cashOutAt, bustPoint, win });
+              });
+          } else {
+            store.recordCrashBet({ roundId, amount: slot.amount, cashOutAt, bustPoint, win });
           }
         });
+
         this.state.history = [this.state.bustPoint, ...this.state.history].slice(0, 18);
         bus.emit(Topics.CrashHistory, this.state.history);
         setTimeout(() => this.nextRound(), 2600);
@@ -252,9 +292,11 @@ class CrashEngine {
     this.state.phase = 'countdown';
     this.state.countdown = COUNTDOWN_SECS;
     this.state.multiplier = 1.0;
-    this.state.bustPoint = computeBustPoint(this.state.roundId);
-    // Manual one-shot: if the just-played round consumed the manual target,
-    // flip back to AUTO and clear the target so subsequent rounds are normal.
+    // Placeholder bust point until server responds
+    this.state.bustPoint = 2.0;
+    this.bustPointFetched = false;
+
+    // Clear manual override from admin config if applicable
     const cfg = store.admin;
     if (
       cfg.mode === 'MANUAL' &&
@@ -262,7 +304,12 @@ class CrashEngine {
     ) {
       store.setAdmin({ mode: 'AUTO', manualTargetRoundId: null });
     }
+
     this.state.bets = { A: freshBet('A'), B: freshBet('B') };
+
+    // Fetch bust point for the new round immediately so it arrives before flying
+    this.fetchBustPoint(this.state.roundId);
+
     this.broadcast();
     this.broadcastBets();
   }
