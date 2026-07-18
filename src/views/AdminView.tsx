@@ -7,14 +7,10 @@ import {
   KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
-import { useStaff, useStaffSession } from '../lib/cmsHooks';
+import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
 import { cms, type PermissionKey } from '../lib/cms';
 import AdminLoginPage from '../components/AdminLoginPage';
-import {
-  supabaseStaffLogin,
-  supabaseUpdateStaffPassword,
-  supabaseGetTransactions,
-} from '../lib/supabaseIntegration';
+import { supabaseStaffLogin, supabaseUpdateStaffPassword } from '../lib/supabaseIntegration';
 import DashboardOverviewTab from './admin/DashboardOverviewTab';
 import FinanceTab from './admin/FinanceTab';
 import RequestsTab from './admin/RequestsTab';
@@ -30,15 +26,9 @@ import MarketingTab from './admin/MarketingTab';
 import NotificationsTab from './admin/NotificationsTab';
 import AutoGatewaysTab from './admin/AutoGatewaysTab';
 import GameAlgosTab, {
-  CrashHandlingPanel,
-  WingoHandlingPanel,
-  K3HandlingPanel,
-  FiveDHandlingPanel,
-  SunMoonHandlingPanel,
-  AviatorHandlingPanel,
-  TopRankingsAdminPanel,
-  OnlineCountPanel,
-  TopWinPaidOutPanel,
+  CrashHandlingPanel, WingoHandlingPanel, K3HandlingPanel,
+  FiveDHandlingPanel, SunMoonHandlingPanel, AviatorHandlingPanel,
+  TopRankingsAdminPanel, OnlineCountPanel, TopWinPaidOutPanel,
 } from './admin/GameAlgosTab';
 import GameSettingsTab from './admin/GameSettingsTab';
 import BanSectionTab from './admin/BanSectionTab';
@@ -61,36 +51,36 @@ type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationMa
 type GameHandlerKey = 'crash' | 'wingo' | 'k3' | 'fived' | 'sunvsmoon' | 'aviator';
 type FloatToast = { id: number; message: string; icon: 'deposit' | 'withdrawal' | 'support' };
 
-// ─── Sidebar tab list ────────────────────────────────────────────────────────
+// ─── Sidebar tabs ─────────────────────────────────────────────────────────────
 const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
-  { key: 'dashboard',           label: 'Dashboard',           icon: LayoutDashboard },
-  { key: 'finance',             label: 'Finance',             icon: DollarSign },
-  { key: 'requests',            label: 'Requests',            icon: RefreshCw },
-  { key: 'tickets',             label: 'Tickets',             icon: Headphones },
-  { key: 'users',               label: 'Users',               icon: Users },
-  { key: 'staff',               label: 'Staff',               icon: ShieldCheck },
-  { key: 'gateways',            label: 'Auto Gateways',       icon: Zap },
-  { key: 'algos',               label: 'Game Algos',          icon: Cpu },
-  { key: 'games',               label: 'Game Handlers',       icon: Settings },
-  { key: 'gameSettings',        label: 'Game Settings',       icon: Settings },
-  { key: 'history',             label: 'History',             icon: History },
-  { key: 'balanceHistory',      label: 'Balance History',     icon: BarChart2 },
-  { key: 'topRankings',         label: 'Top Rankings',        icon: Trophy },
-  { key: 'notifications',       label: 'Notifications',       icon: Bell },
-  { key: 'notificationManager', label: 'Notif. Manager',      icon: Bell },
-  { key: 'marketing',           label: 'Marketing',           icon: Megaphone },
-  { key: 'crm',                 label: 'CRM',                 icon: Users },
-  { key: 'email',               label: 'Email Manager',       icon: Mail },
-  { key: 'smtp',                label: 'SMTP',                icon: Server },
-  { key: 'currencies',          label: 'Currencies',          icon: Coins },
-  { key: 'paymentMethods',      label: 'Payment Methods',     icon: CreditCard },
-  { key: 'handlers',            label: 'Pay Handlers',        icon: Wallet },
-  { key: 'dynamicPages',        label: 'Dynamic Pages',       icon: FileText },
-  { key: 'banner',              label: 'Banner & Logo',       icon: Image },
-  { key: 'redeem',              label: 'Redeem Codes',        icon: Gift },
-  { key: 'signupBonus',         label: 'Signup Bonus',        icon: Gift },
-  { key: 'ban',                 label: 'Ban Section',         icon: ShieldBan },
-  { key: 'intercom',            label: 'Intercom',            icon: MessageSquare },
+  { key: 'dashboard',           label: 'Dashboard',        icon: LayoutDashboard },
+  { key: 'finance',             label: 'Finance',          icon: DollarSign },
+  { key: 'requests',            label: 'Requests',         icon: RefreshCw },
+  { key: 'tickets',             label: 'Tickets',          icon: Headphones },
+  { key: 'users',               label: 'Users',            icon: Users },
+  { key: 'staff',               label: 'Staff',            icon: ShieldCheck },
+  { key: 'gateways',            label: 'Auto Gateways',    icon: Zap },
+  { key: 'algos',               label: 'Game Algos',       icon: Cpu },
+  { key: 'games',               label: 'Game Handlers',    icon: Settings },
+  { key: 'gameSettings',        label: 'Game Settings',    icon: Settings },
+  { key: 'history',             label: 'History',          icon: History },
+  { key: 'balanceHistory',      label: 'Balance History',  icon: BarChart2 },
+  { key: 'topRankings',         label: 'Top Rankings',     icon: Trophy },
+  { key: 'notifications',       label: 'Notifications',    icon: Bell },
+  { key: 'notificationManager', label: 'Notif. Manager',   icon: Bell },
+  { key: 'marketing',           label: 'Marketing',        icon: Megaphone },
+  { key: 'crm',                 label: 'CRM',              icon: Users },
+  { key: 'email',               label: 'Email Manager',    icon: Mail },
+  { key: 'smtp',                label: 'SMTP',             icon: Server },
+  { key: 'currencies',          label: 'Currencies',       icon: Coins },
+  { key: 'paymentMethods',      label: 'Payment Methods',  icon: CreditCard },
+  { key: 'handlers',            label: 'Pay Handlers',     icon: Wallet },
+  { key: 'dynamicPages',        label: 'Dynamic Pages',    icon: FileText },
+  { key: 'banner',              label: 'Banner & Logo',    icon: Image },
+  { key: 'redeem',              label: 'Redeem Codes',     icon: Gift },
+  { key: 'signupBonus',         label: 'Signup Bonus',     icon: Gift },
+  { key: 'ban',                 label: 'Ban Section',      icon: ShieldBan },
+  { key: 'intercom',            label: 'Intercom',         icon: MessageSquare },
 ];
 
 const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.Element }[] = [
@@ -181,29 +171,20 @@ function NotifRow({ icon: Icon, label, count, onClick, accent }: {
 }
 
 // ─── Floating toast ───────────────────────────────────────────────────────────
-// Fixed to right-4 bottom-6 with min/max width so it never overflows the screen
 function FloatingToasts({ toasts, onDismiss }: { toasts: FloatToast[]; onDismiss: (id: number) => void }) {
   if (toasts.length === 0) return null;
   const MAP = {
-    deposit:    { Icon: Banknote,      color: 'text-emerald-400', bg: 'bg-slate-900 border-emerald-500/40' },
-    withdrawal: { Icon: TrendingDown,  color: 'text-red-400',     bg: 'bg-slate-900 border-red-500/40' },
-    support:    { Icon: MessageSquare, color: 'text-violet-400',  bg: 'bg-slate-900 border-violet-500/40' },
+    deposit:    { Icon: Banknote,      bg: 'bg-slate-900 border-emerald-500/40', color: 'text-emerald-400' },
+    withdrawal: { Icon: TrendingDown,  bg: 'bg-slate-900 border-red-500/40',     color: 'text-red-400' },
+    support:    { Icon: MessageSquare, bg: 'bg-slate-900 border-violet-500/40',  color: 'text-violet-400' },
   } as const;
   return (
-    <div
-      // right-4 + w-[300px] keeps the toast comfortably inside any screen ≥320 px
-      className="fixed bottom-6 right-4 z-[300] flex flex-col gap-2 w-[min(300px,calc(100vw-2rem))]"
-      style={{ pointerEvents: 'none' }}
-    >
+    <div className="fixed bottom-6 right-4 z-[300] flex flex-col gap-2 w-[min(300px,calc(100vw-2rem))]" style={{ pointerEvents: 'none' }}>
       {toasts.map((t) => {
-        const { Icon, color, bg } = MAP[t.icon];
+        const { Icon, bg, color } = MAP[t.icon];
         return (
-          <div
-            key={t.id}
-            onClick={() => onDismiss(t.id)}
-            style={{ pointerEvents: 'auto' }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl text-sm font-semibold text-white ${bg} cursor-pointer`}
-          >
+          <div key={t.id} onClick={() => onDismiss(t.id)} style={{ pointerEvents: 'auto' }}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl text-sm font-semibold text-white cursor-pointer ${bg}`}>
             <Bell className="w-4 h-4 text-white/60 shrink-0" />
             <Icon className={`w-4 h-4 shrink-0 ${color}`} />
             <span className="text-xs flex-1">{t.message}</span>
@@ -215,7 +196,7 @@ function FloatingToasts({ toasts, onDismiss }: { toasts: FloatToast[]; onDismiss
   );
 }
 
-// ─── Notification bell (shared for admin + all staff roles) ──────────────────
+// ─── Notification bell ────────────────────────────────────────────────────────
 function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSupport, onNavigate }: {
   totalUnread: number; pendingDeposits: number; pendingWithdrawals: number;
   unreadSupport: number; onNavigate: (tab: Tab) => void;
@@ -236,31 +217,26 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
         aria-label="Notifications">
         <Bell className="w-4 h-4 text-slate-300" />
         {totalUnread > 0 && (
-          // badge positioned so it doesn't clip on any side
           <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-[20px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center border-2 border-slate-900 shadow-lg">
             {totalUnread > 99 ? '99+' : totalUnread}
           </span>
         )}
       </button>
-
       {open && (
-        // right-0 aligns with button, max-w prevents overflow on small screens
         <div className="absolute right-0 top-11 w-[280px] max-w-[calc(100vw-4rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] p-2">
           <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-3 py-1.5 flex items-center gap-1.5">
             <Bell className="w-3 h-3" /> Notifications
           </p>
           {pendingDeposits > 0 && (
-            <NotifRow icon={Banknote}      accent="text-emerald-400" label="Pending deposits"         count={pendingDeposits}    onClick={() => { onNavigate('finance');  setOpen(false); }} />
+            <NotifRow icon={Banknote}      accent="text-emerald-400" label="Pending deposits"        count={pendingDeposits}    onClick={() => { onNavigate('finance');  setOpen(false); }} />
           )}
           {pendingWithdrawals > 0 && (
-            <NotifRow icon={TrendingDown}  accent="text-red-400"     label="Pending withdrawals"      count={pendingWithdrawals} onClick={() => { onNavigate('requests'); setOpen(false); }} />
+            <NotifRow icon={TrendingDown}  accent="text-red-400"     label="Pending withdrawals"     count={pendingWithdrawals} onClick={() => { onNavigate('requests'); setOpen(false); }} />
           )}
           {unreadSupport > 0 && (
             <NotifRow icon={MessageSquare} accent="text-violet-400"  label="Unread support messages" count={unreadSupport}      onClick={() => { cms.markSupportRead(); setOpen(false); }} />
           )}
-          {totalUnread === 0 && (
-            <p className="text-xs text-slate-500 text-center py-4">No pending notifications</p>
-          )}
+          {totalUnread === 0 && <p className="text-xs text-slate-500 text-center py-4">No pending notifications</p>}
         </div>
       )}
     </div>
@@ -279,18 +255,24 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   const toastCounterRef                    = useRef(0);
   const profileRef                         = useRef<HTMLDivElement>(null);
 
-  const staff = useStaff();
-  const me    = staff.find((s) => s.id === sessionId);
+  const staff   = useStaff();
+  const me      = staff.find((s) => s.id === sessionId);
 
-  // ── SUPABASE live notification counts (poll every 20s) ────────────────────
-  const [pendingDeposits,    setPendingDeposits]    = useState(0);
-  const [pendingWithdrawals, setPendingWithdrawals] = useState(0);
-  const [unreadSupport,      setUnreadSupport]      = useState(0);
-  const totalUnread = pendingDeposits + pendingWithdrawals + unreadSupport;
+  // ── REALTIME counts via CMS hooks (Supabase realtime → cms store → bus → hook) ──
+  // No polling needed — cms.ts already has realtime Supabase channel subscriptions.
+  // When any transaction changes in DB, cms auto-syncs and bus fires Finance event.
+  const finance = useFinance();
+  const support = useSupport();
 
-  const prevDepRef = useRef(0);
-  const prevWdRef  = useRef(0);
-  const prevSupRef = useRef(0);
+  const pendingDeposits    = finance.deposits.filter((d) => d.status === 'pending' || d.status === 'processing').length;
+  const pendingWithdrawals = finance.withdrawals.filter((w) => w.status === 'pending' || w.status === 'processing').length;
+  const unreadSupport      = support.filter((s) => !s.read).length;
+  const totalUnread        = pendingDeposits + pendingWithdrawals + unreadSupport;
+
+  // ── Floating toast when count INCREASES ──────────────────────────────────────
+  const prevDepRef = useRef(pendingDeposits);
+  const prevWdRef  = useRef(pendingWithdrawals);
+  const prevSupRef = useRef(unreadSupport);
 
   const pushToast = useCallback((message: string, icon: FloatToast['icon']) => {
     const id = ++toastCounterRef.current;
@@ -298,44 +280,25 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     setTimeout(() => setFloatToasts((prev) => prev.filter((t) => t.id !== id)), 2000);
   }, []);
 
-  const fetchCounts = useCallback(async () => {
-    try {
-      const txns = await supabaseGetTransactions();
-      const dep = txns.filter((t) => t.type === 'deposit'    && (t.status === 'pending' || t.status === 'processing')).length;
-      const wd  = txns.filter((t) => t.type === 'withdrawal' && (t.status === 'pending' || t.status === 'processing')).length;
-      // Support unread from CMS store (Supabase tickets don't have "read" tracking in supabase)
-      // so we keep only deposit/withdrawal from supabase
-      if (dep > prevDepRef.current) pushToast(`${dep - prevDepRef.current} new deposit request!`, 'deposit');
-      if (wd  > prevWdRef.current)  pushToast(`${wd  - prevWdRef.current} new withdrawal request!`, 'withdrawal');
-      prevDepRef.current = dep;
-      prevWdRef.current  = wd;
-      setPendingDeposits(dep);
-      setPendingWithdrawals(wd);
-    } catch { /* silent */ }
-  }, [pushToast]);
-
-  // Run once on mount + poll every 20 seconds
   useEffect(() => {
-    void fetchCounts();
-    const timer = setInterval(() => void fetchCounts(), 20000);
-    return () => clearInterval(timer);
-  }, [fetchCounts]);
+    if (pendingDeposits > prevDepRef.current)
+      pushToast(`${pendingDeposits - prevDepRef.current} new deposit request!`, 'deposit');
+    prevDepRef.current = pendingDeposits;
+  }, [pendingDeposits, pushToast]);
 
-  // Support unread from cms (local) — shown in bell but not from supabase
   useEffect(() => {
-    const tick = () => {
-      // read support count from cms store directly
-      const count = (cms as unknown as { support?: { read?: boolean }[] }).support?.filter((s) => !s.read).length ?? 0;
-      if (count > prevSupRef.current) pushToast(`${count - prevSupRef.current} new support message!`, 'support');
-      prevSupRef.current = count;
-      setUnreadSupport(count);
-    };
-    tick();
-    const id = setInterval(tick, 5000);
-    return () => clearInterval(id);
-  }, [pushToast]);
+    if (pendingWithdrawals > prevWdRef.current)
+      pushToast(`${pendingWithdrawals - prevWdRef.current} new withdrawal request!`, 'withdrawal');
+    prevWdRef.current = pendingWithdrawals;
+  }, [pendingWithdrawals, pushToast]);
 
-  // admin-navigate event from other components
+  useEffect(() => {
+    if (unreadSupport > prevSupRef.current)
+      pushToast(`${unreadSupport - prevSupRef.current} new support message!`, 'support');
+    prevSupRef.current = unreadSupport;
+  }, [unreadSupport, pushToast]);
+
+  // admin-navigate event
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail as Tab;
@@ -368,15 +331,12 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   const navigate = (t: Tab) => { setTab(t); setSidebarOpen(false); };
   const ActiveGamePanel = GAME_HANDLER_TABS.find((g) => g.key === gameHandlerTab)?.Panel ?? CrashHandlingPanel;
 
-  // ── Sidebar nav ────────────────────────────────────────────────────────────
   const SidebarNav = () => (
     <nav className="flex-1 overflow-y-auto py-2 scrollbar-thin">
       {TABS.map((t) => (
         <button key={t.key} onClick={() => navigate(t.key)}
           className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
-            tab === t.key
-              ? 'bg-violet-600/20 text-violet-300 border-r-2 border-violet-500'
-              : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+            tab === t.key ? 'bg-violet-600/20 text-violet-300 border-r-2 border-violet-500' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
           }`}>
           <t.icon className="w-4 h-4 shrink-0" />
           <span>{t.label}</span>
@@ -386,20 +346,10 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   );
 
   return (
-    /**
-     * Layout:
-     *   fixed header spanning 100vw at the very top (z-50)
-     *   pt-14 body = content starts below header
-     *   sidebar + main side-by-side filling remaining height
-     */
     <div className="flex flex-col min-h-screen h-screen bg-slate-950 text-white overflow-hidden">
 
-      {/* ══ HEADER — fixed, full 100vw, z-50 ══════════════════════════════════ */}
-      <header
-        className="fixed top-0 left-0 right-0 z-50 flex items-center bg-slate-900 border-b border-slate-800"
-        style={{ height: '56px' }}
-      >
-        {/* Left – hamburger + logo */}
+      {/* ══ FIXED FULL-WIDTH HEADER ══ */}
+      <header className="fixed top-0 left-0 right-0 z-50 flex items-center bg-slate-900 border-b border-slate-800" style={{ height: '56px' }}>
         <div className="flex items-center gap-3 pl-4 pr-2">
           <button className="md:hidden text-slate-400 hover:text-white" onClick={() => setSidebarOpen(true)}>
             <Menu className="w-5 h-5" />
@@ -407,14 +357,9 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           <ShieldCheck className="w-5 h-5 text-violet-400 shrink-0" />
           <span className="font-bold text-sm tracking-wide text-white hidden sm:block select-none">Admin Panel</span>
         </div>
-
-        {/* Spacer */}
         <div className="flex-1" />
-
-        {/* Right – bell + profile, pushed to the very right edge */}
+        {/* Right: bell + profile */}
         <div className="flex items-center gap-3 pr-4">
-
-          {/* Notification bell */}
           <NotifBell
             totalUnread={totalUnread}
             pendingDeposits={pendingDeposits}
@@ -422,13 +367,10 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
             unreadSupport={unreadSupport}
             onNavigate={navigate}
           />
-
-          {/* Profile button — no arrow */}
+          {/* Profile — no arrow */}
           <div className="relative" ref={profileRef}>
-            <button
-              onClick={() => { setProfileOpen(v => !v); setShowPwForm(false); }}
-              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 pl-1.5 pr-3 py-1.5 rounded-lg transition-colors"
-            >
+            <button onClick={() => { setProfileOpen(v => !v); setShowPwForm(false); }}
+              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 pl-1.5 pr-3 py-1.5 rounded-lg transition-colors">
               <div className="w-7 h-7 rounded-full bg-violet-600 grid place-items-center text-xs font-bold shrink-0">
                 {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
               </div>
@@ -436,10 +378,8 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
                 {me?.name ?? me?.email ?? 'Admin'}
               </span>
             </button>
-
             {profileOpen && (
               <div className="absolute right-0 top-full mt-2 w-[272px] max-w-[calc(100vw-2rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] overflow-hidden">
-                {/* User info */}
                 <div className="px-4 py-3 border-b border-slate-800">
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-violet-600 grid place-items-center text-base font-bold shrink-0">
@@ -454,8 +394,6 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
                     </div>
                   </div>
                 </div>
-
-                {/* Change password */}
                 <div className="px-4 py-2 border-b border-slate-800">
                   <button onClick={() => setShowPwForm(v => !v)}
                     className="w-full flex items-center gap-2 text-sm text-slate-300 hover:text-white py-1 transition-colors">
@@ -465,8 +403,6 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
                     <PasswordChangeForm staffId={me.id} onDone={() => { setShowPwForm(false); setProfileOpen(false); }} />
                   )}
                 </div>
-
-                {/* Logout */}
                 <div className="px-4 py-2">
                   <button onClick={() => cms.staffLogout()}
                     className="w-full flex items-center gap-2 text-sm text-red-400 hover:text-red-300 py-1 transition-colors">
@@ -479,9 +415,8 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
         </div>
       </header>
 
-      {/* ══ BODY (below fixed header) ════════════════════════════════════════ */}
+      {/* ══ BODY ══ */}
       <div className="flex flex-1 overflow-hidden" style={{ paddingTop: '56px' }}>
-
         {/* Desktop sidebar */}
         <aside className="hidden md:flex w-56 flex-col border-r border-slate-800 bg-slate-900 shrink-0 h-full">
           <SidebarNav />
@@ -568,15 +503,9 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
         </main>
       </div>
 
-      {/* Support overlays */}
       <TicketAlertOverlay />
       <AdminSupportNotification />
-
-      {/* Floating toasts — fixed right-4, fully inside screen */}
-      <FloatingToasts
-        toasts={floatToasts}
-        onDismiss={(id) => setFloatToasts((prev) => prev.filter((t) => t.id !== id))}
-      />
+      <FloatingToasts toasts={floatToasts} onDismiss={(id) => setFloatToasts((prev) => prev.filter((t) => t.id !== id))} />
     </div>
   );
 }
