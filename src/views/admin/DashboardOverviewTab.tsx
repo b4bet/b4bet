@@ -1,23 +1,28 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Users, TrendingUp, TrendingDown, Clock, CheckCircle2, DollarSign,
-  Activity, RefreshCw, Gamepad2, BarChart3, Wifi,
+  Activity, RefreshCw, Gamepad2, BarChart3, Wifi, Gift, ShieldAlert,
+  Plus, Minus,
 } from 'lucide-react';
 import { supabase } from '../../integrations/supabase/client';
-import { supabaseGetUsers, supabaseGetTransactions } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
-  return '\u20B9' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 interface DashStats {
-  totalUsers: number;
-  totalDeposits: number;
-  totalWithdrawals: number;
-  pendingDeposits: number;
-  pendingWithdrawals: number;
-  profit: number;
-  totalTxns: number;
+  total_users: number;
+  active_users: number;
+  banned_users: number;
+  total_deposits: number;
+  total_withdrawals: number;
+  pending_deposits: number;
+  pending_withdrawals: number;
+  total_bonus_credited: number;
+  total_bet_volume: number;
+  total_win_paid: number;
+  game_profit: number;
+  total_transactions: number;
 }
 
 export default function DashboardOverviewTab() {
@@ -29,29 +34,9 @@ export default function DashboardOverviewTab() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [users, txns] = await Promise.all([
-        supabaseGetUsers(),
-        supabaseGetTransactions(),
-      ]);
-
-      const totalDeposits = txns
-        .filter((t) => t.type === 'deposit' && (t.status === 'completed' || t.status === 'approved'))
-        .reduce((s, t) => s + t.amount, 0);
-      const totalWithdrawals = txns
-        .filter((t) => t.type === 'withdrawal' && (t.status === 'completed' || t.status === 'approved'))
-        .reduce((s, t) => s + t.amount, 0);
-      const pendingDeposits = txns.filter((t) => t.type === 'deposit' && (t.status === 'pending' || t.status === 'processing')).length;
-      const pendingWithdrawals = txns.filter((t) => t.type === 'withdrawal' && (t.status === 'pending' || t.status === 'processing')).length;
-
-      setStats({
-        totalUsers: users.length,
-        totalDeposits,
-        totalWithdrawals,
-        pendingDeposits,
-        pendingWithdrawals,
-        profit: totalDeposits - totalWithdrawals,
-        totalTxns: txns.length,
-      });
+      const { data, error } = await supabase.rpc('admin_get_dashboard_stats');
+      if (error) throw error;
+      setStats(data as DashStats);
       setLastRefresh(new Date());
     } catch (e) {
       console.error('DashboardOverviewTab load error:', e);
@@ -60,25 +45,19 @@ export default function DashboardOverviewTab() {
     }
   }, []);
 
-  // Initial load
   useEffect(() => { void load(); }, [load]);
 
-  // Supabase Realtime — auto-refresh on any transactions or profiles change
   useEffect(() => {
     const channel = supabase
       .channel('dashboard_overview_rt')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
-        void load();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
-        void load();
-      })
-      .subscribe((status) => {
-        setRealtimeConnected(status === 'SUBSCRIBED');
-      });
-
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => { void load(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { void load(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bets' }, () => { void load(); })
+      .subscribe((status) => { setRealtimeConnected(status === 'SUBSCRIBED'); });
     return () => { void supabase.removeChannel(channel); };
   }, [load]);
+
+  const netProfit = stats ? stats.total_deposits - stats.total_withdrawals + stats.game_profit - stats.total_bonus_credited : 0;
 
   return (
     <div className="space-y-6">
@@ -111,26 +90,62 @@ export default function DashboardOverviewTab() {
 
       {loading && !stats ? (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {Array.from({ length: 8 }).map((_, i) => (
+          {Array.from({ length: 12 }).map((_, i) => (
             <div key={i} className="panel p-4 h-24 animate-pulse bg-slatepanel-800" />
           ))}
         </div>
       ) : stats ? (
         <>
-          {/* Primary KPI row */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard label="Total Users" value={stats.totalUsers.toString()} icon={Users} color="text-neon-300" sub="Registered profiles" />
-            <StatCard label="Total Deposits" value={fmt(stats.totalDeposits)} icon={TrendingUp} color="text-emeraldwin-300" sub="Completed deposits" />
-            <StatCard label="Total Withdrawals" value={fmt(stats.totalWithdrawals)} icon={TrendingDown} color="text-coral-300" sub="Completed withdrawals" />
-            <StatCard label="Platform Profit" value={fmt(stats.profit)} icon={DollarSign} color={stats.profit >= 0 ? 'text-emeraldwin-300' : 'text-coral-300'} sub="Deposits \u2212 Withdrawals" />
+          {/* Users row */}
+          <div>
+            <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Users</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard label="Total Users"   value={stats.total_users.toString()}  icon={Users}       color="text-neon-300"        sub="Registered profiles" />
+              <StatCard label="Active Users"  value={stats.active_users.toString()} icon={Activity}    color="text-emeraldwin-300" sub="Not banned" />
+              <StatCard label="Banned Users"  value={stats.banned_users.toString()} icon={ShieldAlert} color="text-coral-300"       sub="Restricted accounts" highlight={stats.banned_users > 0} />
+              <StatCard label="Total Txns"    value={stats.total_transactions.toString()} icon={BarChart3} color="text-blue-300"   sub="All transactions" />
+            </div>
           </div>
 
-          {/* Secondary KPI row */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard label="Pending Deposits" value={stats.pendingDeposits.toString()} icon={Clock} color="text-amber-300" sub="Awaiting approval" highlight={stats.pendingDeposits > 0} />
-            <StatCard label="Pending Withdrawals" value={stats.pendingWithdrawals.toString()} icon={Clock} color="text-amber-300" sub="Awaiting approval" highlight={stats.pendingWithdrawals > 0} />
-            <StatCard label="Total Transactions" value={stats.totalTxns.toString()} icon={BarChart3} color="text-blue-300" sub="All-time txn count" />
-            <StatCard label="Status" value="Live" icon={Activity} color="text-emeraldwin-300" sub="Supabase Realtime" />
+          {/* Finance row */}
+          <div>
+            <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Finance</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard label="Total Deposits"     value={fmt(stats.total_deposits)}     icon={TrendingUp}   color="text-emeraldwin-300" sub="Completed only" />
+              <StatCard label="Total Withdrawals"  value={fmt(stats.total_withdrawals)}  icon={TrendingDown} color="text-coral-300"       sub="Completed only" />
+              <StatCard label="Pending Deposits"   value={stats.pending_deposits.toString()} icon={Clock}   color="text-amber-300"      sub="Awaiting approval" highlight={stats.pending_deposits > 0} />
+              <StatCard label="Pending Withdrawals" value={stats.pending_withdrawals.toString()} icon={Clock} color="text-amber-300"  sub="Awaiting approval" highlight={stats.pending_withdrawals > 0} />
+            </div>
+          </div>
+
+          {/* Profit breakdown */}
+          <div>
+            <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Profit Breakdown</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard label="Game Profit"     value={fmt(stats.game_profit)}           icon={Gamepad2}     color={stats.game_profit >= 0 ? 'text-neon-300' : 'text-coral-300'}     sub="Bets − Wins" />
+              <StatCard label="Bonus Credited"  value={fmt(stats.total_bonus_credited)}  icon={Gift}         color="text-amber-300"    sub="Signup + Manual" />
+              <StatCard label="Bet Volume"      value={fmt(stats.total_bet_volume)}      icon={Plus}         color="text-blue-300"     sub="Total wagered" />
+              <StatCard label="Net Platform Profit" value={fmt(netProfit)}               icon={DollarSign}   color={netProfit >= 0 ? 'text-emeraldwin-300' : 'text-coral-300'} sub="Deposits − Withdrawals + Game − Bonus" />
+            </div>
+          </div>
+
+          {/* Profit formula */}
+          <div className="panel p-4 border border-borderline-900">
+            <h3 className="text-xs font-display font-bold text-white mb-3 flex items-center gap-2">
+              <DollarSign className="w-4 h-4 text-neon-300" /> Net Profit Formula
+            </h3>
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="px-2 py-1 rounded-lg bg-emeraldwin-500/10 border border-emeraldwin-500/20 text-emeraldwin-300 font-mono font-bold">{fmt(stats.total_deposits)}</span>
+              <Minus className="w-3 h-3 text-slate-500" />
+              <span className="px-2 py-1 rounded-lg bg-coral-500/10 border border-coral-500/20 text-coral-300 font-mono font-bold">{fmt(stats.total_withdrawals)}</span>
+              <Plus className="w-3 h-3 text-slate-500" />
+              <span className="px-2 py-1 rounded-lg bg-neon-500/10 border border-neon-500/20 text-neon-300 font-mono font-bold">{fmt(stats.game_profit)}</span>
+              <Minus className="w-3 h-3 text-slate-500" />
+              <span className="px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 font-mono font-bold">{fmt(stats.total_bonus_credited)}</span>
+              <span className="text-slate-500 text-xs">=</span>
+              <span className={`px-3 py-1 rounded-lg border font-display font-extrabold text-base ${netProfit >= 0 ? 'bg-emeraldwin-500/10 border-emeraldwin-500/30 text-emeraldwin-300' : 'bg-coral-500/10 border-coral-500/30 text-coral-300'}`}>{fmt(netProfit)}</span>
+            </div>
+            <p className="text-[10px] text-slate-600 mt-2">Deposits − Withdrawals + Game Profit − Bonuses = Net Profit</p>
           </div>
 
           {/* Quick links */}
@@ -139,10 +154,10 @@ export default function DashboardOverviewTab() {
               <Gamepad2 className="w-4 h-4 text-neon-300" /> Quick Actions
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <QuickAction label="Finance Overview" icon={TrendingUp} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'finance' }))} />
-              <QuickAction label="Pending Requests" icon={Clock} badge={stats.pendingDeposits + stats.pendingWithdrawals} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'requests' }))} />
-              <QuickAction label="All Users" icon={Users} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'users' }))} />
-              <QuickAction label="Support Tickets" icon={CheckCircle2} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'tickets' }))} />
+              <QuickAction label="Finance Overview"  icon={TrendingUp}   onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'finance' }))} />
+              <QuickAction label="Pending Requests"  icon={Clock}        badge={stats.pending_deposits + stats.pending_withdrawals} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'requests' }))} />
+              <QuickAction label="All Users"         icon={Users}        onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'users' }))} />
+              <QuickAction label="Support Tickets"   icon={CheckCircle2} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'tickets' }))} />
             </div>
           </div>
         </>
@@ -155,19 +170,15 @@ export default function DashboardOverviewTab() {
   );
 }
 
-function StatCard({
-  label, value, icon: Icon, color, sub, highlight,
-}: {
+function StatCard({ label, value, icon: Icon, color, sub, highlight }: {
   label: string; value: string; icon: typeof Users;
   color: string; sub?: string; highlight?: boolean;
 }) {
   return (
-    <div className={`panel p-4 transition-all ${
-      highlight ? 'ring-1 ring-amber-500/50 bg-amber-500/5' : ''
-    }`}>
+    <div className={`panel p-4 transition-all ${highlight ? 'ring-1 ring-amber-500/50 bg-amber-500/5' : ''}`}>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide">{label}</span>
-        <Icon className={`w-4 h-4 ${color}`} />
+        <span className="text-[11px] text-slate-500 font-semibold uppercase tracking-wide truncate pr-1">{label}</span>
+        <Icon className={`w-4 h-4 flex-shrink-0 ${color}`} />
       </div>
       <p className={`text-xl font-display font-extrabold tabular ${color}`}>{value}</p>
       {sub && <p className="text-[11px] text-slate-600 mt-0.5">{sub}</p>}
