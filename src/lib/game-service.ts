@@ -11,7 +11,7 @@ const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface CrashBustResult    { bust_point: number; }
-export interface CrashSettleResult  { success: boolean; win: number; verified_bust: number | null; }
+export interface CrashSettleResult  { success: boolean; win: number; verified_bust: number | null; balance_after: number; }
 export interface MinesStartResult   { success: boolean; session_id: string; balance_after: number; grid_size: number; mine_count: number; }
 export interface MinesRevealResult  { success: boolean; is_mine: boolean; gems_found: number; current_multiplier: number; next_multiplier: number; mine_positions?: number[]; }
 export interface MinesCashoutResult { success: boolean; payout: number; multiplier: number; balance_after: number; mine_positions: number[]; }
@@ -59,7 +59,8 @@ export const GameService = {
 
   /**
    * Crash — record a played bet after the round ends.
-   * Server verifies bust_point against its stored value.
+   * Server verifies bust_point against its stored value and atomically
+   * credits winnings. Returns updated balance_after.
    */
   crashSettle(userId: string, roundId: number, amount: number, cashOutAt: number | null, bustPoint: number): Promise<CrashSettleResult> {
     const won = cashOutAt !== null && cashOutAt <= bustPoint;
@@ -106,14 +107,16 @@ export const GameService = {
   },
 
   /**
-   * Sun vs Moon — settle a player bet. Server deducts stake and credits winnings.
+   * Sun vs Moon — settle a player bet. Server reconciles balance after
+   * the client's optimistic stake debit.
    */
   sunMoonSettle(userId: string, roundId: number, bet: "sun" | "moon" | "tie", stake: number): Promise<SunMoonSettleResult> {
     return post<SunMoonSettleResult>({ game_type: "sunvsmoon_settle", user_id: userId, round_id: roundId, bet, stake });
   },
 
   /**
-   * Trading — settle a binary bet. Server compares entry/exit prices, updates balance.
+   * Trading — settle a binary bet. Server compares entry/exit prices,
+   * reconciles balance after the client's optimistic stake debit.
    */
   tradingSettle(
     userId: string,
