@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { LogIn, Eye, EyeOff, ShieldAlert } from 'lucide-react';
+import { LogIn, Eye, EyeOff, ShieldAlert, Bug } from 'lucide-react';
 import { supabaseStaffLogin } from '../lib/supabaseIntegration';
+import { supabase } from '../integrations/supabase/client';
 import { cms } from '../lib/cms';
 import type { StaffRole, PermissionKey } from '../lib/cms';
 
@@ -23,6 +24,8 @@ export default function AdminLoginPage() {
   const [showPwd, setShowPwd] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [debugInfo, setDebugInfo] = useState<string | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,11 +35,35 @@ export default function AdminLoginPage() {
     }
     setLoading(true);
     setError('');
+    setDebugInfo(null);
     try {
       const hash = await sha256Hex(password.trim());
-      const acc = await supabaseStaffLogin(email.trim().toLowerCase(), hash);
+      const emailLower = email.trim().toLowerCase();
+      
+      // Try the RPC first
+      const acc = await supabaseStaffLogin(emailLower, hash);
+      
       if (!acc) {
-        setError('Invalid email or password.');
+        // Try to get more info about why login failed
+        const { data: rpcData, error: rpcError } = await supabase.rpc('admin_staff_login', {
+          p_email: emailLower,
+          p_password_hash: hash,
+        });
+        
+        let debugMsg = `Email: ${emailLower}\nHash (SHA-256): ${hash.slice(0, 16)}...`;
+        if (rpcError) {
+          debugMsg += `\nRPC Error: ${rpcError.message} (${rpcError.code})`;
+          // Check if RPC doesn't exist
+          if (rpcError.code === '42883' || rpcError.message.includes('does not exist')) {
+            setError('Admin RPC function not found in database. Please check Supabase setup.');
+          } else {
+            setError(`Login failed: ${rpcError.message}`);
+          }
+        } else {
+          debugMsg += `\nRPC returned: ${JSON.stringify(rpcData)}`;
+          setError('Invalid email or password.');
+        }
+        setDebugInfo(debugMsg);
         return;
       }
 
@@ -72,8 +99,10 @@ export default function AdminLoginPage() {
 
       // Set session by ID (string) — this is what cms.setStaffSession expects
       cms.setStaffSession(acc.id);
-    } catch {
-      setError('Login failed. Please try again.');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Login error: ${msg}`);
+      setDebugInfo(`Exception: ${msg}`);
     } finally {
       setLoading(false);
     }
@@ -113,7 +142,7 @@ export default function AdminLoginPage() {
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
+                placeholder="········"
                 className="input w-full pr-10"
                 disabled={loading}
               />
@@ -128,9 +157,26 @@ export default function AdminLoginPage() {
           </div>
 
           {error && (
-            <p className="text-sm text-coral-400 bg-coral-500/10 border border-coral-500/30 rounded-lg px-3 py-2">
-              {error}
-            </p>
+            <div className="space-y-2">
+              <p className="text-sm text-coral-400 bg-coral-500/10 border border-coral-500/30 rounded-lg px-3 py-2">
+                {error}
+              </p>
+              {debugInfo && (
+                <button
+                  type="button"
+                  onClick={() => setShowDebug((o) => !o)}
+                  className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-400"
+                >
+                  <Bug className="w-3 h-3" />
+                  {showDebug ? 'Hide debug info' : 'Show debug info'}
+                </button>
+              )}
+              {showDebug && debugInfo && (
+                <pre className="text-[10px] text-slate-500 bg-midnight-950 border border-borderline-900 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap">
+                  {debugInfo}
+                </pre>
+              )}
+            </div>
           )}
 
           <button

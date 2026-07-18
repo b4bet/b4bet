@@ -45,15 +45,14 @@ export default function App() {
   });
   const [notifOpen, setNotifOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
-  // spec §8: Live Chat — SupportChat overlay state
   const [supportChatOpen, setSupportChatOpen] = useState(false);
 
   // Auth modal state
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
 
-    useEffect(() => {
-    const off = bus.on('auth:open_modal', (payload: any) => {
+  useEffect(() => {
+    const off = bus.on('auth:open_modal', (payload: unknown) => {
       setAuthModalMode(payload === 'signup' ? 'signup' : 'login');
       setAuthModalOpen(true);
     });
@@ -67,7 +66,6 @@ export default function App() {
 
   const navigate = (r: Route) => setRoute(r);
 
-  // Listen for bus-emitted open requests (e.g. from ProfileView fallback)
   useEffect(() => {
     const off = bus.on('ui:open_support_chat', () => setSupportChatOpen(true));
     return off;
@@ -79,13 +77,8 @@ export default function App() {
     startAllPersistentGameEngines();
   }, []);
 
-  // All games now show bottom nav
-  const isFullscreen = false;
-
   const showHeader   = route !== 'admin';
   const showBottomNav = route !== 'admin';
-
-  const canGoBack = false;
 
   return (
     <div className="min-h-screen bg-midnight-900 text-white font-sans">
@@ -96,7 +89,7 @@ export default function App() {
         <Header
           onOpenNotifications={() => setNotifOpen(true)}
           onOpenWallet={() => setWalletOpen(true)}
-          onBack={canGoBack ? () => navigate('home') : undefined}
+          onBack={undefined}
           onOpenAuthModal={openAuthModal}
           onNavigate={navigate}
         />
@@ -122,28 +115,13 @@ export default function App() {
         {route === 'history'   && <HistoryView onNavigate={navigate} />}
         {route === 'ludo'      && <LudoView />}
 
-        {/* All round games always mounted — rounds never reset */}
-        {route === 'crash' && (
-          <CrashView />
-        )}
-        {route === 'aviator' && (
-          <AviatorView />
-        )}
-        {route === 'wingo' && (
-          <WingoView />
-        )}
-        {route === 'k3' && (
-          <K3View />
-        )}
-        {route === 'fived' && (
-          <FiveDView />
-        )}
-        {route === 'sunvsmoon' && (
-          <SunVsMoonView />
-        )}
-        {route === 'trading' && (
-          <TradingGameView />
-        )}
+        {route === 'crash' && <CrashView />}
+        {route === 'aviator' && <AviatorView />}
+        {route === 'wingo' && <WingoView />}
+        {route === 'k3' && <K3View />}
+        {route === 'fived' && <FiveDView />}
+        {route === 'sunvsmoon' && <SunVsMoonView />}
+        {route === 'trading' && <TradingGameView />}
       </main>
 
       {showBottomNav && (
@@ -161,17 +139,14 @@ export default function App() {
         onOpenSupport={() => { setWalletOpen(false); setSupportChatOpen(true); }}
         onOpenAuthModal={openAuthModal}
       />
-      {/* spec §8: Live Chat — SupportChat overlay always mounted, visibility toggled */}
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
 
-      {/* Floating Authentication Modal */}
       <AuthModal
         open={authModalOpen}
         initialMode={authModalMode}
         onClose={() => setAuthModalOpen(false)}
       />
 
-      {/* Admin/staff: incoming user support ticket notification popup */}
       {staffSession && <AdminSupportNotification />}
     </div>
   );

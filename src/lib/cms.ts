@@ -321,9 +321,18 @@ class Cms {
 
   async syncStaffFromSupabase() {
     try {
-      // Use the SECURITY DEFINER RPC - works without auth.uid()
-      const { data, error } = await supabase.rpc('get_all_staff');
-      if (error) { console.warn('[cms] syncStaff error:', error.message); return; }
+      // Try admin_get_staff first (same name as supabaseIntegration.ts uses)
+      const { data, error } = await supabase.rpc('admin_get_staff');
+      if (error) {
+        // Fallback: try get_all_staff
+        const { data: data2, error: error2 } = await supabase.rpc('get_all_staff');
+        if (error2) { console.warn('[cms] syncStaff error:', error2.message); return; }
+        if (data2 && Array.isArray(data2)) {
+          this.staff = (data2 as Array<Record<string, unknown>>).filter(r => r.is_active).map(mapSupabaseStaff);
+          this.emitStaff();
+        }
+        return;
+      }
       if (data && Array.isArray(data)) {
         this.staff = (data as Array<Record<string, unknown>>).filter(r => r.is_active).map(mapSupabaseStaff);
         this.emitStaff();
@@ -333,7 +342,6 @@ class Cms {
 
   async syncTransactionsFromSupabase() {
     try {
-      // Use p_limit (not p_type - that version was removed)
       const { data, error } = await supabase.rpc('admin_get_transactions', { p_limit: 500 });
       if (error) { console.warn('[cms] syncTransactions error:', error.message); return; }
       if (data && Array.isArray(data)) {
@@ -478,7 +486,6 @@ class Cms {
     }).then(({ data }) => {
       if (data) void this.syncTransactionsFromSupabase();
     }).catch(() => {});
-    // Optimistic local
     const rec: DepositRequest = { id: Math.random().toString(36).slice(2), user, userId, amount, method, utr, details, status: 'pending', ts: Date.now() };
     this.deposits = [rec, ...this.deposits]; this.emitFinance();
     this.toast({ title: 'New deposit request', body: `${user} \u20B9${amount}`, kind: 'info' });
@@ -671,7 +678,6 @@ class Cms {
 
   updateStaffEmail(id: string, email: string) {
     this.staff = this.staff.map(s => s.id === id ? { ...s, email } : s); this.emitStaff();
-    // Use direct table update (staff email change is rare and low risk)
     supabase.from('staff').update({ email: email.toLowerCase(), updated_at: new Date().toISOString() }).eq('id', id).then(() => {}).catch(() => {});
   }
 

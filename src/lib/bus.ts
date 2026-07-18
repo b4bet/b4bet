@@ -67,6 +67,7 @@ export const Topics = {
   ManualMethods: 'cms:manual_methods',
   DynamicPages: 'cms:dynamic_pages',
   Tickets: 'cms:tickets',
+  AdminUsers: 'cms:admin_users',
   SunMoonHistory: 'sunmoon:history',
   TradingHistory: 'trading:history',
   AdminHistory: 'admin:history',
