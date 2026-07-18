@@ -13,11 +13,14 @@ import ProfileView from './views/ProfileView';
 import ReferralView from './views/ReferralView';
 import AdminView from './views/AdminView';
 import HistoryView from './views/HistoryView';
+import LudoView from './views/LudoView';
 import WingoView from './views/WingoView';
 import K3View from './views/K3View';
 import FiveDView from './views/FiveDView';
 import SunVsMoonView from './views/SunVsMoonView';
 import TradingGameView from './views/TradingGameView';
+import AffiliatePortalView from './views/AffiliatePortalView';
+import LandingPage from './views/LandingPage';
 import NotificationDrawer from './components/NotificationDrawer';
 import ProfileDrawer from './components/ProfileDrawer';
 import ToastHost from './components/ToastHost';
@@ -29,6 +32,8 @@ import { bus } from './lib/bus';
 import { crashEngine } from './lib/crashEngine';
 import { startAllPersistentGameEngines } from './lib/persistentGameEngine';
 import { useStaffSession } from './lib/cmsHooks';
+import { auth } from './lib/auth';
+import { supabase } from './integrations/supabase/client';
 
 export default function App() {
   const staffSession = useStaffSession();
@@ -36,19 +41,28 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const p = window.location.pathname;
       const h = window.location.hash;
-      if (p === '/aryan' || p.startsWith('/aryan/') || h === '#aryan' || h === '#/aryan') {
-        return 'admin';
-      }
+      if (p === '/aryan' || p.startsWith('/aryan/') || h === '#aryan' || h === '#/aryan') return 'admin';
+      if (p === '/affiliate' || h === '#affiliate') return 'affiliate';
+      if (p === '/landing') return 'landing';
     }
     return 'home';
   });
-  const [notifOpen, setNotifOpen]           = useState(false);
-  const [walletOpen, setWalletOpen]         = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [walletOpen, setWalletOpen] = useState(false);
   const [supportChatOpen, setSupportChatOpen] = useState(false);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
 
-  // Auth modal state
-  const [authModalOpen, setAuthModalOpen]   = useState(false);
-  const [authModalMode, setAuthModalMode]   = useState<AuthModalMode>('login');
+  // Persist Supabase session: listen for auth state changes so user stays logged in
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        auth.logout();
+      }
+      // Session is persisted automatically by supabase client (persistSession: true)
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     const off = bus.on('auth:open_modal', (payload: unknown) => {
@@ -70,22 +84,21 @@ export default function App() {
     return off;
   }, []);
 
-  // Global game engines — keeps all round-based games running in background
   useEffect(() => {
     crashEngine.start();
     startAllPersistentGameEngines();
   }, []);
 
-  const showHeader    = route !== 'admin';
-  const showBottomNav = route !== 'admin';
+  const showHeader = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
+  const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
 
   return (
-    <div className="flex flex-col h-dvh overflow-hidden bg-slate-950 text-white">
+    <div className="min-h-screen bg-slatepanel-950 text-white">
       <GeoBlockOverlay />
+      <ToastHost />
 
       {showHeader && (
         <Header
-          route={route}
           onOpenNotifications={() => setNotifOpen(true)}
           onOpenWallet={() => setWalletOpen(true)}
           onBack={undefined}
@@ -94,14 +107,14 @@ export default function App() {
         />
       )}
 
-      <main className="flex-1 overflow-y-auto">
-        {route === 'home'      && <HomeView onNavigate={navigate} />}
-        {route === 'mines'     && <MinesView onNavigate={navigate} />}
-        {route === 'games'     && <GamesView onNavigate={navigate} />}
-        {route === 'deposit'   && <DepositView onNavigate={navigate} />}
-        {route === 'wallet'    && <WalletView onNavigate={navigate} />}
-        {route === 'withdraw'  && <WithdrawView onNavigate={navigate} />}
-        {route === 'profile'   && (
+      <div className={showHeader ? 'pb-16 pt-[56px]' : ''}>
+        {route === 'home' && <HomeView onNavigate={navigate} />}
+        {route === 'mines' && <MinesView onNavigate={navigate} />}
+        {route === 'games' && <GamesView onNavigate={navigate} />}
+        {route === 'deposit' && <DepositView onNavigate={navigate} />}
+        {route === 'wallet' && <WalletView onNavigate={navigate} />}
+        {route === 'withdraw' && <WithdrawView onNavigate={navigate} />}
+        {route === 'profile' && (
           <ProfileView
             onNavigate={navigate}
             onOpenSupport={() => setSupportChatOpen(true)}
@@ -109,21 +122,23 @@ export default function App() {
             onOpenMenu={() => setWalletOpen(true)}
           />
         )}
-        {route === 'referral'  && <ReferralView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
-        {route === 'admin'     && <AdminView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
-        {route === 'history'   && <HistoryView onNavigate={navigate} />}
-
-        {route === 'crash'     && <CrashView onNavigate={navigate} />}
-        {route === 'aviator'   && <AviatorView onNavigate={navigate} />}
-        {route === 'wingo'     && <WingoView onNavigate={navigate} />}
-        {route === 'k3'        && <K3View onNavigate={navigate} />}
-        {route === 'fived'     && <FiveDView onNavigate={navigate} />}
+        {route === 'referral' && <ReferralView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
+        {route === 'admin' && <AdminView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
+        {route === 'history' && <HistoryView onNavigate={navigate} />}
+        {route === 'ludo' && <LudoView onBack={() => navigate('home')} />}
+        {route === 'crash' && <CrashView onNavigate={navigate} />}
+        {route === 'aviator' && <AviatorView onBack={() => navigate('home')} />}
+        {route === 'wingo' && <WingoView onNavigate={navigate} />}
+        {route === 'k3' && <K3View onNavigate={navigate} />}
+        {route === 'fived' && <FiveDView onNavigate={navigate} />}
         {route === 'sunvsmoon' && <SunVsMoonView onNavigate={navigate} />}
-        {route === 'trading'   && <TradingGameView onNavigate={navigate} />}
-      </main>
+        {route === 'trading' && <TradingGameView onNavigate={navigate} />}
+        {route === 'affiliate' && <AffiliatePortalView onBack={() => navigate('home')} />}
+        {route === 'landing' && <LandingPage onNavigate={navigate} />}
+      </div>
 
       {showBottomNav && (
-        <BottomNav route={route} onNavigate={navigate} />
+        <BottomNav current={route} onNavigate={navigate} />
       )}
 
       <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
@@ -143,7 +158,6 @@ export default function App() {
       />
 
       {staffSession && <AdminSupportNotification />}
-      <ToastHost />
     </div>
   );
 }
