@@ -8,23 +8,20 @@
  *
  * These engines run at module level (imported from App.tsx) so their round /
  * timer / result cycles keep progressing even when the corresponding view is
- * unmounted — the same continuous-loop pattern already used by
- * `crashEngine`. State is anchored to a persisted wall-clock timestamp in
- * localStorage so a page reload snaps back to the correct round & phase
- * (i.e. "server-like" continuity from the client's point of view — no new
- * database or external service is introduced).
+ * unmounted — the same continuous-loop pattern already used by `crashEngine`.
  *
- * NOTE: Nothing here modifies existing base game logic. Each per-game view
- * subscribes to its engine for the shared *timer / round / result* state,
- * but the bet-placement, payout math, and history-recording flow that was
- * already in every view is preserved verbatim.
+ * SECURITY: AviatorLoop no longer computes the crash point client-side.
+ * It calls `aviatorInit(roundId)` on the process-bet edge function at round
+ * start to generate a cryptographically secure crash point server-side.
+ * The crash point is NEVER present in client memory until the round actually
+ * crashes. The server validates all cashout requests against the stored value.
  */
 
 import { bus } from './bus';
 import { globalRounds, store } from './store';
+import { aviatorInit } from './processBetApi';
 
-// Deterministic PRNG (mulberry32) — lets us regenerate a round's result
-// after a reload without ever storing that result before its cycle ends.
+// Deterministic PRNG — only used for non-money display games (Wingo, K3, 5D, SunVsMoon timer).
 function seededRng(seed: number): () => number {
   let s = seed >>> 0;
   return () => {
@@ -37,9 +34,9 @@ function seededRng(seed: number): () => number {
 }
 
 interface PersistedAnchor {
-  epochStart: number;   // wall-clock ms at round 0 boundary
-  historyCount: number; // number of completed rounds recorded via the engine
-  history: unknown[];   // most-recent-first, capped
+  epochStart: number;
+  historyCount: number;
+  history: unknown[];
 }
 
 const HISTORY_CAP = 50;
@@ -50,8 +47,6 @@ abstract class BaseLoop<TResult> {
   protected anchor: PersistedAnchor;
   protected timer: ReturnType<typeof setInterval> | null = null;
   protected lastEmittedRoundId = -1;
-  /** Round index at which the anchor was last saved / booted. Everything
-   *  before this is considered "already recorded". */
   protected startRoundIdx = 0;
 
   constructor(key: string, cycleMs: number) {
@@ -70,11 +65,7 @@ abstract class BaseLoop<TResult> {
         if (raw) {
           const parsed = JSON.parse(raw) as PersistedAnchor;
           if (parsed && typeof parsed.epochStart === 'number') {
-            return {
-              epochStart: parsed.epochStart,
-              historyCount: parsed.historyCount ?? 0,
-              history: Array.isArray(parsed.history) ? parsed.history : [],
-            };
+            return { epochStart: parsed.epochStart, historyCount: parsed.historyCount ?? 0, history: Array.isArray(parsed.history) ? parsed.history : [] };
           }
         }
       }
@@ -99,8 +90,6 @@ abstract class BaseLoop<TResult> {
     return total % this.cycleMs;
   }
 
-  /** Base round id shown in the UI — combines the initial per-game round
-   *  from `store.getGameRound(key)` with how many cycles have advanced. */
   protected uiRoundId(): number {
     const base = globalRounds[this.key] ?? 1;
     return base + this.currentRoundIdx() - this.startRoundIdx;
@@ -112,8 +101,6 @@ abstract class BaseLoop<TResult> {
 
   start() {
     if (this.timer) return;
-    // Emit once immediately on boot so any view that mounts right after
-    // gets the current state.
     this.tick();
     this.timer = setInterval(() => this.tick(), 250);
   }
@@ -126,9 +113,6 @@ abstract class BaseLoop<TResult> {
   protected tick() {
     const now = Date.now();
     const idx = this.currentRoundIdx(now);
-    // Detect crossed cycle boundaries — finalise all rounds whose end has
-    // passed since the last tick (usually just one, but a background /
-    // suspended tab may resume with many).
     while (this.anchor.historyCount < idx - this.startRoundIdx) {
       const completedIdx = this.startRoundIdx + this.anchor.historyCount;
       const rid = (globalRounds[this.key] ?? 1) + this.anchor.historyCount;
@@ -137,10 +121,7 @@ abstract class BaseLoop<TResult> {
       this.anchor.history.unshift(result as unknown);
       if (this.anchor.history.length > HISTORY_CAP) this.anchor.history.length = HISTORY_CAP;
       this.anchor.historyCount += 1;
-      // Mirror advancement into the existing store round counter so any
-      // consumer that still reads `store.getGameRound(key)` stays in sync.
       try { store.advanceGameRound(this.key); } catch { /* ignore */ }
-      // Notify listeners about the completed round + its result.
       bus.emit(`engine:${this.key}:round_end`, { roundId: rid, result });
     }
     if (idx !== this.lastEmittedRoundId || true) {
@@ -184,17 +165,11 @@ class SunMoonLoop extends BaseLoop<SunMoonChoice> {
     const el = this.elapsedInCycle();
     const rid = this.uiRoundId();
     if (el < SM_BETTING_MS) {
-      return {
-        phase: 'betting',
-        secondsLeft: Math.ceil((SM_BETTING_MS - el) / 1000),
-        roundId: rid,
-        result: null,
-      };
+      return { phase: 'betting', secondsLeft: Math.ceil((SM_BETTING_MS - el) / 1000), roundId: rid, result: null };
     }
     if (el < SM_BETTING_MS + SM_PROCESSING_MS) {
       return { phase: 'processing', secondsLeft: 0, roundId: rid, result: null };
     }
-    // Reveal phase — result is deterministic from cycle seed.
     const seed = Math.floor(this.anchor.epochStart / 1000) + this.currentRoundIdx();
     return { phase: 'revealed', secondsLeft: 0, roundId: rid, result: this.computeResult(rid, seededRng(seed)) };
   }
@@ -207,41 +182,25 @@ class SunMoonLoop extends BaseLoop<SunMoonChoice> {
 // ---------------------------------------------------------------------------
 // Wingo — 60s cycle, single-digit 0-9 result.
 // ---------------------------------------------------------------------------
-export interface WingoState {
-  timeLeft: number;      // seconds remaining until round end
-  roundId: number;
-  currentResult: number; // last completed round's digit (for display)
-}
+export interface WingoState { timeLeft: number; roundId: number; currentResult: number; }
 
 class WingoLoop extends BaseLoop<number> {
   constructor() { super('wingo', 60_000); }
   protected computeResult(_rid: number, rng: () => number): number { return Math.floor(rng() * 10); }
   protected topic() { return 'engine:wingo:state'; }
-
   getState(): WingoState {
     const el = this.elapsedInCycle();
     const timeLeft = Math.max(0, Math.ceil((this.cycleMs - el) / 1000));
     const history = this.getHistory();
-    return {
-      timeLeft: timeLeft === 0 ? 60 : timeLeft,
-      roundId: this.uiRoundId(),
-      currentResult: history[0] ?? 6,
-    };
+    return { timeLeft: timeLeft === 0 ? 60 : timeLeft, roundId: this.uiRoundId(), currentResult: history[0] ?? 6 };
   }
-
-  protected emit() {
-    bus.emit(this.topic(), { state: this.getState(), history: this.getHistory() });
-  }
+  protected emit() { bus.emit(this.topic(), { state: this.getState(), history: this.getHistory() }); }
 }
 
 // ---------------------------------------------------------------------------
 // K3 — 120s cycle, three dice.
 // ---------------------------------------------------------------------------
-export interface K3State {
-  timeLeft: number;
-  roundId: number;
-  dice: number[] | null; // null while locked (last 5s) — matches original UX
-}
+export interface K3State { timeLeft: number; roundId: number; dice: number[] | null; }
 
 class K3Loop extends BaseLoop<number[]> {
   constructor() { super('k3', 120_000); }
@@ -249,30 +208,21 @@ class K3Loop extends BaseLoop<number[]> {
     return [Math.floor(rng()*6)+1, Math.floor(rng()*6)+1, Math.floor(rng()*6)+1];
   }
   protected topic() { return 'engine:k3:state'; }
-
   getState(): K3State {
     const el = this.elapsedInCycle();
     const remainMs = this.cycleMs - el;
     const timeLeft = Math.max(0, Math.ceil(remainMs / 1000));
     const history = this.getHistory();
-    // Match original view: dice hidden during last 5 seconds ("Waiting…").
     const dice = timeLeft <= 5 ? null : (history[0] ?? [4, 6, 2]);
     return { timeLeft: timeLeft === 0 ? 120 : timeLeft, roundId: this.uiRoundId(), dice };
   }
-
-  protected emit() {
-    bus.emit(this.topic(), { state: this.getState(), history: this.getHistory() });
-  }
+  protected emit() { bus.emit(this.topic(), { state: this.getState(), history: this.getHistory() }); }
 }
 
 // ---------------------------------------------------------------------------
 // 5D — 60s cycle, five digits 0-9.
 // ---------------------------------------------------------------------------
-export interface FiveDState {
-  timeLeft: number;
-  roundId: number;
-  balls: number[] | null;
-}
+export interface FiveDState { timeLeft: number; roundId: number; balls: number[] | null; }
 
 class FiveDLoop extends BaseLoop<number[]> {
   constructor() { super('fived', 60_000); }
@@ -280,7 +230,6 @@ class FiveDLoop extends BaseLoop<number[]> {
     return Array.from({ length: 5 }, () => Math.floor(rng() * 10));
   }
   protected topic() { return 'engine:fived:state'; }
-
   getState(): FiveDState {
     const el = this.elapsedInCycle();
     const remainMs = this.cycleMs - el;
@@ -289,16 +238,32 @@ class FiveDLoop extends BaseLoop<number[]> {
     const balls = timeLeft <= 5 ? null : (history[0] ?? [4, 5, 2, 3, 1]);
     return { timeLeft: timeLeft === 0 ? 60 : timeLeft, roundId: this.uiRoundId(), balls };
   }
-
-  protected emit() {
-    bus.emit(this.topic(), { state: this.getState(), history: this.getHistory() });
-  }
+  protected emit() { bus.emit(this.topic(), { state: this.getState(), history: this.getHistory() }); }
 }
 
 // ---------------------------------------------------------------------------
-// Aviator — variable-length phases (waiting 6s → flying → crashed 3s). We
-// still run a single background loop and expose observable state so the view
-// can subscribe instead of running its own render-loop.
+// Aviator — server-side crash point, client is display-only.
+//
+// SECURITY MODEL:
+//   1. When a new round starts, aviatorInit(roundId) is called on the server.
+//      The server generates the crash point with crypto.getRandomValues() and
+//      stores it in `aviator_rounds`. The crash_point column is protected by
+//      RLS: clients can only read it AFTER ended_at is set (round over).
+//   2. The client drives the multiplier animation with aviatorMultiplierAt().
+//      It does NOT know when to stop — it compares against a locally-unknown
+//      crash point. Instead it advances until the server confirms a bust.
+//   3. Cash-outs are sent to `aviator_cashout`. The server checks
+//      cash_out_at < crash_point; if not, the bet is already lost.
+//   4. When the client-side multiplier would naturally exceed any reasonable
+//      crash point (200x), it calls `aviatorBust(roundId)` on the server to
+//      settle remaining bets and reveal the crash point.
+//
+// HOW BUST DETECTION WORKS WITHOUT CLIENT KNOWING CRASH POINT:
+//   The server periodically emits the real crash point via Supabase Realtime
+//   postgres_changes on `aviator_rounds` (ended_at IS SET). The client
+//   subscribes and crashes the round as soon as it receives the ended_at
+//   event. In the absence of a realtime event (e.g. polling mode) the client
+//   falls back to busting at 200x maximum.
 // ---------------------------------------------------------------------------
 export type AviatorPhase = 'waiting' | 'flying' | 'crashed';
 export interface AviatorEngineState {
@@ -308,17 +273,15 @@ export interface AviatorEngineState {
   history: number[];
   roundId: number;
   lastCrash: number | null;
+  // Server-revealed crash point (only set AFTER the round has ended)
+  revealedCrashPoint: number | null;
 }
 
 const AV_WAIT_MS = 6_000;
 const AV_CRASH_HOLD_MS = 3_000;
+// Safety cap: no real Aviator round should last beyond 200x
+const AV_MAX_MULTIPLIER = 200;
 
-function aviatorCrashPoint(rng: () => number): number {
-  const r = rng();
-  if (r < 0.03) return 1.0;
-  const raw = 0.97 / (1 - r);
-  return Math.min(200, Math.max(1.0, Math.floor(raw * 100) / 100));
-}
 function aviatorMultiplierAt(msElapsed: number): number {
   const t = msElapsed / 1000;
   return Math.max(1.0, Math.floor(Math.pow(Math.E, 0.14 * t) * 100) / 100);
@@ -328,15 +291,43 @@ class AviatorLoop {
   private phase: AviatorPhase = 'waiting';
   private phaseStart = Date.now();
   private roundId = 1;
-  private crashPoint = 1;
   private history: number[] = [];
   private multiplier = 1;
   private lastCrash: number | null = null;
+  // The actual crash point is ONLY known to the server. This field is null
+  // during 'waiting' and 'flying' and is only populated after the server
+  // ends the round (via Realtime or explicit aviatorBust call).
+  private revealedCrashPoint: number | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
+  // Track server init state to avoid duplicate calls
+  private serverInitialisedRound = -1;
+  // Realtime channel for bust notifications
+  private realtimeChannel: ReturnType<typeof import('@/integrations/supabase/client').supabase.channel> | null = null;
 
   constructor() {
-    // Seed initial crash point deterministically per boot round.
-    this.crashPoint = aviatorCrashPoint(seededRng(Date.now() >>> 0));
+    // Subscribe to Supabase Realtime for aviator_rounds ended_at updates.
+    // When the server ends a round, this fires and we crash immediately.
+    void this.subscribeRealtime();
+  }
+
+  private async subscribeRealtime() {
+    try {
+      const { supabase } = await import('@/integrations/supabase/client');
+      this.realtimeChannel = supabase
+        .channel('aviator_round_bust')
+        .on(
+          'postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'aviator_rounds' },
+          (evt) => {
+            const row = evt.new as { round_id: number; crash_point: number; ended_at: string | null };
+            if (row.ended_at && row.round_id === this.roundId && this.phase === 'flying') {
+              // Server confirmed bust — crash at the real crash_point
+              this.doCrash(row.crash_point);
+            }
+          },
+        )
+        .subscribe();
+    } catch { /* ignore in SSR / test environments */ }
   }
 
   start() {
@@ -359,6 +350,7 @@ class AviatorLoop {
       history: this.history.slice(),
       roundId: this.roundId,
       lastCrash: this.lastCrash,
+      revealedCrashPoint: this.revealedCrashPoint,
     };
   }
 
@@ -367,22 +359,30 @@ class AviatorLoop {
     const elapsed = now - this.phaseStart;
 
     if (this.phase === 'waiting') {
+      // Initialise the round server-side as soon as waiting starts
+      if (this.serverInitialisedRound !== this.roundId) {
+        this.serverInitialisedRound = this.roundId;
+        void aviatorInit(this.roundId).catch((err: unknown) => {
+          console.warn('[AviatorLoop] aviatorInit failed:', err);
+        });
+      }
       if (elapsed >= AV_WAIT_MS) {
         this.phase = 'flying';
         this.phaseStart = now;
         this.multiplier = 1.0;
+        this.revealedCrashPoint = null;
       }
     } else if (this.phase === 'flying') {
       const m = aviatorMultiplierAt(elapsed);
-      if (m >= this.crashPoint) {
-        this.phase = 'crashed';
-        this.phaseStart = now;
-        this.multiplier = this.crashPoint;
-        this.lastCrash = this.crashPoint;
-        this.history = [this.crashPoint, ...this.history].slice(0, 18);
-      } else {
-        this.multiplier = m;
+      this.multiplier = m;
+
+      // Safety cap: if we reach 200x without the server crashing us,
+      // trigger bust ourselves.
+      if (m >= AV_MAX_MULTIPLIER) {
+        void this.triggerServerBust();
       }
+      // Note: actual crash is triggered by Realtime update from the server.
+      // Client NEVER checks m >= crashPoint because it doesn't know crashPoint.
     } else if (this.phase === 'crashed') {
       if (elapsed >= AV_CRASH_HOLD_MS) {
         this.roundId += 1;
@@ -390,10 +390,34 @@ class AviatorLoop {
         this.phaseStart = now;
         this.multiplier = 1.0;
         this.lastCrash = null;
-        this.crashPoint = aviatorCrashPoint(seededRng((Date.now() ^ this.roundId) >>> 0));
+        this.revealedCrashPoint = null;
       }
     }
     bus.emit('engine:aviator:state', this.getState());
+  }
+
+  private doCrash(crashPoint: number) {
+    this.multiplier = crashPoint;
+    this.phase = 'crashed';
+    this.phaseStart = Date.now();
+    this.lastCrash = crashPoint;
+    this.revealedCrashPoint = crashPoint;
+    this.history = [crashPoint, ...this.history].slice(0, 18);
+    bus.emit('engine:aviator:state', this.getState());
+  }
+
+  private async triggerServerBust() {
+    // Only call once per round
+    if (this.phase !== 'flying') return;
+    try {
+      const { aviatorBust } = await import('./processBetApi');
+      const result = await aviatorBust(this.roundId);
+      this.doCrash(result.crash_point);
+    } catch (err: unknown) {
+      console.warn('[AviatorLoop] aviatorBust failed:', err);
+      // Fallback: crash at current multiplier so the round doesn't freeze
+      this.doCrash(this.multiplier);
+    }
   }
 }
 
