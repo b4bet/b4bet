@@ -281,6 +281,14 @@ class Cms {
         void this.syncStaffFromSupabase();
       })
       .subscribe();
+
+    // Payment methods — CRITICAL: so client sees methods added/updated by admin in real-time
+    supabase
+      .channel('cms_payment_methods')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, () => {
+        void this.syncPaymentMethodsFromSupabase();
+      })
+      .subscribe();
   }
 
   // ---- Master sync: loads everything ----
@@ -321,10 +329,8 @@ class Cms {
 
   async syncStaffFromSupabase() {
     try {
-      // Try admin_get_staff first (same name as supabaseIntegration.ts uses)
       const { data, error } = await supabase.rpc('admin_get_staff');
       if (error) {
-        // Fallback: try get_all_staff
         const { data: data2, error: error2 } = await supabase.rpc('get_all_staff');
         if (error2) { console.warn('[cms] syncStaff error:', error2.message); return; }
         if (data2 && Array.isArray(data2)) {
@@ -366,8 +372,21 @@ class Cms {
 
   async syncPaymentMethodsFromSupabase() {
     try {
+      // Try the admin RPC first
       const { data, error } = await supabase.rpc('admin_get_payment_methods');
-      if (error) { console.warn('[cms] syncPaymentMethods error:', error.message); return; }
+      if (error) {
+        // Fallback: direct table query for active methods
+        const { data: rows2, error: err2 } = await supabase
+          .from('payment_methods')
+          .select('*')
+          .eq('is_active', true);
+        if (err2) { console.warn('[cms] syncPaymentMethods fallback error:', err2.message); return; }
+        if (rows2 && Array.isArray(rows2)) {
+          this.manualMethods = (rows2 as Array<Record<string, unknown>>).map(mapPaymentMethod);
+          this.emitManual();
+        }
+        return;
+      }
       if (data && Array.isArray(data)) {
         this.manualMethods = (data as Array<Record<string, unknown>>).map(mapPaymentMethod);
         this.emitManual();
@@ -412,7 +431,7 @@ class Cms {
   private emitReferrals() { bus.emit(Topics.Referrals, this.referrals); }
   private emitTickets() { bus.emit(Topics.Tickets, this.tickets); }
   private emitGateways() { bus.emit(Topics.AutoGateways, this.autoGateways); }
-  private emitManual() { bus.emit(Topics.ManualMethods, this.manualMethods); }
+  emitManual() { bus.emit(Topics.ManualMethods, this.manualMethods); }
 
   get notificationTemplates(): NotificationTemplate[] { return this._notificationTemplates; }
   private loadNotificationTemplates() {
@@ -640,7 +659,6 @@ class Cms {
     await supabase.rpc('admin_update_staff_password', { p_staff_id: id, p_password_hash: hash }).catch(e => console.warn('[cms] updateStaffPassword error:', e));
   }
 
-  // SHA-256 hash helper
   private async hashPassword(plain: string): Promise<string> {
     const encoder = new TextEncoder();
     const data = encoder.encode(plain);
@@ -710,12 +728,10 @@ class Cms {
     this.staff = this.staff.map(s => ({ ...s, online: s.id === id ? true : s.online }));
     this.emitStaff();
     bus.emit(Topics.StaffSession, id);
-    // Persist session to localStorage so it survives page refresh
     try {
       if (id) localStorage.setItem(ADMIN_SESSION_KEY, id);
       else localStorage.removeItem(ADMIN_SESSION_KEY);
     } catch { /* ignore */ }
-    // When staff logs in, refresh all data
     if (id) void this.syncAllFromSupabase();
   }
 
@@ -802,23 +818,41 @@ class Cms {
 
   // ---- Manual Payment Methods (Supabase-backed) ----
   async addManualMethod(m: Omit<ManualMethod, 'id'>) {
-    const { data, error } = await supabase.from('payment_methods').insert({ method_type: m.kind, account_details: { ...m }, is_active: m.active }).select().single();
+    const { data, error } = await supabase
+      .from('payment_methods')
+      .insert({ method_type: m.kind, account_details: { ...m }, is_active: m.active })
+      .select()
+      .single();
     if (!error && data) {
       const row = data as Record<string, unknown>;
       const mapped = mapPaymentMethod(row);
-      this.manualMethods = [...this.manualMethods, mapped]; this.emitManual();
+      this.manualMethods = [...this.manualMethods, mapped];
     } else {
-      const fallback = { ...m, id: 'mm_' + Math.random().toString(36).slice(2, 8) };
-      this.manualMethods = [...this.manualMethods, fallback]; this.emitManual();
+      // Fallback: add in-memory with temp id
+      const fallback: ManualMethod = { ...m, id: 'mm_' + Math.random().toString(36).slice(2, 8) };
+      this.manualMethods = [...this.manualMethods, fallback];
+    }
+    this.emitManual();
+    // Re-sync from Supabase to ensure data consistency
+    void this.syncPaymentMethodsFromSupabase();
+  }
+
+  async updateManualMethod(id: string, patch: Partial<ManualMethod>) {
+    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m);
+    this.emitManual();
+    const updated = this.manualMethods.find(m => m.id === id);
+    if (updated) {
+      await supabase
+        .from('payment_methods')
+        .update({ account_details: { ...updated }, is_active: updated.active })
+        .eq('id', id)
+        .catch(() => {});
     }
   }
-  async updateManualMethod(id: string, patch: Partial<ManualMethod>) {
-    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
-    const updated = this.manualMethods.find(m => m.id === id);
-    if (updated) await supabase.from('payment_methods').update({ account_details: updated, is_active: updated.active }).eq('id', id).catch(() => {});
-  }
+
   async removeManualMethod(id: string) {
-    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
+    this.manualMethods = this.manualMethods.filter(m => m.id !== id);
+    this.emitManual();
     await supabase.from('payment_methods').update({ is_active: false }).eq('id', id).catch(() => {});
   }
 
