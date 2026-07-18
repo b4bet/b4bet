@@ -198,8 +198,6 @@ class Store {
   signupBonusHistory: SignupBonusRecord[] = [];
   private static SIGNUP_BONUS_KEY = 'b4bet.signupBonus';
   private static SIGNUP_BONUS_HISTORY_KEY = 'b4bet.signupBonusHistory';
-  // granted tracking is now Supabase-backed via signup_bonus_granted column
-  // Keep a local cache to avoid extra DB calls within the same session
   private signupBonusGrantedCache: Set<string> = new Set();
 
   redeemCodes: Record<string, RedeemCode> = { ...DEFAULT_REDEEM_CODES };
@@ -321,9 +319,9 @@ class Store {
   }
 
   /**
-   * Deduct balance locally only (no Supabase write) — used when the server
-   * will handle the deduction atomically and we just need the UI to reflect it
-   * immediately (optimistic update). Always follow with syncBalanceFromServer.
+   * Deduct balance locally for optimistic UI without a Supabase write.
+   * Use when the server will handle the authoritative balance update atomically
+   * (e.g. Trading game stake deduction before tradingSettle resolves).
    */
   debitLocalOnly(amount: number): boolean {
     if (!auth.getSession()) {
@@ -331,11 +329,12 @@ class Store {
       return false;
     }
     if (amount > this.balance) return false;
-    this.balance = Math.max(0, Math.round((this.balance - amount) * 100) / 100);
+    const next = Math.max(0, Math.round((this.balance - amount) * 100) / 100);
+    this.balance = next;
     try {
       const session = auth.getSession();
       if (session) {
-        this.balancesByUser[session.username.toLowerCase()] = this.balance;
+        this.balancesByUser[session.username.toLowerCase()] = next;
         this.persistBalances();
       }
     } catch { /* ignore */ }
@@ -344,16 +343,17 @@ class Store {
   }
 
   /**
-   * Sync local balance from a server response value WITHOUT writing back to
-   * Supabase — the server already updated the DB atomically. This should be
-   * called after every process-bet response that includes a balance_after field.
+   * Sync local balance from a server-authoritative value returned by the
+   * process-bet edge function. Does NOT write back to Supabase (the server
+   * already wrote it).
    */
-  syncBalanceFromServer(amount: number) {
-    this.balance = Math.max(0, Math.round(amount * 100) / 100);
+  syncBalanceFromServer(serverBalance: number) {
+    const next = Math.max(0, Math.round(serverBalance * 100) / 100);
+    this.balance = next;
     try {
       const session = auth.getSession();
       if (session) {
-        this.balancesByUser[session.username.toLowerCase()] = this.balance;
+        this.balancesByUser[session.username.toLowerCase()] = next;
         this.persistBalances();
       }
     } catch { /* ignore */ }
@@ -480,12 +480,8 @@ class Store {
     return rows.slice(0, 200);
   }
 
-  // ---- Bet Recording (display/history only — server handles DB inserts) ----
+  // ---- Bet Recording (display/history only — server writes the canonical bets row) ----
 
-  /**
-   * Updates local UI history and admin panel. Does NOT insert to the bets
-   * table — that is done atomically by the process-bet edge function.
-   */
   recordCrashBet(rec: Omit<CrashBetRecord, 'id' | 'ts'>) {
     const item: CrashBetRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.crashMyBets = [item, ...this.crashMyBets].slice(0, 100);
@@ -493,13 +489,9 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'crash', amount: rec.amount, win: rec.win,
       result: rec.cashOutAt ? `${rec.cashOutAt.toFixed(2)}x cashout` : `${rec.bustPoint.toFixed(2)}x bust` });
-    // NOTE: bets table insert handled server-side by crash_settle edge function.
+    // NOTE: bets row is written server-side by crash_settle. Do NOT insert here.
   }
 
-  /**
-   * Updates local UI history and admin panel. Does NOT insert to the bets
-   * table — that is done atomically by the process-bet edge function.
-   */
   recordMinesRound(rec: Omit<MinesRoundRecord, 'id' | 'ts'>) {
     const item: MinesRoundRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.minesMyHistory = [item, ...this.minesMyHistory].slice(0, 100);
@@ -507,13 +499,9 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'mines', amount: rec.stake, win: rec.win,
       result: rec.busted ? 'busted' : `${rec.multiplier.toFixed(2)}x` });
-    // NOTE: bets table insert handled server-side by mines_reveal/mines_cashout edge function.
+    // NOTE: bets row is written server-side by mines_reveal (bust) or mines_cashout. Do NOT insert here.
   }
 
-  /**
-   * Updates local UI history and admin panel. Does NOT insert to the bets
-   * table — that is done atomically by the process-bet edge function.
-   */
   recordSunMoonRound(rec: Omit<SunMoonRoundRecord, 'id' | 'ts'>) {
     const item: SunMoonRoundRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.sunMoonHistory = [item, ...this.sunMoonHistory].slice(0, 100);
@@ -521,13 +509,9 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'sunvsmoon', amount: rec.stake, win: rec.win,
       result: `${rec.bet === 'tie' ? 'Eclipse' : rec.bet.toUpperCase()} \u2192 ${rec.result === 'tie' ? 'Eclipse' : rec.result.toUpperCase()}` });
-    // NOTE: bets table insert handled server-side by sunvsmoon_settle edge function.
+    // NOTE: bets row is written server-side by sunvsmoon_settle. Do NOT insert here.
   }
 
-  /**
-   * Updates local UI history and admin panel. Does NOT insert to the bets
-   * table — that is done atomically by the process-bet edge function.
-   */
   recordTradingBet(rec: Omit<TradingBetRecord, 'id' | 'ts'>) {
     const item: TradingBetRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.tradingHistory = [item, ...this.tradingHistory].slice(0, 100);
@@ -535,7 +519,7 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'trading', amount: rec.stake, win: rec.win,
       result: `${rec.symbol} ${rec.direction} \u00B7 ${rec.won ? 'win' : 'loss'}` });
-    // NOTE: bets table insert handled server-side by trading_settle edge function.
+    // NOTE: bets row is written server-side by trading_settle. Do NOT insert here.
   }
 
   // ---- Redeem Codes (Supabase-persisted) ----
@@ -648,12 +632,9 @@ class Store {
       .catch(() => {});
   }
 
-  // Grant signup bonus — checks Supabase profiles.signup_bonus_granted
   async grantSignupBonusAsync(userId: string, username: string): Promise<number> {
     if (!userId || !username) return 0;
-    // Check local cache first
     if (this.signupBonusGrantedCache.has(userId)) return 0;
-    // Check Supabase
     try {
       const { data } = await supabase.from('profiles')
         .select('signup_bonus_granted').eq('id', userId).single();
@@ -670,7 +651,6 @@ class Store {
       this.signupBonusHistory = [rec, ...this.signupBonusHistory].slice(0, 1000);
       this.pushBalanceHistory({ userId, username, type: 'credit', amount, reason: 'Signup bonus (auto)' });
     }
-    // Mark granted in Supabase
     void supabase.rpc('mark_signup_bonus_granted', { p_user_id: userId }).catch(() => {});
     this.signupBonusGrantedCache.add(userId);
     this.persistSignupBonus();
@@ -678,10 +658,9 @@ class Store {
     return amount;
   }
 
-  // Sync wrapper — called from register() which is async anyway
   grantSignupBonus(userId: string, username: string): number {
     void this.grantSignupBonusAsync(userId, username);
-    return this.signupBonus; // optimistic return
+    return this.signupBonus;
   }
 
   getSignupBonusHistory(opts: { search?: string; period?: 'all' | 'today' | 'day' | 'week' | 'month' | 'year' } = {}): SignupBonusRecord[] {
