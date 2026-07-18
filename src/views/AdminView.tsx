@@ -24,7 +24,7 @@ import StaffTab from './admin/StaffTab';
 import MarketingTab from './admin/MarketingTab';
 import NotificationsTab from './admin/NotificationsTab';
 import AutoGatewaysTab from './admin/AutoGatewaysTab';
-import GameAlgosTab from './admin/GameAlgosTab';
+import GameAlgosTab, { CrashHandlingPanel } from './admin/GameAlgosTab';
 import GameSettingsTab from './admin/GameSettingsTab';
 import CrmTab from './admin/CrmTab';
 import DynamicPagesTab from './admin/DynamicPagesTab';
@@ -263,12 +263,7 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
             </div>
           )}
           {tab === 'algos' && <GameAlgosTab />}
-          {tab === 'games' && (
-            <div className="space-y-4">
-              <h2 className="font-display font-bold text-lg text-white">Games Management</h2>
-              <p className="text-slate-500 text-sm">Manage live game sessions and round outcomes.</p>
-            </div>
-          )}
+          {tab === 'games' && <CrashHandlingPanel />}
           {tab === 'users' && <UsersTab />}
           {tab === 'balanceHistory' && <BalanceHistoryTab />}
           {tab === 'staff' && hasPermission('staff') && <StaffTab />}
