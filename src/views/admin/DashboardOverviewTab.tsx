@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Users, TrendingUp, TrendingDown, Clock, CheckCircle2, DollarSign,
-  Activity, RefreshCw, Gamepad2, BarChart3,
+  Activity, RefreshCw, Gamepad2, BarChart3, Wifi,
 } from 'lucide-react';
+import { supabase } from '../../integrations/supabase/client';
 import { supabaseGetUsers, supabaseGetTransactions } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
-  return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '\u20B9' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 interface DashStats {
@@ -23,6 +24,7 @@ export default function DashboardOverviewTab() {
   const [stats, setStats] = useState<DashStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -33,13 +35,13 @@ export default function DashboardOverviewTab() {
       ]);
 
       const totalDeposits = txns
-        .filter((t) => t.type === 'deposit' && t.status === 'completed')
+        .filter((t) => t.type === 'deposit' && (t.status === 'completed' || t.status === 'approved'))
         .reduce((s, t) => s + t.amount, 0);
       const totalWithdrawals = txns
-        .filter((t) => t.type === 'withdrawal' && t.status === 'completed')
+        .filter((t) => t.type === 'withdrawal' && (t.status === 'completed' || t.status === 'approved'))
         .reduce((s, t) => s + t.amount, 0);
-      const pendingDeposits = txns.filter((t) => t.type === 'deposit' && t.status === 'pending').length;
-      const pendingWithdrawals = txns.filter((t) => t.type === 'withdrawal' && t.status === 'pending').length;
+      const pendingDeposits = txns.filter((t) => t.type === 'deposit' && (t.status === 'pending' || t.status === 'processing')).length;
+      const pendingWithdrawals = txns.filter((t) => t.type === 'withdrawal' && (t.status === 'pending' || t.status === 'processing')).length;
 
       setStats({
         totalUsers: users.length,
@@ -58,16 +60,44 @@ export default function DashboardOverviewTab() {
     }
   }, []);
 
+  // Initial load
   useEffect(() => { void load(); }, [load]);
+
+  // Supabase Realtime — auto-refresh on any transactions or profiles change
+  useEffect(() => {
+    const channel = supabase
+      .channel('dashboard_overview_rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        void load();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
+        void load();
+      })
+      .subscribe((status) => {
+        setRealtimeConnected(status === 'SUBSCRIBED');
+      });
+
+    return () => { void supabase.removeChannel(channel); };
+  }, [load]);
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-display font-bold text-xl text-white">Dashboard Overview</h2>
-          <p className="text-xs text-slate-500">
-            {lastRefresh ? `Last updated: ${lastRefresh.toLocaleTimeString('en-IN')}` : 'Loading live data…'}
-          </p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-xs text-slate-500">
+              {lastRefresh ? `Updated: ${lastRefresh.toLocaleTimeString('en-IN')}` : 'Loading…'}
+            </p>
+            <span className={`flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
+              realtimeConnected
+                ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10'
+                : 'text-amber-400 border-amber-500/40 bg-amber-500/10'
+            }`}>
+              <Wifi className="w-2.5 h-2.5" />
+              {realtimeConnected ? 'Live' : 'Connecting…'}
+            </span>
+          </div>
         </div>
         <button
           onClick={() => void load()}
@@ -89,68 +119,18 @@ export default function DashboardOverviewTab() {
         <>
           {/* Primary KPI row */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard
-              label="Total Users"
-              value={stats.totalUsers.toString()}
-              icon={Users}
-              color="text-neon-300"
-              sub="Registered profiles"
-            />
-            <StatCard
-              label="Total Deposits"
-              value={fmt(stats.totalDeposits)}
-              icon={TrendingUp}
-              color="text-emeraldwin-300"
-              sub="Completed deposits"
-            />
-            <StatCard
-              label="Total Withdrawals"
-              value={fmt(stats.totalWithdrawals)}
-              icon={TrendingDown}
-              color="text-coral-300"
-              sub="Completed withdrawals"
-            />
-            <StatCard
-              label="Platform Profit"
-              value={fmt(stats.profit)}
-              icon={DollarSign}
-              color={stats.profit >= 0 ? 'text-emeraldwin-300' : 'text-coral-300'}
-              sub="Deposits − Withdrawals"
-            />
+            <StatCard label="Total Users" value={stats.totalUsers.toString()} icon={Users} color="text-neon-300" sub="Registered profiles" />
+            <StatCard label="Total Deposits" value={fmt(stats.totalDeposits)} icon={TrendingUp} color="text-emeraldwin-300" sub="Completed deposits" />
+            <StatCard label="Total Withdrawals" value={fmt(stats.totalWithdrawals)} icon={TrendingDown} color="text-coral-300" sub="Completed withdrawals" />
+            <StatCard label="Platform Profit" value={fmt(stats.profit)} icon={DollarSign} color={stats.profit >= 0 ? 'text-emeraldwin-300' : 'text-coral-300'} sub="Deposits \u2212 Withdrawals" />
           </div>
 
           {/* Secondary KPI row */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard
-              label="Pending Deposits"
-              value={stats.pendingDeposits.toString()}
-              icon={Clock}
-              color="text-amber-300"
-              sub="Awaiting approval"
-              highlight={stats.pendingDeposits > 0}
-            />
-            <StatCard
-              label="Pending Withdrawals"
-              value={stats.pendingWithdrawals.toString()}
-              icon={Clock}
-              color="text-amber-300"
-              sub="Awaiting approval"
-              highlight={stats.pendingWithdrawals > 0}
-            />
-            <StatCard
-              label="Total Transactions"
-              value={stats.totalTxns.toString()}
-              icon={BarChart3}
-              color="text-blue-300"
-              sub="All-time txn count"
-            />
-            <StatCard
-              label="Status"
-              value="Live"
-              icon={Activity}
-              color="text-emeraldwin-300"
-              sub="Supabase connected"
-            />
+            <StatCard label="Pending Deposits" value={stats.pendingDeposits.toString()} icon={Clock} color="text-amber-300" sub="Awaiting approval" highlight={stats.pendingDeposits > 0} />
+            <StatCard label="Pending Withdrawals" value={stats.pendingWithdrawals.toString()} icon={Clock} color="text-amber-300" sub="Awaiting approval" highlight={stats.pendingWithdrawals > 0} />
+            <StatCard label="Total Transactions" value={stats.totalTxns.toString()} icon={BarChart3} color="text-blue-300" sub="All-time txn count" />
+            <StatCard label="Status" value="Live" icon={Activity} color="text-emeraldwin-300" sub="Supabase Realtime" />
           </div>
 
           {/* Quick links */}

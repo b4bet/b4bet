@@ -1,24 +1,24 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, DollarSign, Clock, CheckCircle2, XCircle,
-  Loader2, RefreshCw, Calendar, FileText, Gamepad2, Gift, Plus, Minus, Banknote,
+  Loader2, RefreshCw, Calendar, FileText, Gamepad2, Gift, Plus, Minus, Banknote, Wifi,
 } from 'lucide-react';
+import { supabase } from '../../integrations/supabase/client';
 import { cms } from '../../lib/cms';
 import { supabaseGetTransactions, supabaseGetBets, type SupabaseTransaction, type SupabaseBet } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
-  return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '\u20B9' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function fmtDate(s: string) {
   return new Date(s).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 function statusChip(status: string) {
   switch (status) {
-    case 'completed': return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+    case 'completed': case 'approved': return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
     case 'processing': return 'bg-blue-500/15 text-blue-300 border-blue-500/30';
-    case 'failed':
-    case 'cancelled': return 'bg-red-500/15 text-red-300 border-red-500/30';
-    default:          return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+    case 'failed': case 'cancelled': case 'rejected': return 'bg-red-500/15 text-red-300 border-red-500/30';
+    default: return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
   }
 }
 
@@ -44,6 +44,7 @@ export default function FinanceTab() {
   const [inputVal, setInputVal]         = useState('');
   const [updatingId, setUpdatingId]     = useState<string | null>(null);
   const [localMeta, setLocalMeta]       = useState<Record<string, { utr?: string; reason?: string }>>({});
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,6 +57,23 @@ export default function FinanceTab() {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Supabase Realtime — auto-refresh finance data
+  useEffect(() => {
+    const channel = supabase
+      .channel('finance_tab_rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        void load();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bets' }, () => {
+        void load();
+      })
+      .subscribe((status) => {
+        setRealtimeConnected(status === 'SUBSCRIBED');
+      });
+
+    return () => { void supabase.removeChannel(channel); };
+  }, [load]);
+
   const { cutoff, endCutoff } = useMemo(() => {
     if (period === 'custom') {
       return { cutoff: fromDate ? new Date(fromDate).getTime() : 0, endCutoff: toDate ? new Date(toDate).getTime() + 86400000 : Date.now() + 86400000 };
@@ -67,8 +85,8 @@ export default function FinanceTab() {
   const filteredTxns = transactions.filter((t) => inRange(t.created_at));
   const filteredBets = bets.filter((b) => b.placed_at && inRange(b.placed_at));
 
-  const totalDeposits    = filteredTxns.filter((t) => t.type === 'deposit'    && t.status === 'completed').reduce((s, t) => s + t.amount, 0);
-  const totalWithdrawals = filteredTxns.filter((t) => t.type === 'withdrawal' && t.status === 'completed').reduce((s, t) => s + t.amount, 0);
+  const totalDeposits    = filteredTxns.filter((t) => t.type === 'deposit'    && (t.status === 'completed' || t.status === 'approved')).reduce((s, t) => s + t.amount, 0);
+  const totalWithdrawals = filteredTxns.filter((t) => t.type === 'withdrawal' && (t.status === 'completed' || t.status === 'approved')).reduce((s, t) => s + t.amount, 0);
   const pendingCount     = filteredTxns.filter((t) => t.status === 'pending' || t.status === 'processing').length;
   const gameProfit       = filteredBets.reduce((s, b) => s + (b.bet_amount - (b.win_amount ?? 0)), 0);
   const bonusTotal       = filteredTxns.filter((t) => t.type === 'bonus').reduce((s, t) => s + t.amount, 0);
@@ -100,7 +118,6 @@ export default function FinanceTab() {
       if (!utr) { alert('UTR / Transaction ID is required to approve.'); return; }
       setUpdatingId(id);
       try {
-        // cms.setDepositStatus sends user notification + triggers referral bonus + updates bell
         if (isDeposit) await cms.setDepositStatus(id, 'approved', utr);
         else           await cms.setWithdrawalStatus(id, 'approved', utr);
         setTransactions((prev) => prev.map((t) => t.id === id ? { ...t, status: 'completed' } : t));
@@ -127,7 +144,17 @@ export default function FinanceTab() {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-display font-bold text-lg text-white">Finance Dashboard</h2>
-          <p className="text-xs text-slate-500">Live data — actions trigger user notifications via Supabase.</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-xs text-slate-500">Actions trigger user notifications instantly.</p>
+            <span className={`flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
+              realtimeConnected
+                ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10'
+                : 'text-amber-400 border-amber-500/40 bg-amber-500/10'
+            }`}>
+              <Wifi className="w-2.5 h-2.5" />
+              {realtimeConnected ? 'Live' : 'Connecting…'}
+            </span>
+          </div>
         </div>
         <button onClick={() => void load()} disabled={loading}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-white text-xs font-semibold disabled:opacity-50">
@@ -235,16 +262,16 @@ function TxnCard({ t, acting, setActing, inputVal, setInputVal, updatingId, loca
   onAccept: (id: string) => Promise<void>; onComplete: () => Promise<void>; onClear: () => void;
 }) {
   const isActing   = acting?.id === t.id;
-  const isTerminal = t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled';
+  const isTerminal = t.status === 'completed' || t.status === 'approved' || t.status === 'failed' || t.status === 'cancelled' || t.status === 'rejected';
   const meta       = localMeta[t.id];
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-sm text-white font-semibold font-mono truncate">{(t.user_id ?? '—').slice(0, 12)}…</div>
-          <div className="text-[10px] text-slate-500 truncate">{t.reference ?? t.id.slice(0, 10)} · {fmtDate(t.created_at)}</div>
+          <div className="text-sm text-white font-semibold font-mono truncate">{(t.user_id ?? '\u2014').slice(0, 12)}\u2026</div>
+          <div className="text-[10px] text-slate-500 truncate">{t.reference ?? t.id.slice(0, 10)} \u00B7 {fmtDate(t.created_at)}</div>
         </div>
-        <div className="text-sm font-bold text-white tabular flex-shrink-0">₹{t.amount.toLocaleString('en-IN')}</div>
+        <div className="text-sm font-bold text-white tabular flex-shrink-0">\u20B9{t.amount.toLocaleString('en-IN')}</div>
       </div>
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${statusChip(t.status)}`}>

@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
-import { Gift, Save, Search, Calendar } from 'lucide-react';
+import { useMemo, useState, useEffect } from 'react';
+import { Gift, Save, Search, Calendar, Wifi, Loader2 } from 'lucide-react';
 import { store, type SignupBonusRecord } from '../../lib/store';
 import { useBus } from '../../lib/hooks';
 import { Topics } from '../../lib/bus';
+import { supabase } from '../../integrations/supabase/client';
 import SelectModal from '../../components/SelectModal';
 
 type Period = 'today' | 'day' | 'week' | 'month' | 'year' | 'all';
@@ -24,8 +25,16 @@ export default function SignupBonusTab() {
 
   const [amount, setAmount] = useState<string>(String(store.signupBonus));
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
   const [period, setPeriod] = useState<Period>('all');
+
+  // Load latest bonus amount from Supabase on mount
+  useEffect(() => {
+    void store.loadSignupBonusFromSupabase().then(() => {
+      setAmount(String(store.signupBonus));
+    });
+  }, []);
 
   const rows = useMemo(
     () => store.getSignupBonusHistory({ search, period }),
@@ -38,12 +47,17 @@ export default function SignupBonusTab() {
     return { total, count: rows.length };
   }, [rows]);
 
-  const save = () => {
+  const save = async () => {
     const n = Math.max(0, Number(amount) || 0);
-    store.setSignupBonus(n);
-    setAmount(String(n));
-    setSaved(true);
-    setTimeout(() => setSaved(false), 1800);
+    setSaving(true);
+    try {
+      store.setSignupBonus(n); // also persists to Supabase settings
+      setAmount(String(n));
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1800);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const fmtDate = (ts: number) =>
@@ -59,14 +73,20 @@ export default function SignupBonusTab() {
         </h2>
         <p className="text-xs text-slate-500">
           Every new user gets this amount credited instantly on registration. Set 0 to disable.
+          Saved to Supabase — changes apply to all new registrations instantly.
         </p>
       </div>
 
       {/* Config */}
       <div className="panel p-4 space-y-3">
-        <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">
-          Bonus amount ({store.currency})
-        </label>
+        <div className="flex items-center justify-between">
+          <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">
+            Bonus amount ({store.currency})
+          </label>
+          <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 rounded-full">
+            <Wifi className="w-2.5 h-2.5" /> Supabase
+          </span>
+        </div>
         <div className="flex gap-2">
           <input
             type="number"
@@ -77,11 +97,20 @@ export default function SignupBonusTab() {
             className="input flex-1"
             placeholder="e.g. 100"
           />
-          <button onClick={save} className="btn-emerald px-4 flex items-center gap-2 font-bold">
-            <Save className="w-4 h-4" /> Save
+          <button
+            onClick={() => void save()}
+            disabled={saving}
+            className="btn-emerald px-4 flex items-center gap-2 font-bold disabled:opacity-60"
+          >
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            Save
           </button>
         </div>
-        {saved && <p className="text-xs text-emeraldwin-400">Saved. New signups will receive {store.currency}{store.signupBonus}.</p>}
+        {saved && (
+          <p className="text-xs text-emeraldwin-400">
+            Saved to Supabase. New signups will receive {store.currency}{store.signupBonus}.
+          </p>
+        )}
         <p className="text-[11px] text-slate-500">
           Current active bonus: <span className="text-white font-bold">{store.currency}{store.signupBonus}</span>
         </p>
@@ -108,7 +137,7 @@ export default function SignupBonusTab() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by username or user ID…"
+            placeholder="Search by username or user ID\u2026"
             className="input pl-10 w-full"
           />
         </div>

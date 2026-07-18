@@ -4,6 +4,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { bus, Topics } from './bus';
 import { auth } from './auth';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export interface PerGameLimit {
   min: number;
@@ -183,6 +184,9 @@ class Store {
   private balancesByUser: Record<string, number> = {};
   private static BALANCES_KEY = 'b4bet.balances';
 
+  // Supabase realtime channel for the logged-in user's profile row
+  private userBalanceChannel: RealtimeChannel | null = null;
+
   signupBonus = 100;
   signupBonusHistory: SignupBonusRecord[] = [];
   private static SIGNUP_BONUS_KEY = 'b4bet.signupBonus';
@@ -200,18 +204,55 @@ class Store {
     this.restoreSignupBonus();
 
     bus.on(Topics.AuthState, async (payload: unknown) => {
-      const session = payload as { username?: string } | null;
+      const session = payload as { userId?: string; username?: string } | null;
+
+      // Remove old user-specific realtime subscription
+      if (this.userBalanceChannel) {
+        await supabase.removeChannel(this.userBalanceChannel);
+        this.userBalanceChannel = null;
+      }
+
       if (session && session.username) {
-        // Load balance from Supabase
+        // Load current balance from Supabase
         const { data: profile } = await supabase.from('profiles')
           .select('balance').eq('username', session.username).single();
         if (profile) {
-          this.balance = profile.balance || 0;
+          this.balance = (profile as { balance: number }).balance || 0;
+        }
+        bus.emit(Topics.Balance, this.balance);
+
+        // Subscribe to realtime updates on this user's profile row
+        // so admin balance changes are reflected instantly
+        if (session.userId) {
+          this.userBalanceChannel = supabase
+            .channel(`user_profile_${session.userId}`)
+            .on(
+              'postgres_changes',
+              {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'profiles',
+                filter: `id=eq.${session.userId}`,
+              },
+              (evt) => {
+                const row = evt.new as { balance?: number };
+                if (typeof row.balance === 'number') {
+                  this.balance = row.balance;
+                  // Sync in-memory map too
+                  if (session.username) {
+                    this.balancesByUser[session.username.toLowerCase()] = row.balance;
+                    this.persistBalances();
+                  }
+                  bus.emit(Topics.Balance, this.balance);
+                }
+              },
+            )
+            .subscribe();
         }
       } else {
         this.balance = 0;
+        bus.emit(Topics.Balance, this.balance);
       }
-      bus.emit(Topics.Balance, this.balance);
     });
   }
 
@@ -495,12 +536,34 @@ class Store {
       const g = localStorage.getItem(Store.SIGNUP_BONUS_GRANTED_KEY);
       if (g) this.signupBonusGranted = JSON.parse(g);
     } catch { /* ignore */ }
+    // Also load from Supabase (async, non-blocking)
+    void this.loadSignupBonusFromSupabase();
+  }
+
+  async loadSignupBonusFromSupabase() {
+    try {
+      const { data } = await supabase.rpc('admin_get_settings');
+      if (data) {
+        const rows = data as { key: string; value: unknown }[];
+        const row = rows.find(r => r.key === 'signup_bonus');
+        if (row && typeof row.value === 'number' && row.value >= 0) {
+          this.signupBonus = row.value;
+          // Sync to localStorage too
+          try { localStorage.setItem(Store.SIGNUP_BONUS_KEY, JSON.stringify(this.signupBonus)); } catch { /* ignore */ }
+          bus.emit(Topics.SignupBonus, { amount: this.signupBonus, history: this.signupBonusHistory });
+        }
+      }
+    } catch { /* ignore */ }
   }
 
   setSignupBonus(amount: number) {
     this.signupBonus = Math.max(0, Math.round(amount * 100) / 100);
     this.persistSignupBonus();
     bus.emit(Topics.SignupBonus, { amount: this.signupBonus, history: this.signupBonusHistory });
+    // Persist to Supabase settings too
+    supabase.rpc('admin_update_setting', { p_key: 'signup_bonus', p_value: this.signupBonus as unknown as string })
+      .then(() => {})
+      .catch(() => {});
   }
 
   grantSignupBonus(userId: string, username: string): number {
