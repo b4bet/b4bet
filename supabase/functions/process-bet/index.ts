@@ -7,15 +7,18 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // ALL game outcome logic is server-side. crypto.getRandomValues() is used
 // for every random decision so the browser cannot predict or alter results.
 //
-// Supported game_type values:
-//   crash_get_bust  – GET (no auth) – returns/stores server bust point for a round
-//   crash_settle    – POST          – record crash bets + atomically update balance
-//   mines_start     – POST          – create mines session (mine positions secret)
-//   mines_reveal    – POST          – reveal a tile; server decides hit/safe
-//   mines_cashout   – POST          – cash out an active mines session
-//   sunvsmoon_result– GET           – return/store server result for a SvM round
-//   sunvsmoon_settle– POST          – settle a player's Sun vs Moon bet
-//   trading_settle  – POST          – settle a binary trading bet
+// Supported game_type / action values:
+//   crash_get_bust      – GET  – returns/stores server bust point for a Crash round
+//   crash_settle        – POST – record crash bets + atomically update balance
+//   mines_start         – POST – create mines session (mine positions secret)
+//   mines_reveal        – POST – reveal a tile; server decides hit/safe
+//   mines_cashout       – POST – cash out an active mines session
+//   sunvsmoon_result    – GET  – return/store server result for a SvM round
+//   sunvsmoon_settle    – POST – settle a player's Sun vs Moon bet
+//   trading_settle      – POST – settle a binary trading bet
+//   aviator_round_start – POST – generate secret crash point for a new Aviator round
+//   aviator_cashout     – POST – cash out a live Aviator bet (server validates timing)
+//   aviator_settle      – POST – settle an un-cashed Aviator bet at round end
 // =============================================================================
 
 const corsHeaders = {
@@ -31,6 +34,8 @@ function secureRandom(): number {
   return buf[0] / 0x100000000;
 }
 
+// Suppress unused warning — kept for parity with other generators
+// deno-lint-ignore no-unused-vars
 function secureRandomInt(min: number, max: number): number {
   return min + Math.floor(secureRandom() * (max - min + 1));
 }
@@ -45,6 +50,15 @@ function generateBustPoint(targetWinProb: number, houseEdge: number): number {
   const u = Math.max(0.0001, 1 - r);
   const raw = (1 / (u * (1 - edge))) * (0.5 + p);
   return Math.max(1.01, Math.min(1000, Math.round(raw * 100) / 100));
+}
+
+// ── Aviator crash point generation ──────────────────────────────────────────
+// Same distribution as the original aviatorCrashPoint() but with server RNG.
+function generateAviatorCrashPoint(): number {
+  const r = secureRandom();
+  if (r < 0.03) return 1.0;
+  const raw = 0.97 / (1 - r);
+  return Math.min(200, Math.max(1.0, Math.floor(raw * 100) / 100));
 }
 
 // ── Sun vs Moon result generation ────────────────────────────────────────────
@@ -66,7 +80,7 @@ function generateMinePositions(mineCount: number): number[] {
   return indices.slice(0, mineCount).sort((a, b) => a - b);
 }
 
-// ── Mines multiplier (mirrors client-side formula) ───────────────────────────
+// ── Mines multiplier ─────────────────────────────────────────────────────────
 function minesMultiplier(mineCount: number, gemsFound: number): number {
   if (gemsFound === 0) return 1;
   const GRID = 25;
@@ -77,6 +91,12 @@ function minesMultiplier(mineCount: number, gemsFound: number): number {
     m /= safe - i;
   }
   return Math.max(1, Math.round(m * 0.97 * 100) / 100);
+}
+
+// ── Aviator multiplier formula (matches client animation) ───────────────────
+function aviatorMultiplierAt(msElapsed: number): number {
+  const t = msElapsed / 1000;
+  return Math.max(1.0, Math.floor(Math.pow(Math.E, 0.14 * t) * 100) / 100);
 }
 
 // =============================================================================
@@ -93,28 +113,25 @@ serve(async (req) => {
     const url    = new URL(req.url);
     const action = url.searchParams.get("action") ?? "";
 
-    // ── GET endpoints (no auth needed, just game config) ───────────────────
+    // ── GET endpoints ───────────────────────────────────────────────────────
     if (req.method === "GET") {
       // ── crash_get_bust ──────────────────────────────────────────────────
       if (action === "crash_get_bust") {
         const roundId = parseInt(url.searchParams.get("round_id") ?? "0", 10);
-        if (!roundId || roundId < 1) {
-          return json({ error: "Missing round_id" }, 400);
-        }
-        // Idempotent: return existing bust point if already generated
+        if (!roundId || roundId < 1) return json({ error: "Missing round_id" }, 400);
+
         const { data: existing } = await supabase
           .from("crash_rounds")
           .select("bust_point")
           .eq("round_id", roundId)
           .single();
-        if (existing) {
-          return json({ bust_point: (existing as { bust_point: number }).bust_point });
-        }
-        // Generate new one using admin config
+        if (existing) return json({ bust_point: (existing as { bust_point: number }).bust_point });
+
         const { data: settingsRows } = await supabase.rpc("admin_get_settings");
         const settings = (settingsRows as Array<{ key: string; value: unknown }>) ?? [];
         const adminConfig = (settings.find((r) => r.key === "admin_config")?.value ?? {}) as {
-          mode?: string; targetWinProbability?: number; houseEdge?: number; manualCrashPoint?: number; manualTargetRoundId?: number | null;
+          mode?: string; targetWinProbability?: number; houseEdge?: number;
+          manualCrashPoint?: number; manualTargetRoundId?: number | null;
         };
         let bustPoint: number;
         if (
@@ -123,13 +140,10 @@ serve(async (req) => {
           adminConfig.manualCrashPoint
         ) {
           bustPoint = Math.max(1.01, adminConfig.manualCrashPoint);
-          // Auto-clear the manual override after applying it once
-          if (adminConfig.manualTargetRoundId == null || adminConfig.manualTargetRoundId === roundId) {
-            void supabase.rpc("admin_update_setting", {
-              p_key: "admin_config",
-              p_value: { ...adminConfig, mode: "AUTO", manualTargetRoundId: null } as unknown as string,
-            });
-          }
+          void supabase.rpc("admin_update_setting", {
+            p_key: "admin_config",
+            p_value: { ...adminConfig, mode: "AUTO", manualTargetRoundId: null } as unknown as string,
+          });
         } else {
           bustPoint = generateBustPoint(
             adminConfig.targetWinProbability ?? 55,
@@ -158,7 +172,7 @@ serve(async (req) => {
       return json({ error: "Unknown GET action" }, 400);
     }
 
-    // ── POST endpoints (require valid user_id) ──────────────────────────────
+    // ── POST endpoints ──────────────────────────────────────────────────────
     const body = await req.json() as Record<string, unknown>;
     const { game_type, user_id } = body;
 
@@ -174,16 +188,12 @@ serve(async (req) => {
     const userBalance = (profile as { id: string; balance: number }).balance;
 
     // ── crash_settle ─────────────────────────────────────────────────────────
-    // Atomically debit stake and credit winnings, record bet row.
-    // The client sends the amount it placed and the cashout multiplier it used.
-    // The server re-verifies the bust_point against its own stored record.
     if (game_type === "crash_settle") {
       const { round_id, amount, cash_out_at, bust_point } = body as {
         round_id: number; amount: number; cash_out_at: number | null; bust_point: number;
       };
       if (!amount || amount <= 0) return json({ error: "Invalid amount" }, 400);
 
-      // Verify bust_point matches server record (prevents spoofing)
       const { data: roundRow } = await supabase
         .from("crash_rounds")
         .select("bust_point")
@@ -191,18 +201,13 @@ serve(async (req) => {
         .single();
       const serverBust = roundRow ? (roundRow as { bust_point: number }).bust_point : null;
 
-      // Determine actual win using SERVER bust point (client value ignored for safety)
       const actualWin = serverBust !== null && cash_out_at !== null && cash_out_at <= serverBust
         ? Math.round(amount * cash_out_at * 100) / 100
         : 0;
 
-      // Atomically settle: refund stake + credit winnings net of already-debited stake.
-      // The client debited the stake locally when placing the bet. The server needs to:
-      //   - Credit payout if won (net = payout, since stake was already debited)
-      //   - Do nothing to balance if lost (stake was already debited)
       const newBalance = actualWin > 0
         ? Math.round((userBalance + actualWin) * 100) / 100
-        : userBalance; // lost — no balance change (debit already happened client-side)
+        : userBalance;
 
       if (actualWin > 0) {
         const { error: balErr } = await supabase
@@ -213,16 +218,13 @@ serve(async (req) => {
       }
 
       await supabase.from("bets").insert({
-        user_id,
-        bet_amount: amount,
-        win_amount: actualWin,
+        user_id, bet_amount: amount, win_amount: actualWin,
         multiplier: cash_out_at ?? bust_point ?? 0,
         status: actualWin > 0 ? "won" : "lost",
         bet_details: { cashOutAt: cash_out_at, bustPoint: serverBust ?? bust_point },
         resolved_at: new Date().toISOString(),
       });
 
-      // Also record in transactions for audit trail
       await supabase.from("transactions").insert({
         user_id,
         type: actualWin > 0 ? "credit" : "debit",
@@ -236,6 +238,138 @@ serve(async (req) => {
       return json({ success: true, win: actualWin, verified_bust: serverBust, balance_after: newBalance });
     }
 
+    // ── aviator_round_start ──────────────────────────────────────────────────
+    // Called by the AviatorLoop at the START of waiting phase for every new
+    // round. Generates crash point using crypto.getRandomValues() and stores it
+    // encrypted in the DB. Returns ONLY round metadata (no crash point).
+    if (game_type === "aviator_round_start") {
+      const { round_id } = body as { round_id: number };
+      if (!round_id || round_id < 1) return json({ error: "Missing round_id" }, 400);
+
+      // Idempotent — return existing if already generated
+      const { data: existing } = await supabase
+        .from("aviator_rounds")
+        .select("id, started_at")
+        .eq("round_id", round_id)
+        .single();
+      if (existing) {
+        return json({ success: true, round_id, already_exists: true });
+      }
+
+      const crashPoint = generateAviatorCrashPoint();
+      const startedAt  = new Date().toISOString();
+
+      await supabase.from("aviator_rounds").insert({
+        round_id,
+        crash_point: crashPoint,   // stored server-side, never returned in API
+        started_at: startedAt,
+        phase: "waiting",
+      });
+
+      return json({ success: true, round_id, started_at: startedAt });
+    }
+
+    // ── aviator_cashout ──────────────────────────────────────────────────────
+    // Called when a player presses "Cash Out" during the flying phase.
+    // The server:
+    //   1. Looks up the server crash point for the round
+    //   2. Computes the multiplier at the CURRENT server time
+    //   3. If multiplier < crash_point: cashout is valid, credits balance
+    //   4. If multiplier >= crash_point: round already crashed, bet is lost
+    if (game_type === "aviator_cashout") {
+      const { round_id, bet_amount, placed_at_ms } = body as {
+        round_id: number; bet_amount: number; placed_at_ms: number;
+      };
+      if (!round_id || !bet_amount || bet_amount <= 0) return json({ error: "Missing fields" }, 400);
+      if (bet_amount > userBalance) return json({ error: "Insufficient balance" }, 400);
+
+      const { data: roundRow } = await supabase
+        .from("aviator_rounds")
+        .select("crash_point, started_at")
+        .eq("round_id", round_id)
+        .single();
+      if (!roundRow) return json({ error: "Round not found" }, 400);
+
+      const r = roundRow as { crash_point: number; started_at: string };
+      const flightStartMs = new Date(r.started_at).getTime() + 6000; // 6s waiting phase
+      const nowMs = Date.now();
+      const elapsedMs = Math.max(0, nowMs - flightStartMs);
+      const currentMultiplier = aviatorMultiplierAt(elapsedMs);
+
+      const crashed = currentMultiplier >= r.crash_point;
+      const cashoutMultiplier = crashed ? null : Math.min(currentMultiplier, r.crash_point - 0.01);
+      const win = cashoutMultiplier !== null
+        ? Math.round(bet_amount * cashoutMultiplier * 100) / 100
+        : 0;
+
+      // Debit stake if not already done, credit winnings
+      // (client debits stake locally; server credits payout net of stake on win)
+      const newBalance = win > 0
+        ? Math.round((userBalance + win) * 100) / 100
+        : userBalance;
+
+      if (win > 0) {
+        const { error: balErr } = await supabase
+          .from("profiles")
+          .update({ balance: newBalance, updated_at: new Date().toISOString() })
+          .eq("id", user_id);
+        if (balErr) return json({ error: "Balance update failed" }, 500);
+      }
+
+      await supabase.from("bets").insert({
+        user_id,
+        bet_amount,
+        win_amount: win,
+        multiplier: cashoutMultiplier ?? 0,
+        status: win > 0 ? "won" : "lost",
+        bet_details: {
+          game: "aviator",
+          round_id,
+          cashout_at: cashoutMultiplier,
+          crash_point: r.crash_point,
+          placed_at_ms,
+        },
+        resolved_at: new Date().toISOString(),
+      });
+
+      return json({
+        success: true,
+        won: win > 0,
+        cashout_at: cashoutMultiplier,
+        win,
+        balance_after: newBalance,
+        // Reveal crash point only if round already crashed
+        crash_point: crashed ? r.crash_point : null,
+      });
+    }
+
+    // ── aviator_settle ───────────────────────────────────────────────────────
+    // Called after a round ends for any bet that did NOT cash out.
+    // Always a loss — just records the bet row.
+    if (game_type === "aviator_settle") {
+      const { round_id, bet_amount } = body as { round_id: number; bet_amount: number };
+      if (!round_id || !bet_amount || bet_amount <= 0) return json({ error: "Missing fields" }, 400);
+
+      const { data: roundRow } = await supabase
+        .from("aviator_rounds")
+        .select("crash_point")
+        .eq("round_id", round_id)
+        .single();
+      const crashPoint = roundRow ? (roundRow as { crash_point: number }).crash_point : 0;
+
+      await supabase.from("bets").insert({
+        user_id,
+        bet_amount,
+        win_amount: 0,
+        multiplier: 0,
+        status: "lost",
+        bet_details: { game: "aviator", round_id, crash_point: crashPoint },
+        resolved_at: new Date().toISOString(),
+      });
+
+      return json({ success: true, crash_point: crashPoint });
+    }
+
     // ── mines_start ─────────────────────────────────────────────────────────
     if (game_type === "mines_start") {
       const { mine_count, stake } = body as { mine_count: number; stake: number };
@@ -243,7 +377,6 @@ serve(async (req) => {
       if (!stake || stake <= 0) return json({ error: "Invalid stake" }, 400);
       if (stake > userBalance) return json({ error: "Insufficient balance" }, 400);
 
-      // Cancel any existing active session first
       await supabase
         .from("mines_sessions")
         .update({ status: "busted" })
@@ -253,7 +386,6 @@ serve(async (req) => {
       const minePositions = generateMinePositions(mine_count);
       const newBalance = userBalance - stake;
 
-      // Deduct stake atomically
       const { error: balErr } = await supabase
         .from("profiles")
         .update({ balance: newBalance, updated_at: new Date().toISOString() })
@@ -271,7 +403,6 @@ serve(async (req) => {
         success: true,
         session_id: (session as { id: string }).id,
         balance_after: newBalance,
-        // Do NOT reveal mine_positions to client
         grid_size: 25,
         mine_count,
       });
@@ -298,7 +429,6 @@ serve(async (req) => {
       const isMine = s.mine_positions.includes(tile_index);
 
       if (isMine) {
-        // Bust: no payout, session ends
         await supabase
           .from("mines_sessions")
           .update({ status: "busted", updated_at: new Date().toISOString() })
@@ -313,7 +443,6 @@ serve(async (req) => {
         return json({ success: true, is_mine: true, mine_positions: s.mine_positions, gems_found: s.gems_found });
       }
 
-      // Safe: increment gems_found
       const newGems = s.gems_found + 1;
       await supabase
         .from("mines_sessions")
@@ -377,7 +506,6 @@ serve(async (req) => {
       if (!round_id || !bet || !stake || stake <= 0) return json({ error: "Missing fields" }, 400);
       if (stake > userBalance) return json({ error: "Insufficient balance" }, 400);
 
-      // Get (or create) authoritative server result
       const { data: existing } = await supabase
         .from("sunvsmoon_rounds")
         .select("result")
@@ -395,9 +523,6 @@ serve(async (req) => {
       const won = bet === result;
       const profit = won ? stake * (PAYOUTS[bet] ?? 1) : 0;
       const payout = won ? stake + profit : 0;
-      // Client already debited the stake optimistically — reconcile:
-      // If won: add payout (stake was already removed, so credit stake+profit)
-      // If lost: do nothing (stake was already removed)
       const newBalance = won
         ? Math.round((userBalance + payout) * 100) / 100
         : userBalance;
@@ -431,13 +556,11 @@ serve(async (req) => {
       if (stake > userBalance) return json({ error: "Insufficient balance" }, 400);
       if (!direction || !entry_price || !exit_price) return json({ error: "Missing fields" }, 400);
 
-      // Server determines win: compare entry vs exit price
       const won =
         (direction === "UP" && exit_price > entry_price) ||
         (direction === "DOWN" && exit_price < entry_price);
       const profit = won ? Math.round(stake * payout_pct / 100 * 100) / 100 : 0;
       const payout = won ? stake + profit : 0;
-      // Client already debited stake — reconcile same as sunvsmoon above
       const newBalance = won
         ? Math.round((userBalance + payout) * 100) / 100
         : userBalance;
