@@ -1,10 +1,10 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   LayoutDashboard, Users, ShieldCheck, Headphones, DollarSign,
   Cpu, Bell, Megaphone, Wallet, Trophy, Mail, Server, Coins,
   CreditCard, FileText, Image, Gift, Settings, History,
   ShieldBan, MessageSquare, Zap, BarChart2, LogOut, Menu, X,
-  ChevronDown, KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown
+  KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -49,12 +49,14 @@ import CrmTab from './admin/CrmTab';
 import TicketAlertOverlay from '../components/TicketAlertOverlay';
 import AdminSupportNotification from '../components/AdminSupportNotification';
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager'
   | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory'
   | 'requests' | 'signupBonus' | 'dashboard';
 
 type GameHandlerKey = 'crash' | 'wingo' | 'k3' | 'fived' | 'sunvsmoon' | 'aviator';
+
+type FloatToast = { id: number; message: string; icon: 'deposit' | 'withdrawal' | 'support' };
 
 // ─── Sidebar tab list ────────────────────────────────────────────────────────
 const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
@@ -88,7 +90,7 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'intercom',            label: 'Intercom',            icon: MessageSquare },
 ];
 
-// ─── Game handler sub-tabs ───────────────────────────────────────────────────
+// ─── Game handler sub-tabs ────────────────────────────────────────────────────
 const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.Element }[] = [
   { key: 'crash',     label: 'Crash',       Panel: CrashHandlingPanel },
   { key: 'wingo',     label: 'Win Go',      Panel: WingoHandlingPanel },
@@ -98,101 +100,79 @@ const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.
   { key: 'aviator',   label: 'Aviator',     Panel: AviatorHandlingPanel },
 ];
 
-// ─── sha256 helper (for password) ────────────────────────────────────────────
+// ─── sha256 helper ────────────────────────────────────────────────────────────
 async function sha256Hex(plain: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(plain);
-  const hashBuf = await crypto.subtle.digest('SHA-256', data);
-  return Array.from(new Uint8Array(hashBuf))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(plain));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-// ─── Inline password change form ─────────────────────────────────────────────
+// ─── Password change form ─────────────────────────────────────────────────────
 function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () => void }) {
   const [old, setOld]         = useState('');
   const [next, setNext]       = useState('');
   const [confirm, setConfirm] = useState('');
-  const [showOld, setShowOld]     = useState(false);
-  const [showNext, setShowNext]   = useState(false);
-  const [showConf, setShowConf]   = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState('');
-  const [ok, setOk]           = useState(false);
+  const [showOld, setShowOld]   = useState(false);
+  const [showNext, setShowNext] = useState(false);
+  const [showConf, setShowConf] = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState('');
+  const [ok, setOk]             = useState(false);
 
   const submit = async () => {
     setError('');
     if (!old || !next || !confirm) { setError('All fields required'); return; }
-    if (next !== confirm) { setError('New passwords do not match'); return; }
-    if (next.length < 6)  { setError('Min 6 characters'); return; }
+    if (next !== confirm)          { setError('Passwords do not match'); return; }
+    if (next.length < 6)           { setError('Min 6 characters'); return; }
     setLoading(true);
     try {
-      const oldHash  = await sha256Hex(old);
-      const nextHash = await sha256Hex(next);
-      const staff    = await supabaseStaffLogin(staffId, oldHash).catch(() => null);
+      const staff = await supabaseStaffLogin(staffId, await sha256Hex(old)).catch(() => null);
       if (!staff) { setError('Current password is wrong'); setLoading(false); return; }
-      await supabaseUpdateStaffPassword(staffId, nextHash);
+      await supabaseUpdateStaffPassword(staffId, await sha256Hex(next));
       setOk(true);
       setTimeout(onDone, 1200);
     } catch { setError('Server error, try again'); }
     finally { setLoading(false); }
   };
 
-  const field = (
-    label: string,
-    val: string,
-    set: (v: string) => void,
-    show: boolean,
-    toggle: () => void
-  ) => (
+  const FieldRow = ({ label, val, set, show, toggle }: {
+    label: string; val: string; set: (v: string) => void; show: boolean; toggle: () => void;
+  }) => (
     <div className="space-y-1">
-      <label className="text-xs text-slate-400">{label}</label>
+      <label className="text-[11px] text-slate-400">{label}</label>
       <div className="relative">
         <input
-          type={show ? 'text' : 'password'}
-          value={val}
-          onChange={(e) => set(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm text-white pr-10"
+          type={show ? 'text' : 'password'} value={val} onChange={(e) => set(e.target.value)}
+          className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white pr-9 outline-none"
         />
-        <button
-          type="button"
-          onClick={toggle}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-        >
-          {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+        <button type="button" onClick={toggle} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
+          {show ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
         </button>
       </div>
     </div>
   );
 
-  if (ok) return <p className="text-green-400 text-sm text-center py-2">Password changed!</p>;
-
+  if (ok) return <p className="text-green-400 text-xs text-center py-2">Password changed!</p>;
   return (
-    <div className="space-y-3 pt-1">
-      {field('Current Password', old, setOld, showOld, () => setShowOld((v) => !v))}
-      {field('New Password',     next, setNext, showNext, () => setShowNext((v) => !v))}
-      {field('Confirm New',      confirm, setConfirm, showConf, () => setShowConf((v) => !v))}
-      {error && <p className="text-red-400 text-xs">{error}</p>}
-      <button
-        onClick={submit}
-        disabled={loading}
-        className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-sm rounded py-2 transition-colors"
-      >
+    <div className="space-y-2.5 pt-2">
+      <FieldRow label="Current Password" val={old}     set={setOld}     show={showOld}   toggle={() => setShowOld(v => !v)} />
+      <FieldRow label="New Password"     val={next}    set={setNext}    show={showNext}  toggle={() => setShowNext(v => !v)} />
+      <FieldRow label="Confirm New"      val={confirm} set={setConfirm} show={showConf}  toggle={() => setShowConf(v => !v)} />
+      {error && <p className="text-red-400 text-[11px]">{error}</p>}
+      <button onClick={submit} disabled={loading}
+        className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-xs rounded-lg py-2 transition-colors">
         {loading ? 'Saving…' : 'Change Password'}
       </button>
     </div>
   );
 }
 
-// ─── Notification row helper ─────────────────────────────────────────────────
+// ─── Notification row (inside dropdown) ──────────────────────────────────────
 function NotifRow({ icon: Icon, label, count, onClick, accent }: {
   icon: typeof Bell; label: string; count: number; onClick: () => void; accent: string;
 }) {
   return (
-    <button
-      onClick={onClick}
-      className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors text-left"
-    >
+    <button onClick={onClick}
+      className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors text-left">
       <span className="flex items-center gap-2 text-sm text-slate-300">
         <Icon className={`w-4 h-4 ${accent}`} /> {label}
       </span>
@@ -203,30 +183,156 @@ function NotifRow({ icon: Icon, label, count, onClick, accent }: {
   );
 }
 
+// ─── Floating toast notification ─────────────────────────────────────────────
+function FloatingToasts({ toasts, onDismiss }: { toasts: FloatToast[]; onDismiss: (id: number) => void }) {
+  if (toasts.length === 0) return null;
+  const iconMap = {
+    deposit:    { icon: Banknote,     color: 'text-emerald-400', bg: 'bg-emerald-500/15 border-emerald-500/30' },
+    withdrawal: { icon: TrendingDown, color: 'text-red-400',     bg: 'bg-red-500/15 border-red-500/30' },
+    support:    { icon: MessageSquare,color: 'text-violet-400',  bg: 'bg-violet-500/15 border-violet-500/30' },
+  };
+  return (
+    // right-4 instead of right-0 so toast is never cut off at screen edge
+    <div className="fixed bottom-6 right-4 z-[200] flex flex-col gap-2 pointer-events-none">
+      {toasts.map((t) => {
+        const { icon: Icon, color, bg } = iconMap[t.icon];
+        return (
+          <div key={t.id}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl backdrop-blur-sm text-sm font-semibold text-white animate-in slide-in-from-right-4 fade-in duration-300 ${bg} pointer-events-auto`}
+            onClick={() => onDismiss(t.id)}
+          >
+            <Bell className="w-4 h-4 text-white/80 shrink-0" />
+            <Icon className={`w-4 h-4 shrink-0 ${color}`} />
+            <span className="text-xs">{t.message}</span>
+            <button onClick={() => onDismiss(t.id)} className="ml-1 text-white/50 hover:text-white">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Notification bell button (reusable for admin + staff) ───────────────────
+function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSupport, onNavigate }: {
+  totalUnread: number;
+  pendingDeposits: number;
+  pendingWithdrawals: number;
+  unreadSupport: number;
+  onNavigate: (tab: Tab) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="relative w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 grid place-items-center hover:border-violet-500/50 transition-colors"
+        aria-label="Notifications"
+      >
+        <Bell className="w-4 h-4 text-slate-300" />
+        {totalUnread > 0 && (
+          <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-[20px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center border-2 border-slate-900 shadow">
+            {totalUnread > 99 ? '99+' : totalUnread}
+          </span>
+        )}
+      </button>
+
+      {open && (
+        // right-0 keeps dropdown aligned to button, max-w so it doesn't overflow
+        <div className="absolute right-0 top-11 w-72 max-w-[calc(100vw-1rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[100] p-2">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-3 py-1.5 flex items-center gap-1.5">
+            <Bell className="w-3 h-3" /> Notifications
+          </p>
+          {/* Only show rows where count > 0 */}
+          {pendingDeposits > 0 && (
+            <NotifRow icon={Banknote}      accent="text-emerald-400" label="Pending deposits"           count={pendingDeposits}    onClick={() => { onNavigate('finance');   setOpen(false); }} />
+          )}
+          {pendingWithdrawals > 0 && (
+            <NotifRow icon={TrendingDown}  accent="text-red-400"     label="Pending withdrawals"        count={pendingWithdrawals} onClick={() => { onNavigate('requests');  setOpen(false); }} />
+          )}
+          {unreadSupport > 0 && (
+            <NotifRow icon={MessageSquare} accent="text-violet-400"  label="Unread support messages"   count={unreadSupport}      onClick={() => { cms.markSupportRead();   setOpen(false); }} />
+          )}
+          {totalUnread === 0 && (
+            <p className="text-xs text-slate-500 text-center py-3">No pending notifications</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r: Route) => void; onOpenMenu?: () => void }) {
   const sessionId = useStaffSession();
-  const [tab, setTab]                     = useState<Tab>('dashboard');
-  const [gameHandlerTab, setGameHandlerTab] = useState<GameHandlerKey>('crash');
-  const [sidebarOpen, setSidebarOpen]     = useState(false);
-  const [profileOpen, setProfileOpen]     = useState(false);
-  const [notifOpen, setNotifOpen]         = useState(false);
-  const [showPwForm, setShowPwForm]       = useState(false);
-  const profileRef = useRef<HTMLDivElement | null>(null);
-  const notifRef   = useRef<HTMLDivElement | null>(null);
+  const [tab, setTab]                       = useState<Tab>('dashboard');
+  const [gameHandlerTab, setGameHandlerTab]  = useState<GameHandlerKey>('crash');
+  const [sidebarOpen, setSidebarOpen]       = useState(false);
+  const [profileOpen, setProfileOpen]       = useState(false);
+  const [showPwForm, setShowPwForm]         = useState(false);
+  const [floatToasts, setFloatToasts]       = useState<FloatToast[]>([]);
+  const toastCounterRef                     = useRef(0);
+  const profileRef                          = useRef<HTMLDivElement>(null);
 
-  const staff = useStaff();
+  const staff   = useStaff();
   const finance = useFinance();
   const support = useSupport();
   const me = staff.find((s) => s.id === sessionId);
 
-  // Pending counts for bell badge
+  // ── Reactive pending counts ──
+  // These are derived from live useFinance / useSupport hooks.
+  // When a deposit/withdrawal is accepted or rejected anywhere in the app
+  // (via cms store update), these counts auto-update immediately.
   const pendingDeposits    = finance.deposits.filter((d) => d.status === 'pending').length;
   const pendingWithdrawals = finance.withdrawals.filter((w) => w.status === 'pending').length;
   const unreadSupport      = support.filter((s) => !s.read).length;
   const totalUnread        = pendingDeposits + pendingWithdrawals + unreadSupport;
 
-  // navigate event from elsewhere in the app
+  // ── Floating toast: show when count INCREASES ──
+  const prevDeposits    = useRef(pendingDeposits);
+  const prevWithdrawals = useRef(pendingWithdrawals);
+  const prevSupport     = useRef(unreadSupport);
+
+  const pushToast = useCallback((message: string, icon: FloatToast['icon']) => {
+    const id = ++toastCounterRef.current;
+    setFloatToasts((prev) => [...prev, { id, message, icon }]);
+    setTimeout(() => setFloatToasts((prev) => prev.filter((t) => t.id !== id)), 2000);
+  }, []);
+
+  useEffect(() => {
+    if (pendingDeposits > prevDeposits.current) {
+      pushToast(`${pendingDeposits - prevDeposits.current} new deposit request!`, 'deposit');
+    }
+    prevDeposits.current = pendingDeposits;
+  }, [pendingDeposits, pushToast]);
+
+  useEffect(() => {
+    if (pendingWithdrawals > prevWithdrawals.current) {
+      pushToast(`${pendingWithdrawals - prevWithdrawals.current} new withdrawal request!`, 'withdrawal');
+    }
+    prevWithdrawals.current = pendingWithdrawals;
+  }, [pendingWithdrawals, pushToast]);
+
+  useEffect(() => {
+    if (unreadSupport > prevSupport.current) {
+      pushToast(`${unreadSupport - prevSupport.current} new support message!`, 'support');
+    }
+    prevSupport.current = unreadSupport;
+  }, [unreadSupport, pushToast]);
+
+  // ── admin-navigate event ──
   useEffect(() => {
     const handler = (e: Event) => {
       const detail = (e as CustomEvent<string>).detail as Tab;
@@ -236,7 +342,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     return () => window.removeEventListener('admin-navigate', handler);
   }, []);
 
-  // close profile dropdown on outside click
+  // ── Close profile on outside click ──
   useEffect(() => {
     if (!profileOpen) return;
     const close = (e: MouseEvent) => {
@@ -249,18 +355,6 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     return () => document.removeEventListener('mousedown', close);
   }, [profileOpen]);
 
-  // close notif dropdown on outside click
-  useEffect(() => {
-    if (!notifOpen) return;
-    const close = (e: MouseEvent) => {
-      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
-        setNotifOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [notifOpen]);
-
   const hasPermission = (key: PermissionKey) => {
     if (!me) return false;
     if (me.role === 'superadmin' || me.isOwner) return true;
@@ -269,226 +363,169 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
 
   if (!sessionId) return <AdminLoginPage />;
 
-  const navigate = (t: Tab) => {
-    setTab(t);
-    setSidebarOpen(false);
-  };
+  const navigate = (t: Tab) => { setTab(t); setSidebarOpen(false); };
 
   const ActiveGamePanel = GAME_HANDLER_TABS.find((g) => g.key === gameHandlerTab)?.Panel ?? CrashHandlingPanel;
 
-  // ── Sidebar content ──────────────────────────────────────────────────────────
-  const SidebarContent = () => (
-    <>
-      <div className="flex items-center gap-2 px-4 py-4 border-b border-slate-800 shrink-0">
-        <ShieldCheck className="w-5 h-5 text-violet-400" />
-        <span className="font-bold text-sm">Admin Panel</span>
+  // ── Shared header content (reused in both desktop + mobile) ──────────────────
+  const HeaderRight = () => (
+    <div className="flex items-center gap-2">
+      {/* Notification bell — same for all staff */}
+      <NotifBell
+        totalUnread={totalUnread}
+        pendingDeposits={pendingDeposits}
+        pendingWithdrawals={pendingWithdrawals}
+        unreadSupport={unreadSupport}
+        onNavigate={navigate}
+      />
+
+      {/* Profile button — NO arrow */}
+      <div className="relative" ref={profileRef}>
+        <button
+          onClick={() => { setProfileOpen(v => !v); setShowPwForm(false); }}
+          className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 rounded-lg text-sm transition-colors"
+        >
+          <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold shrink-0">
+            {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
+          </div>
+          <span className="hidden sm:block text-slate-300 text-xs max-w-[100px] truncate">
+            {me?.name ?? me?.email ?? 'Admin'}
+          </span>
+          {/* ← ChevronDown removed as requested */}
+        </button>
+
+        {profileOpen && (
+          <div className="absolute right-0 top-full mt-2 w-72 max-w-[calc(100vw-1rem)] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[100] overflow-hidden">
+            {/* User info */}
+            <div className="px-4 py-3 border-b border-slate-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-violet-600 flex items-center justify-center text-lg font-bold shrink-0">
+                  {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white truncate">{me?.name ?? '—'}</p>
+                  <p className="text-xs text-slate-400 truncate">{me?.email ?? '—'}</p>
+                  <span className="text-[10px] bg-violet-600/30 text-violet-300 px-1.5 py-0.5 rounded-full">
+                    {me?.role === 'superadmin' || me?.isOwner ? 'Super Admin' : me?.role ?? 'Staff'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Change password */}
+            <div className="px-4 py-2 border-b border-slate-800">
+              <button
+                onClick={() => setShowPwForm(v => !v)}
+                className="w-full flex items-center gap-2 text-sm text-slate-300 hover:text-white py-1 transition-colors"
+              >
+                <KeyRound className="w-4 h-4" />
+                Change Password
+              </button>
+              {showPwForm && me && (
+                <PasswordChangeForm staffId={me.id} onDone={() => { setShowPwForm(false); setProfileOpen(false); }} />
+              )}
+            </div>
+
+            {/* Logout */}
+            <div className="px-4 py-2">
+              <button
+                onClick={() => cms.staffLogout()}
+                className="w-full flex items-center gap-2 text-sm text-red-400 hover:text-red-300 py-1 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                Logout
+              </button>
+            </div>
+          </div>
+        )}
       </div>
-      <nav className="flex-1 overflow-y-auto py-2 scrollbar-thin">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => navigate(t.key)}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
-              tab === t.key
-                ? 'bg-violet-600/20 text-violet-300 border-r-2 border-violet-500'
-                : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-            }`}
-          >
-            <t.icon className="w-4 h-4 shrink-0" />
-            <span>{t.label}</span>
-          </button>
-        ))}
-      </nav>
-    </>
+    </div>
+  );
+
+  // ── Sidebar nav items ──────────────────────────────────────────────────────
+  const SidebarNav = () => (
+    <nav className="flex-1 overflow-y-auto py-2 scrollbar-thin">
+      {TABS.map((t) => (
+        <button
+          key={t.key}
+          onClick={() => navigate(t.key)}
+          className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
+            tab === t.key
+              ? 'bg-violet-600/20 text-violet-300 border-r-2 border-violet-500'
+              : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+          }`}
+        >
+          <t.icon className="w-4 h-4 shrink-0" />
+          <span>{t.label}</span>
+        </button>
+      ))}
+    </nav>
   );
 
   return (
-    <div className="flex h-screen bg-slate-950 text-white overflow-hidden">
-      {/* ── Desktop sidebar ── */}
-      <aside className="hidden md:flex w-56 flex-col border-r border-slate-800 bg-slate-900 shrink-0">
-        <SidebarContent />
-      </aside>
+    // ── Full-height column: header on top (full width), then sidebar+content below ──
+    <div className="flex flex-col h-screen bg-slate-950 text-white overflow-hidden">
 
-      {/* ── Mobile drawer overlay ── */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-40 md:hidden">
-          <div
-            className="absolute inset-0 bg-black/60"
-            onClick={() => setSidebarOpen(false)}
-          />
-          <aside className="absolute left-0 top-0 bottom-0 w-64 bg-slate-900 border-r border-slate-800 flex flex-col z-50">
-            <div className="flex items-center justify-between px-4 py-4 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="w-5 h-5 text-violet-400" />
-                <span className="font-bold text-sm">Admin Panel</span>
-              </div>
-              <button onClick={() => setSidebarOpen(false)} className="text-slate-400 hover:text-white">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <nav className="flex-1 overflow-y-auto py-2 scrollbar-thin">
-              {TABS.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => navigate(t.key)}
-                  className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
-                    tab === t.key
-                      ? 'bg-violet-600/20 text-violet-300 border-r-2 border-violet-500'
-                      : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-                  }`}
-                >
-                  <t.icon className="w-4 h-4 shrink-0" />
-                  <span>{t.label}</span>
-                </button>
-              ))}
-            </nav>
-          </aside>
-        </div>
-      )}
-
-      {/* ── Main area ── */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* ── Top header ── */}
-        <header className="flex items-center justify-between px-4 h-14 border-b border-slate-800 bg-slate-900 shrink-0">
-          {/* Left: hamburger (mobile) + user name */}
-          <div className="flex items-center gap-3">
-            <button
-              className="md:hidden text-slate-400 hover:text-white"
-              onClick={() => setSidebarOpen(true)}
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-            <span className="text-sm font-medium text-slate-300">
-              {me?.name ?? me?.email ?? 'Admin'}
-            </span>
-          </div>
-
-          {/* Right: notification bell + profile */}
+      {/* ══ FULL-WIDTH TOP HEADER ══════════════════════════════════════════════ */}
+      <header className="w-full flex items-center justify-between px-4 md:px-6 h-14 border-b border-slate-800 bg-slate-900 shrink-0 z-30">
+        {/* Left: hamburger (mobile) + panel title */}
+        <div className="flex items-center gap-3">
+          <button className="md:hidden text-slate-400 hover:text-white" onClick={() => setSidebarOpen(true)}>
+            <Menu className="w-5 h-5" />
+          </button>
           <div className="flex items-center gap-2">
-            {/* ── Notification bell with badge ── */}
-            <div className="relative" ref={notifRef}>
-              <button
-                onClick={() => setNotifOpen((v) => !v)}
-                className="relative w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 grid place-items-center hover:border-violet-500/50 transition-colors"
-                aria-label="Notifications"
-              >
-                <Bell className="w-4 h-4 text-slate-300" />
-                {totalUnread > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center border-2 border-slate-900">
-                    {totalUnread}
-                  </span>
-                )}
-              </button>
-              {notifOpen && (
-                <div className="absolute right-0 top-11 w-72 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-50 p-2 overflow-hidden">
-                  <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-3 py-1.5">Notifications</p>
-                  <NotifRow
-                    icon={Banknote}
-                    accent="text-green-400"
-                    label="Pending deposits"
-                    count={pendingDeposits}
-                    onClick={() => { navigate('finance'); setNotifOpen(false); }}
-                  />
-                  <NotifRow
-                    icon={TrendingDown}
-                    accent="text-red-400"
-                    label="Pending withdrawals"
-                    count={pendingWithdrawals}
-                    onClick={() => { navigate('requests'); setNotifOpen(false); }}
-                  />
-                  <NotifRow
-                    icon={MessageSquare}
-                    accent="text-violet-400"
-                    label="Unread support messages"
-                    count={unreadSupport}
-                    onClick={() => { cms.markSupportRead(); setNotifOpen(false); }}
-                  />
-                </div>
-              )}
-            </div>
-
-            {/* ── Profile button ── */}
-            <div className="relative" ref={profileRef}>
-              <button
-                onClick={() => { setProfileOpen((v) => !v); setShowPwForm(false); }}
-                className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-sm transition-colors"
-              >
-                <div className="w-6 h-6 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold">
-                  {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
-                </div>
-                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
-              </button>
-
-              {/* Floating profile dropdown */}
-              {profileOpen && (
-                <div className="absolute right-0 top-full mt-2 w-72 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
-                  {/* User info */}
-                  <div className="px-4 py-3 border-b border-slate-800">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-violet-600 flex items-center justify-center text-lg font-bold shrink-0">
-                        {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-white truncate">{me?.name ?? '—'}</p>
-                        <p className="text-xs text-slate-400 truncate">{me?.email ?? '—'}</p>
-                        <span className="text-[10px] bg-violet-600/30 text-violet-300 px-1.5 py-0.5 rounded-full">
-                          {me?.role === 'superadmin' || me?.isOwner ? 'Super Admin' : me?.role ?? 'Staff'}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Change password toggle */}
-                  <div className="px-4 py-2 border-b border-slate-800">
-                    <button
-                      onClick={() => setShowPwForm((v) => !v)}
-                      className="w-full flex items-center gap-2 text-sm text-slate-300 hover:text-white py-1 transition-colors"
-                    >
-                      <KeyRound className="w-4 h-4" />
-                      Change Password
-                      <ChevronDown className={`w-3.5 h-3.5 ml-auto transition-transform ${showPwForm ? 'rotate-180' : ''}`} />
-                    </button>
-                    {showPwForm && me && (
-                      <PasswordChangeForm
-                        staffId={me.id}
-                        onDone={() => { setShowPwForm(false); setProfileOpen(false); }}
-                      />
-                    )}
-                  </div>
-
-                  {/* Logout */}
-                  <div className="px-4 py-2">
-                    <button
-                      onClick={() => { cms.staffLogout(); }}
-                      className="w-full flex items-center gap-2 text-sm text-red-400 hover:text-red-300 py-1 transition-colors"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      Logout
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
+            <ShieldCheck className="w-5 h-5 text-violet-400 shrink-0" />
+            <span className="font-bold text-sm tracking-wide hidden sm:block">Admin Panel</span>
           </div>
-        </header>
+        </div>
 
-        {/* ── Tab content ── */}
+        {/* Right: bell + profile */}
+        <HeaderRight />
+      </header>
+
+      {/* ══ BODY: sidebar + content ════════════════════════════════════════════ */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ── Desktop sidebar ── */}
+        <aside className="hidden md:flex w-56 flex-col border-r border-slate-800 bg-slate-900 shrink-0">
+          <SidebarNav />
+        </aside>
+
+        {/* ── Mobile drawer ── */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 z-40 md:hidden">
+            <div className="absolute inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
+            <aside className="absolute left-0 top-0 bottom-0 w-64 bg-slate-900 border-r border-slate-800 flex flex-col z-50">
+              <div className="flex items-center justify-between px-4 py-4 border-b border-slate-800 shrink-0">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="w-5 h-5 text-violet-400" />
+                  <span className="font-bold text-sm">Admin Panel</span>
+                </div>
+                <button onClick={() => setSidebarOpen(false)} className="text-slate-400 hover:text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <SidebarNav />
+            </aside>
+          </div>
+        )}
+
+        {/* ── Main content area ── */}
         <main className="flex-1 overflow-y-auto p-4 scrollbar-thin">
-          {tab === 'dashboard'           && <DashboardOverviewTab />}
-          {tab === 'finance'             && <FinanceTab />}
-          {tab === 'requests'            && <RequestsTab />}
-          {tab === 'tickets'             && <TicketsTab />}
-          {tab === 'gateways'            && <AutoGatewaysTab />}
-          {tab === 'handlers'            && (
+          {tab === 'dashboard'            && <DashboardOverviewTab />}
+          {tab === 'finance'              && <FinanceTab />}
+          {tab === 'requests'             && <RequestsTab />}
+          {tab === 'tickets'              && <TicketsTab />}
+          {tab === 'gateways'             && <AutoGatewaysTab />}
+          {tab === 'handlers'             && (
             <div className="space-y-4">
               <h2 className="font-bold text-lg">Payment Handlers</h2>
               <p className="text-slate-500 text-sm">Configure deposit/withdrawal handler logic here.</p>
             </div>
           )}
-          {tab === 'algos'              && <GameAlgosTab />}
-          {tab === 'games'              && (
+          {tab === 'algos'               && <GameAlgosTab />}
+          {tab === 'games'               && (
             <div className="space-y-4">
-              {/* Extra panels from cloudflare */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <OnlineCountPanel />
                 <TopWinPaidOutPanel />
@@ -511,27 +548,27 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
               <ActiveGamePanel />
             </div>
           )}
-          {tab === 'users'              && <UsersTab />}
-          {tab === 'balanceHistory'     && <BalanceHistoryTab />}
-          {tab === 'topRankings'        && <TopRankingsAdminPanel />}
-          {tab === 'staff'              && hasPermission('staff') && <StaffTab />}
-          {tab === 'notifications'      && <NotificationsTab />}
-          {tab === 'notificationManager'&& <NotificationManagerTab />}
-          {tab === 'marketing'          && <MarketingTab />}
-          {tab === 'crm'                && <CrmTab />}
-          {tab === 'email'              && <EmailManagerTab />}
-          {tab === 'smtp'               && <SmtpTab />}
-          {tab === 'currencies'         && <CurrenciesTab />}
-          {tab === 'paymentMethods'     && <PaymentMethodsTab />}
-          {tab === 'dynamicPages'       && <DynamicPagesTab />}
-          {tab === 'banner'             && <BannerLogoTab />}
-          {tab === 'redeem'             && <RedeemCodesTab />}
-          {tab === 'signupBonus'        && <SignupBonusTab />}
-          {tab === 'gameSettings'       && <GameSettingsTab />}
-          {tab === 'history'            && <HistoryTab />}
-          {tab === 'ban'                && <BanSectionTab />}
-          {tab === 'intercom'           && <IntercomTab />}
-          {tab === 'manageProfile'      && (
+          {tab === 'users'               && <UsersTab />}
+          {tab === 'balanceHistory'      && <BalanceHistoryTab />}
+          {tab === 'topRankings'         && <TopRankingsAdminPanel />}
+          {tab === 'staff'               && hasPermission('staff') && <StaffTab />}
+          {tab === 'notifications'       && <NotificationsTab />}
+          {tab === 'notificationManager' && <NotificationManagerTab />}
+          {tab === 'marketing'           && <MarketingTab />}
+          {tab === 'crm'                 && <CrmTab />}
+          {tab === 'email'               && <EmailManagerTab />}
+          {tab === 'smtp'                && <SmtpTab />}
+          {tab === 'currencies'          && <CurrenciesTab />}
+          {tab === 'paymentMethods'      && <PaymentMethodsTab />}
+          {tab === 'dynamicPages'        && <DynamicPagesTab />}
+          {tab === 'banner'              && <BannerLogoTab />}
+          {tab === 'redeem'              && <RedeemCodesTab />}
+          {tab === 'signupBonus'         && <SignupBonusTab />}
+          {tab === 'gameSettings'        && <GameSettingsTab />}
+          {tab === 'history'             && <HistoryTab />}
+          {tab === 'ban'                 && <BanSectionTab />}
+          {tab === 'intercom'            && <IntercomTab />}
+          {tab === 'manageProfile'       && (
             <div className="space-y-4">
               <h2 className="font-bold text-lg">Profile</h2>
               <p className="text-slate-500 text-sm">Use the profile button in the header to change your password.</p>
@@ -540,9 +577,15 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
         </main>
       </div>
 
-      {/* ── Support overlays (from cloudflare) ── */}
+      {/* ── Support overlays ── */}
       <TicketAlertOverlay />
       <AdminSupportNotification />
+
+      {/* ── Floating toast notifications (right-4 so fully visible) ── */}
+      <FloatingToasts
+        toasts={floatToasts}
+        onDismiss={(id) => setFloatToasts((prev) => prev.filter((t) => t.id !== id))}
+      />
     </div>
   );
 }
