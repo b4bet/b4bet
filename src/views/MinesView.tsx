@@ -17,14 +17,15 @@ function Cell({ index, state, onReveal }: { index: number; state: MinesState; on
   return (
     <button
       onClick={() => onReveal(index)}
-      disabled={revealed || !state.active}
+      // Disable when: already revealed, no active round, or a server call is in-flight
+      disabled={revealed || !state.active || state.loading}
       className={`relative aspect-square rounded-xl border transition-all duration-200 ${
         revealed
           ? isMine
             ? 'bg-coral-500/20 border-coral-500/60'
             : 'bg-emeraldwin-500/15 border-emeraldwin-500/50'
           : 'bg-slatepanel-800 border-borderline-900 hover:border-neon-400/60 hover:bg-slatepanel-700 active:scale-95'
-      } ${!revealed && state.active ? 'cursor-pointer' : 'cursor-default'}`}
+      } ${!revealed && state.active && !state.loading ? 'cursor-pointer' : 'cursor-default'}`}
     >
       {revealed && isGem && (
         <div className="absolute inset-0 grid place-items-center animate-gem-pop">
@@ -36,9 +37,15 @@ function Cell({ index, state, onReveal }: { index: number; state: MinesState; on
           <Bomb className="w-6 h-6 sm:w-7 sm:h-7 text-coral-500 drop-shadow-[0_0_8px_rgba(255,51,102,0.5)]" />
         </div>
       )}
-      {!revealed && state.active && (
+      {!revealed && state.active && !state.loading && (
         <div className="absolute inset-0 grid place-items-center">
           <div className="w-2 h-2 rounded-full bg-slate-600 group-hover:bg-neon-400" />
+        </div>
+      )}
+      {/* Spinner shown on the clicked tile while server call is pending */}
+      {!revealed && state.loading && (
+        <div className="absolute inset-0 grid place-items-center">
+          <div className="w-3 h-3 rounded-full border-2 border-neon-400/30 border-t-neon-400 animate-spin" />
         </div>
       )}
     </button>
@@ -63,18 +70,28 @@ export default function MinesView() {
     }
     minesEngine.setStake(amt);
     minesEngine.setMineCount(mines);
-    const res = minesEngine.start();
-    if (!res.ok) {
-      const insufficient = (res.reason || '').toLowerCase().includes('insufficient');
-      if (insufficient) cms.toast({ title: 'Insufficient Balance', body: res.reason || '', kind: 'alert' });
-      else cms.pushFromTemplate('nt_mines_failed', 'Mines failed', res.reason || '', 'warn');
-    }
+    // start() is now async (server call) — fire and handle result
+    void minesEngine.start().then((res) => {
+      if (!res.ok) {
+        const insufficient = (res.reason || '').toLowerCase().includes('insufficient');
+        if (insufficient) cms.toast({ title: 'Insufficient Balance', body: res.reason || '', kind: 'alert' });
+        else cms.toast({ title: 'Could not start round', body: res.reason || 'Server error', kind: 'alert' });
+      }
+    });
   };
 
-  const reveal = (i: number) => minesEngine.reveal(i);
+  const reveal = (i: number) => {
+    void minesEngine.reveal(i).then((res) => {
+      if (res && !res.ok && res.reason) {
+        cms.toast({ title: 'Reveal failed', body: res.reason, kind: 'alert' });
+      }
+    });
+  };
+
   const cashout = () => {
-    const res = minesEngine.cashOut();
-    if (!res.ok) cms.pushFromTemplate('nt_cashout_failed', 'Cashout failed', res.reason || '', 'warn');
+    void minesEngine.cashOut().then((res) => {
+      if (!res.ok) cms.toast({ title: 'Cashout failed', body: res.reason || 'Server error', kind: 'alert' });
+    });
   };
 
   return (
@@ -109,7 +126,7 @@ export default function MinesView() {
                 type="number"
                 value={stake}
                 onChange={(e) => setStake(e.target.value)}
-                disabled={state.active}
+                disabled={state.active || state.loading}
                 min={1}
                 className="input text-center tabular"
               />
@@ -133,7 +150,7 @@ export default function MinesView() {
                 onBlur={() => {
                   if (mines === 0 || !mines) setMines(1);
                 }}
-                disabled={state.active}
+                disabled={state.active || state.loading}
                 min={1}
                 max={24}
                 placeholder="1"
@@ -159,13 +176,19 @@ export default function MinesView() {
           </div>
         </div>
 
-        {!state.active ? (
+        {!state.active && !state.loading ? (
           <button onClick={start} className="btn-primary w-full py-3">
             <Play className="w-4 h-4" /> Start Round
           </button>
+        ) : state.loading && !state.active ? (
+          // Loading state while server creates the session
+          <button disabled className="btn-primary w-full py-3 opacity-60">
+            <div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+            Starting…
+          </button>
         ) : (
           <div className="grid grid-cols-2 gap-2">
-            <button onClick={cashout} disabled={state.gemsFound === 0 || state.busted || state.cashedOut} className="btn-emerald py-3">
+            <button onClick={cashout} disabled={state.gemsFound === 0 || state.busted || state.cashedOut || state.loading} className="btn-emerald py-3">
               <HandCoins className="w-4 h-4" />
               Cash Out {store.currency}{state.gemsFound > 0 ? (state.stake * state.currentMultiplier).toFixed(2) : '0.00'}
             </button>
@@ -291,4 +314,3 @@ function MinesStatsTabs() {
     </div>
   );
 }
-
