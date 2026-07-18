@@ -150,26 +150,33 @@ function seedLeaderboard(prefix: string): { user: string; earnings: number; ts: 
   return rows.map(r => ({ ...r, user: r.user + (prefix === 'mines' ? '\u00B7M' : '') }));
 }
 
+const DEFAULT_ADMIN_CONFIG: AdminConfig = {
+  mode: 'AUTO', targetWinProbability: 55, manualCrashPoint: 2.0, houseEdge: 4,
+  crashQuickStakes: [200, 500, 1000, 2000], manualTargetRoundId: null, minBet: 10, maxBet: 100000,
+  perGameLimits: {},
+  gameHandlers: {
+    aviator: { mode: 'AUTO', targetWinProbability: 55, houseEdge: 4, manualResult: '2.00', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
+    wingo: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '5', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
+    k3: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '3,3,3', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
+    fived: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '00000', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
+    sunvsmoon: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 6, manualResult: 'sun', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
+  },
+};
+
+const DEFAULT_REDEEM_CODES: Record<string, RedeemCode> = {
+  WELCOME50: { code: 'WELCOME50', bonus: 50, maxUsesPerUser: 1, userLimit: 100, createdAt: Date.now(), usageByUser: {} },
+  BONUS100: { code: 'BONUS100', bonus: 100, maxUsesPerUser: 1, userLimit: 100, createdAt: Date.now(), usageByUser: {} },
+};
+
 class Store {
   balance = 0;
   currency = '\u20B9'; // ₹
 
   notifications: NotificationItem[] = [];
 
-  admin: AdminConfig = {
-    mode: 'AUTO', targetWinProbability: 55, manualCrashPoint: 2.0, houseEdge: 4,
-    crashQuickStakes: [200, 500, 1000, 2000], manualTargetRoundId: null, minBet: 10, maxBet: 100000,
-    perGameLimits: {},
-    gameHandlers: {
-      aviator: { mode: 'AUTO', targetWinProbability: 55, houseEdge: 4, manualResult: '2.00', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
-      wingo: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '5', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
-      k3: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '3,3,3', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
-      fived: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '00000', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
-      sunvsmoon: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 6, manualResult: 'sun', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
-    },
-  };
+  admin: AdminConfig = { ...DEFAULT_ADMIN_CONFIG };
 
-  // Per-user history (mock single-user app)
+  // Per-user history
   crashMyBets: CrashBetRecord[] = [];
   minesMyHistory: MinesRoundRecord[] = [];
   sunMoonHistory: SunMoonRoundRecord[] = [];
@@ -194,14 +201,14 @@ class Store {
   private static SIGNUP_BONUS_GRANTED_KEY = 'b4bet.signupBonusGranted';
   private signupBonusGranted: Record<string, number> = {};
 
-  redeemCodes: Record<string, RedeemCode> = {
-    WELCOME50: { code: 'WELCOME50', bonus: 50, maxUsesPerUser: 1, userLimit: 100, createdAt: Date.now(), usageByUser: {} },
-    BONUS100: { code: 'BONUS100', bonus: 100, maxUsesPerUser: 1, userLimit: 100, createdAt: Date.now(), usageByUser: {} },
-  };
+  redeemCodes: Record<string, RedeemCode> = { ...DEFAULT_REDEEM_CODES };
 
   constructor() {
     this.restoreBalances();
     this.restoreSignupBonus();
+    // Load redeem codes and admin config from Supabase on startup
+    void this.loadRedeemCodesFromSupabase();
+    void this.loadAdminConfigFromSupabase();
 
     bus.on(Topics.AuthState, async (payload: unknown) => {
       const session = payload as { userId?: string; username?: string } | null;
@@ -238,7 +245,6 @@ class Store {
                 const row = evt.new as { balance?: number };
                 if (typeof row.balance === 'number') {
                   this.balance = row.balance;
-                  // Sync in-memory map too
                   if (session.username) {
                     this.balancesByUser[session.username.toLowerCase()] = row.balance;
                     this.persistBalances();
@@ -290,7 +296,6 @@ class Store {
       this.balance = next;
       bus.emit(Topics.Balance, this.balance);
     }
-    // Also update Supabase profile
     supabase.from('profiles').update({ balance: next }).eq('username', username).then(() => {}).catch(() => {});
   }
 
@@ -301,7 +306,6 @@ class Store {
       if (session) {
         this.balancesByUser[session.username.toLowerCase()] = this.balance;
         this.persistBalances();
-        // Update Supabase
         supabase.from('profiles').update({ balance: this.balance }).eq('username', session.username).then(() => {}).catch(() => {});
       }
     } catch { /* ignore */ }
@@ -335,10 +339,35 @@ class Store {
     bus.emit(Topics.Notification, this.notifications);
   }
 
-  // ---- Admin Config ----
+  // ---- Admin Config (Supabase-persisted) ----
+  async loadAdminConfigFromSupabase() {
+    try {
+      const { data } = await supabase.rpc('admin_get_settings');
+      if (data) {
+        const rows = data as { key: string; value: unknown }[];
+        const row = rows.find(r => r.key === 'admin_config');
+        if (row?.value && typeof row.value === 'object') {
+          // Deep merge with defaults so new fields are always present
+          this.admin = { ...DEFAULT_ADMIN_CONFIG, ...(row.value as Partial<AdminConfig>) };
+          // Ensure gameHandlers defaults are set
+          this.admin.gameHandlers = {
+            ...DEFAULT_ADMIN_CONFIG.gameHandlers,
+            ...(this.admin.gameHandlers ?? {}),
+          };
+          bus.emit(Topics.AdminConfig, this.admin);
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
   setAdmin(patch: Partial<AdminConfig>) {
     this.admin = { ...this.admin, ...patch };
     bus.emit(Topics.AdminConfig, this.admin);
+    // Persist to Supabase
+    void supabase.rpc('admin_update_setting', {
+      p_key: 'admin_config',
+      p_value: this.admin as unknown as string,
+    }).catch(() => {});
   }
 
   getGameLimits(gameKey: string): { min: number; max: number } {
@@ -388,7 +417,6 @@ class Store {
   pushBalanceHistory(rec: Omit<BalanceHistoryRecord, 'id' | 'ts'>) {
     const item: BalanceHistoryRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.balanceHistory = [item, ...this.balanceHistory].slice(0, 500);
-    // Also insert into Supabase
     supabase.from('transactions').insert({
       user_id: rec.userId, type: rec.type, amount: rec.amount, status: 'completed',
       balance_before: this.balance, balance_after: this.balance, reference: rec.reason,
@@ -427,7 +455,6 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'crash', amount: rec.amount, win: rec.win,
       result: rec.cashOutAt ? `${rec.cashOutAt.toFixed(2)}x cashout` : `${rec.bustPoint.toFixed(2)}x bust` });
-    // Record bet in Supabase
     supabase.from('bets').insert({
       user_id: meta.userId, bet_amount: rec.amount, win_amount: rec.win,
       multiplier: rec.cashOutAt || rec.bustPoint, status: rec.win > 0 ? 'won' : 'lost',
@@ -477,7 +504,32 @@ class Store {
     }).then(() => {}).catch(() => {});
   }
 
-  // ---- Redeem Codes ----
+  // ---- Redeem Codes (Supabase-persisted) ----
+  async loadRedeemCodesFromSupabase() {
+    try {
+      const { data } = await supabase.rpc('admin_get_settings');
+      if (data) {
+        const rows = data as { key: string; value: unknown }[];
+        const row = rows.find(r => r.key === 'redeem_codes');
+        if (row?.value && typeof row.value === 'object') {
+          const loaded = row.value as Record<string, RedeemCode>;
+          // Merge with defaults only if Supabase has data
+          if (Object.keys(loaded).length > 0) {
+            this.redeemCodes = loaded;
+            bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  private persistRedeemCodesToSupabase() {
+    void supabase.rpc('admin_update_setting', {
+      p_key: 'redeem_codes',
+      p_value: this.redeemCodes as unknown as string,
+    }).catch(() => {});
+  }
+
   applyRedeemCode(code: string, accountId: string): { status: 'success' | 'used' | 'invalid'; bonus: number } {
     const upper = code.trim().toUpperCase();
     const entry = this.redeemCodes[upper];
@@ -488,6 +540,7 @@ class Store {
     this.credit(entry.bonus);
     this.pushNotification({ title: 'Redeem Code Applied!', body: `Code ${upper} unlocked ${this.currency}${entry.bonus} bonus credits.`, kind: 'success' });
     bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+    this.persistRedeemCodesToSupabase();
     return { status: 'success', bonus: entry.bonus };
   }
 
@@ -500,11 +553,13 @@ class Store {
     if (!upper) return;
     this.redeemCodes[upper] = { code: upper, bonus: Math.max(0, bonus), maxUsesPerUser: Math.max(1, maxUsesPerUser), userLimit: Math.max(1, userLimit), createdAt: Date.now(), usageByUser: {} };
     bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+    this.persistRedeemCodesToSupabase();
   }
 
   deleteRedeemCode(code: string) {
     delete this.redeemCodes[code.trim().toUpperCase()];
     bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+    this.persistRedeemCodesToSupabase();
   }
 
   listRedeemCodes(): RedeemCode[] {
@@ -548,7 +603,6 @@ class Store {
         const row = rows.find(r => r.key === 'signup_bonus');
         if (row && typeof row.value === 'number' && row.value >= 0) {
           this.signupBonus = row.value;
-          // Sync to localStorage too
           try { localStorage.setItem(Store.SIGNUP_BONUS_KEY, JSON.stringify(this.signupBonus)); } catch { /* ignore */ }
           bus.emit(Topics.SignupBonus, { amount: this.signupBonus, history: this.signupBonusHistory });
         }
@@ -560,8 +614,7 @@ class Store {
     this.signupBonus = Math.max(0, Math.round(amount * 100) / 100);
     this.persistSignupBonus();
     bus.emit(Topics.SignupBonus, { amount: this.signupBonus, history: this.signupBonusHistory });
-    // Persist to Supabase settings too
-    supabase.rpc('admin_update_setting', { p_key: 'signup_bonus', p_value: this.signupBonus as unknown as string })
+    void supabase.rpc('admin_update_setting', { p_key: 'signup_bonus', p_value: this.signupBonus as unknown as string })
       .then(() => {})
       .catch(() => {});
   }
@@ -623,7 +676,7 @@ export function computeAutoOutcome(
     } else {
       outcome = (1 + Math.floor(Math.random() * 20) / 100).toFixed(2) + 'x';
     }
-    return { outcome, detail: `Win-prob ${config.targetWinProbability}% · Edge ${config.houseEdge}%` };
+    return { outcome, detail: `Win-prob ${config.targetWinProbability}% \u00b7 Edge ${config.houseEdge}%` };
   }
   if (gameKey === 'mines') {
     const outcome = roll < winChance ? 'win' : 'bust';
@@ -634,19 +687,19 @@ export function computeAutoOutcome(
     if (roll < winChance) outcome = 'sun';
     else if (roll < winChance * 2) outcome = 'moon';
     else outcome = 'eclipse';
-    return { outcome, detail: `Auto engine · edge ${config.houseEdge}%` };
+    return { outcome, detail: `Auto engine \u00b7 edge ${config.houseEdge}%` };
   }
   if (gameKey === 'wingo') {
     const outcome = String(Math.floor(Math.random() * 10));
-    return { outcome, detail: `Digit 0–9 · win-prob ${config.targetWinProbability}%` };
+    return { outcome, detail: `Digit 0\u20139 \u00b7 win-prob ${config.targetWinProbability}%` };
   }
   if (gameKey === 'k3') {
     const outcome = `${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1}`;
-    return { outcome, detail: 'Three dice · auto engine' };
+    return { outcome, detail: 'Three dice \u00b7 auto engine' };
   }
   if (gameKey === 'fived') {
     const outcome = String(Math.floor(Math.random() * 100000)).padStart(5, '0');
-    return { outcome, detail: '5-digit result · auto engine' };
+    return { outcome, detail: '5-digit result \u00b7 auto engine' };
   }
   if (gameKey === 'trading') {
     const outcome = roll < winChance ? 'UP' : 'DOWN';
