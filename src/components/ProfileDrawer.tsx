@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X, User, ChevronRight, ShieldCheck, Headphones, Hash, LogIn, UserPlus, FileText, Wallet, Users, TrendingUp, TicketPercent, History, LogOut, ArrowUpCircle } from 'lucide-react';
 import { useAuth, useBalance } from '../lib/hooks';
 import { useDynamicPages, useHasUnreadAgentMessage, useSocialLinks } from '../lib/cmsHooks';
@@ -91,6 +91,15 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
   const [pagePopupOpen, setPagePopupOpen] = useState(false);
   const [redeemOpen, setRedeemOpen] = useState(false);
   const [withdrawalOpen, setWithdrawalOpen] = useState(false);
+
+  // Lock body scroll when drawer is open — prevents page scroll and bottom nav flicker
+  useEffect(() => {
+    if (open) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => { document.body.style.overflow = prev; };
+    }
+  }, [open]);
 
   const go = (r: Route) => { onClose(); onNavigate(r); };
 
