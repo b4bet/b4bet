@@ -1,81 +1,267 @@
-import { useMemo, useState } from 'react';
-import { minesEngine } from '../lib/minesEngine';
-import { useBus, useMinesMyHistory } from '../lib/hooks';
+/**
+ * MinesView — server-side outcome version.
+ *
+ * ALL outcome decisions happen in the process-bet Edge Function:
+ *   - Mine positions generated server-side, never sent to client until round ends
+ *   - Balance deducted on mines_start, credited on mines_cashout
+ *   - store.recordMinesRound() is called ONLY for local history display
+ *     after receiving the server's verdict — it no longer decides anything.
+ */
 
-import { Topics } from '../lib/bus';
-import type { MinesState } from '../lib/minesEngine';
+import { useMemo, useState, useCallback } from 'react';
+import { useMinesMyHistory } from '../lib/hooks';
 import { store } from '../lib/store';
 import { cms } from '../lib/cms';
+import { auth } from '../lib/auth';
+import { GameService } from '../lib/game-service';
+import { bus, Topics } from '../lib/bus';
 import { Bomb, Gem, Flag, Play, HandCoins } from 'lucide-react';
 
-function Cell({ index, state, onReveal }: { index: number; state: MinesState; onReveal: (i: number) => void }) {
-  const revealed = state.revealed[index];
-  const cell = state.grid[index];
+// ── Local UI state (does NOT encode outcome) ─────────────────────────────────
+
+interface ClientMinesState {
+  active: boolean;
+  sessionId: string | null;
+  stake: number;
+  mineCount: number;
+  gemsFound: number;
+  currentMultiplier: number;
+  nextMultiplier: number;
+  // grid: 'hidden' | 'gem' | 'mine'
+  grid: ('hidden' | 'gem' | 'mine')[];
+  revealed: boolean[];
+  busted: boolean;
+  cashedOut: boolean;
+}
+
+function initialState(mineCount: number, stake: number): ClientMinesState {
+  return {
+    active: false,
+    sessionId: null,
+    stake,
+    mineCount,
+    gemsFound: 0,
+    currentMultiplier: 1,
+    nextMultiplier: 1,
+    grid: new Array(25).fill('hidden'),
+    revealed: new Array(25).fill(false),
+    busted: false,
+    cashedOut: false,
+  };
+}
+
+// ── Cell ─────────────────────────────────────────────────────────────────────
+
+function Cell({
+  index,
+  grid,
+  revealed,
+  active,
+  onReveal,
+}: {
+  index: number;
+  grid: ClientMinesState['grid'];
+  revealed: boolean[];
+  active: boolean;
+  onReveal: (i: number) => void;
+}) {
+  const isRevealed = revealed[index];
+  const cell = grid[index];
   const isMine = cell === 'mine';
-  const isGem = cell === 'gem';
 
   return (
     <button
       onClick={() => onReveal(index)}
-      disabled={revealed || !state.active}
+      disabled={isRevealed || !active}
       className={`relative aspect-square rounded-xl border transition-all duration-200 ${
-        revealed
+        isRevealed
           ? isMine
             ? 'bg-coral-500/20 border-coral-500/60'
             : 'bg-emeraldwin-500/15 border-emeraldwin-500/50'
           : 'bg-slatepanel-800 border-borderline-900 hover:border-neon-400/60 hover:bg-slatepanel-700 active:scale-95'
-      } ${!revealed && state.active ? 'cursor-pointer' : 'cursor-default'}`}
+      } ${!isRevealed && active ? 'cursor-pointer' : 'cursor-default'}`}
     >
-      {revealed && isGem && (
+      {isRevealed && cell === 'gem' && (
         <div className="absolute inset-0 grid place-items-center animate-gem-pop">
           <Gem className="w-6 h-6 sm:w-7 sm:h-7 text-emeraldwin-400 drop-shadow-[0_0_8px_rgba(0,255,136,0.5)]" />
         </div>
       )}
-      {revealed && isMine && (
+      {isRevealed && isMine && (
         <div className="absolute inset-0 grid place-items-center animate-mine-blast">
           <Bomb className="w-6 h-6 sm:w-7 sm:h-7 text-coral-500 drop-shadow-[0_0_8px_rgba(255,51,102,0.5)]" />
         </div>
       )}
-      {!revealed && state.active && (
+      {!isRevealed && active && (
         <div className="absolute inset-0 grid place-items-center">
-          <div className="w-2 h-2 rounded-full bg-slate-600 group-hover:bg-neon-400" />
+          <div className="w-2 h-2 rounded-full bg-slate-600" />
         </div>
       )}
     </button>
   );
 }
 
-export default function MinesView() {
-  const state = useBus<MinesState>(Topics.MinesState, minesEngine.getState());
-  const [stake, setStake] = useState('100');
-  const [mines, setMines] = useState(3);
+// ── Main view ─────────────────────────────────────────────────────────────────
 
-  const start = () => {
-    const amt = parseFloat(stake) || 100;
+export default function MinesView() {
+  const [stakeStr, setStakeStr] = useState('100');
+  const [minesInput, setMinesInput] = useState(3);
+  const [loading, setLoading] = useState(false);
+  const [game, setGame] = useState<ClientMinesState>(() =>
+    initialState(3, 100)
+  );
+
+  // ── Start round ──────────────────────────────────────────────────────────
+  const start = useCallback(async () => {
+    const session = auth.getSession();
+    if (!session) {
+      bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login');
+      return;
+    }
+    const amt = parseFloat(stakeStr) || 100;
     const { min, max } = store.getGameLimits('mines');
     if (amt < min || amt > max) {
       cms.toast({ title: 'Bet out of range', body: `Stake must be between ${store.currency}${min} and ${store.currency}${max}`, kind: 'alert' });
       return;
     }
     if (amt > store.balance) {
-      cms.toast({ title: 'Insufficient Balance', body: `You need ${store.currency}${amt.toFixed(2)} to start this round.`, kind: 'alert' });
+      cms.toast({ title: 'Insufficient Balance', body: `You need ${store.currency}${amt.toFixed(2)} to start.`, kind: 'alert' });
       return;
     }
-    minesEngine.setStake(amt);
-    minesEngine.setMineCount(mines);
-    const res = minesEngine.start();
-    if (!res.ok) {
-      const insufficient = (res.reason || '').toLowerCase().includes('insufficient');
-      if (insufficient) cms.toast({ title: 'Insufficient Balance', body: res.reason || '', kind: 'alert' });
-      else cms.pushFromTemplate('nt_mines_failed', 'Mines failed', res.reason || '', 'warn');
-    }
-  };
 
-  const reveal = (i: number) => minesEngine.reveal(i);
-  const cashout = () => {
-    const res = minesEngine.cashOut();
-    if (!res.ok) cms.pushFromTemplate('nt_cashout_failed', 'Cashout failed', res.reason || '', 'warn');
-  };
+    setLoading(true);
+    try {
+      const res = await GameService.minesStart(session.userId, minesInput, amt);
+      // Balance already deducted server-side — sync local store display
+      store.setBalance(res.balance_after);
+      setGame({
+        active: true,
+        sessionId: res.session_id,
+        stake: amt,
+        mineCount: minesInput,
+        gemsFound: 0,
+        currentMultiplier: 1,
+        nextMultiplier: 1,
+        grid: new Array(25).fill('hidden'),
+        revealed: new Array(25).fill(false),
+        busted: false,
+        cashedOut: false,
+      });
+    } catch (err) {
+      cms.toast({ title: 'Could not start', body: err instanceof Error ? err.message : 'Server error', kind: 'alert' });
+    } finally {
+      setLoading(false);
+    }
+  }, [stakeStr, minesInput]);
+
+  // ── Reveal tile ──────────────────────────────────────────────────────────
+  const reveal = useCallback(async (index: number) => {
+    if (!game.active || game.revealed[index] || !game.sessionId) return;
+    const session = auth.getSession();
+    if (!session) return;
+
+    setLoading(true);
+    try {
+      const res = await GameService.minesReveal(session.userId, game.sessionId, index);
+
+      if (res.is_mine) {
+        // Busted — server reveals all mine positions
+        const newGrid = [...game.grid] as ClientMinesState['grid'];
+        const newRevealed = [...game.revealed];
+        // Mark the clicked tile as mine
+        newGrid[index] = 'mine';
+        newRevealed[index] = true;
+        // Reveal all mine positions returned by server
+        if (res.mine_positions) {
+          res.mine_positions.forEach((pos) => {
+            newGrid[pos] = 'mine';
+            newRevealed[pos] = true;
+          });
+        }
+        setGame((g) => ({
+          ...g,
+          active: false,
+          busted: true,
+          grid: newGrid,
+          revealed: newRevealed,
+          gemsFound: res.gems_found,
+        }));
+        // Local history only (no balance mutation here)
+        store.recordMinesRound({
+          stake: game.stake,
+          mines: game.mineCount,
+          gems: res.gems_found,
+          multiplier: res.current_multiplier,
+          win: 0,
+          busted: true,
+        });
+      } else {
+        // Safe tile
+        const newGrid = [...game.grid] as ClientMinesState['grid'];
+        const newRevealed = [...game.revealed];
+        newGrid[index] = 'gem';
+        newRevealed[index] = true;
+        setGame((g) => ({
+          ...g,
+          grid: newGrid,
+          revealed: newRevealed,
+          gemsFound: res.gems_found,
+          currentMultiplier: res.current_multiplier,
+          nextMultiplier: res.next_multiplier,
+        }));
+      }
+    } catch (err) {
+      cms.toast({ title: 'Reveal failed', body: err instanceof Error ? err.message : 'Server error', kind: 'alert' });
+    } finally {
+      setLoading(false);
+    }
+  }, [game]);
+
+  // ── Cash out ─────────────────────────────────────────────────────────────
+  const cashout = useCallback(async () => {
+    if (!game.active || game.gemsFound === 0 || !game.sessionId) return;
+    const session = auth.getSession();
+    if (!session) return;
+
+    setLoading(true);
+    try {
+      const res = await GameService.minesCashout(session.userId, game.sessionId);
+      // Balance credited server-side — sync local store display
+      store.setBalance(res.balance_after);
+
+      // Reveal all mines
+      const newGrid = [...game.grid] as ClientMinesState['grid'];
+      const newRevealed = [...game.revealed];
+      res.mine_positions.forEach((pos) => {
+        newGrid[pos] = 'mine';
+        newRevealed[pos] = true;
+      });
+
+      setGame((g) => ({
+        ...g,
+        active: false,
+        cashedOut: true,
+        grid: newGrid,
+        revealed: newRevealed,
+      }));
+
+      // Local history only
+      store.recordMinesRound({
+        stake: game.stake,
+        mines: game.mineCount,
+        gems: game.gemsFound,
+        multiplier: res.multiplier,
+        win: res.payout,
+        busted: false,
+      });
+      cms.toast({ title: 'Cashed out!', body: `You won ${store.currency}${res.payout.toFixed(2)}`, kind: 'success' });
+    } catch (err) {
+      cms.toast({ title: 'Cashout failed', body: err instanceof Error ? err.message : 'Server error', kind: 'alert' });
+    } finally {
+      setLoading(false);
+    }
+  }, [game]);
+
+  const isDisabled = loading;
 
   return (
     <div className="space-y-4 animate-fade-in">
@@ -85,7 +271,7 @@ export default function MinesView() {
         </div>
         <div>
           <h1 className="font-display font-extrabold text-xl text-white leading-none">Mines</h1>
-          <p className="text-xs text-slate-500">5×5 grid · {mines} mines hidden</p>
+          <p className="text-xs text-slate-500">5×5 grid · {game.active ? game.mineCount : minesInput} mines hidden</p>
         </div>
       </div>
 
@@ -93,12 +279,19 @@ export default function MinesView() {
       <div className="panel p-3 sm:p-4">
         <div className="grid grid-cols-5 gap-2 sm:gap-2.5">
           {Array.from({ length: 25 }, (_, i) => (
-            <Cell key={i} index={i} state={state} onReveal={reveal} />
+            <Cell
+              key={i}
+              index={i}
+              grid={game.grid}
+              revealed={game.revealed}
+              active={game.active && !isDisabled}
+              onReveal={reveal}
+            />
           ))}
         </div>
       </div>
 
-      {/* Controls / bet section */}
+      {/* Controls */}
       <div className="panel p-3 sm:p-4">
         <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
@@ -107,9 +300,9 @@ export default function MinesView() {
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-bold text-sm">{store.currency}</span>
               <input
                 type="number"
-                value={stake}
-                onChange={(e) => setStake(e.target.value)}
-                disabled={state.active}
+                value={stakeStr}
+                onChange={(e) => setStakeStr(e.target.value)}
+                disabled={game.active}
                 min={1}
                 className="input text-center tabular"
               />
@@ -121,19 +314,17 @@ export default function MinesView() {
               <Flag className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
               <input
                 type="number"
-                value={mines || ''}
+                value={minesInput || ''}
                 onChange={(e) => {
                   const val = e.target.value;
-                  if (val === '') setMines(0);
+                  if (val === '') setMinesInput(0);
                   else {
                     const num = parseInt(val);
-                    if (!isNaN(num)) setMines(Math.max(1, Math.min(24, num)));
+                    if (!isNaN(num)) setMinesInput(Math.max(1, Math.min(24, num)));
                   }
                 }}
-                onBlur={() => {
-                  if (mines === 0 || !mines) setMines(1);
-                }}
-                disabled={state.active}
+                onBlur={() => { if (!minesInput) setMinesInput(1); }}
+                disabled={game.active}
                 min={1}
                 max={24}
                 placeholder="1"
@@ -147,39 +338,43 @@ export default function MinesView() {
         <div className="flex items-center justify-between mb-3 px-1">
           <div>
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Current</p>
-            <p className="tabular font-display font-extrabold text-2xl text-emeraldwin-400">{state.currentMultiplier.toFixed(2)}x</p>
+            <p className="tabular font-display font-extrabold text-2xl text-emeraldwin-400">{game.currentMultiplier.toFixed(2)}x</p>
           </div>
           <div className="text-right">
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Next Gem</p>
-            <p className="tabular font-bold text-lg text-neon-300">{state.nextMultiplier.toFixed(2)}x</p>
+            <p className="tabular font-bold text-lg text-neon-300">{game.nextMultiplier.toFixed(2)}x</p>
           </div>
           <div className="text-right">
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Gems</p>
-            <p className="tabular font-bold text-lg text-white">{state.gemsFound}</p>
+            <p className="tabular font-bold text-lg text-white">{game.gemsFound}</p>
           </div>
         </div>
 
-        {!state.active ? (
-          <button onClick={start} className="btn-primary w-full py-3">
-            <Play className="w-4 h-4" /> Start Round
+        {!game.active ? (
+          <button onClick={() => { void start(); }} disabled={isDisabled} className="btn-primary w-full py-3">
+            <Play className="w-4 h-4" /> {loading ? 'Starting…' : 'Start Round'}
           </button>
         ) : (
           <div className="grid grid-cols-2 gap-2">
-            <button onClick={cashout} disabled={state.gemsFound === 0 || state.busted || state.cashedOut} className="btn-emerald py-3">
+            <button
+              onClick={() => { void cashout(); }}
+              disabled={game.gemsFound === 0 || game.busted || game.cashedOut || isDisabled}
+              className="btn-emerald py-3"
+            >
               <HandCoins className="w-4 h-4" />
-              Cash Out {store.currency}{state.gemsFound > 0 ? (state.stake * state.currentMultiplier).toFixed(2) : '0.00'}
+              Cash Out {store.currency}{game.gemsFound > 0 ? (game.stake * game.currentMultiplier).toFixed(2) : '0.00'}
             </button>
-            <button 
-              disabled={state.busted || state.cashedOut}
+            <button
+              disabled={game.busted || game.cashedOut}
               className={`py-3 justify-center text-sm font-semibold rounded-xl border transition-colors ${
-                state.busted 
-                  ? 'btn-ghost text-slate-400' 
-                  : state.cashedOut 
+                game.busted
                   ? 'btn-ghost text-slate-400'
-                  : 'bg-neon-500/15 border-neon-500/40 text-neon-300 hover:bg-neon-500/25 hover:border-neon-500/60'
+                  : game.cashedOut
+                  ? 'btn-ghost text-slate-400'
+                  : 'bg-neon-500/15 border-neon-500/40 text-neon-300'
               }`}
             >
-              {state.busted ? 'Round lost' : state.cashedOut ? 'Cashed out' : 'Pick a tile'}
+              {game.busted ? 'Round lost' : game.cashedOut ? 'Cashed out' : loading ? 'Checking…' : 'Pick a tile'}
             </button>
           </div>
         )}
@@ -193,6 +388,8 @@ export default function MinesView() {
     </div>
   );
 }
+
+// ── History tabs ──────────────────────────────────────────────────────────────
 
 type MinesTab = 'mine' | 'top';
 type Range = '1d' | '1w' | '1m' | '1y';
@@ -291,4 +488,3 @@ function MinesStatsTabs() {
     </div>
   );
 }
-
