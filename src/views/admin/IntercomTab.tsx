@@ -1,70 +1,78 @@
-import { useState, useEffect, useRef } from 'react';
-import { intercom } from '../../lib/intercom';
-import { useBus } from '../../lib/hooks';
-import { Topics } from '../../lib/bus';
-import type { IntercomMessage } from '../../lib/intercom';
-import { Send, Radio, Headphones } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { supabase } from '../../integrations/supabase/client';
+import { MessageSquare, Save } from 'lucide-react';
 
 export default function IntercomTab() {
-  const messages = useBus<IntercomMessage[]>(Topics.Intercom, intercom.list());
-  const [body, setBody] = useState('');
-  const [author] = useState('Admin-You');
-  const endRef = useRef<HTMLDivElement>(null);
+  const [appId, setAppId] = useState('');
+  const [enabled, setEnabled] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    supabase.rpc('admin_get_settings').then(({ data }) => {
+      const settings = (data ?? []) as { key: string; value: unknown }[];
+      const s = settings.find(s => s.key === 'intercom_config');
+      if (s && s.value) {
+        const v = s.value as { app_id?: string; enabled?: boolean };
+        setAppId(v.app_id ?? '');
+        setEnabled(v.enabled ?? false);
+      }
+    });
+  }, []);
 
-  const send = () => {
-    if (!body.trim()) return;
-    intercom.send(author, 'Supervisor', body);
-    setBody('');
-  };
+  async function save() {
+    setSaving(true);
+    await supabase.rpc('admin_update_setting', {
+      p_key: 'intercom_config',
+      p_value: { app_id: appId, enabled },
+    });
+    setSaved(true); setSaving(false);
+    setTimeout(() => setSaved(false), 2000);
+    // Inject Intercom if enabled
+    if (enabled && appId) {
+      (window as Window & { Intercom?: (cmd: string, opts?: Record<string, unknown>) => void }).Intercom?.('boot', { app_id: appId });
+    }
+  }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="font-display font-bold text-lg text-white">Internal Intercom Chat</h2>
-          <p className="text-xs text-slate-500">Live synchronized team communication.</p>
-        </div>
-        <span className="chip bg-emeraldwin-500/15 border border-emeraldwin-500/40 text-emeraldwin-400 text-xs">
-          <Radio className="w-3.5 h-3.5" /> <span className="w-1.5 h-1.5 rounded-full bg-emeraldwin-500 animate-ticker-blink" /> Connected
-        </span>
+    <div className="max-w-md space-y-6">
+      <div className="flex items-center gap-2">
+        <MessageSquare className="w-5 h-5 text-neon-400" />
+        <h2 className="text-lg font-bold">Intercom Integration</h2>
       </div>
-
-      <div className="panel flex flex-col h-[60vh]">
-        {/* Terminal log */}
-        <div className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-3 bg-midnight-950/50">
-          {messages.map((m) => (
-            <div key={m.id} className="flex gap-3 animate-fade-in">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center flex-shrink-0">
-                <Headphones className="w-4 h-4 text-white" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-neon-300">{m.author}</span>
-                  <span className="chip bg-slatepanel-800 border border-borderline-900 text-slate-400 text-[9px]">{m.role}</span>
-                  <span className="text-[10px] text-slate-600 tabular">{new Date(m.ts).toLocaleTimeString()}</span>
-                </div>
-                <p className="text-sm text-slate-200 mt-0.5 break-words">{m.body}</p>
-              </div>
-            </div>
-          ))}
-          <div ref={endRef} />
+      <div className="bg-slatepanel-800 rounded-2xl p-5 space-y-4">
+        <div className="flex items-center justify-between">
+          <span className="font-semibold">Enable Intercom</span>
+          <button onClick={() => setEnabled(e => !e)}
+            className={`w-12 h-6 rounded-full transition ${
+              enabled ? 'bg-neon-500' : 'bg-slatepanel-600'
+            }`}>
+            <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${
+              enabled ? 'translate-x-7' : 'translate-x-0.5'
+            }`} />
+          </button>
         </div>
-
-        {/* Composer */}
-        <div className="border-t border-borderline-900 p-3 flex gap-2">
-          <input
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && send()}
-            placeholder="Type a message to the team…"
-            className="input flex-1"
-          />
-          <button onClick={send} className="btn-primary px-4"><Send className="w-4 h-4" /></button>
+        <div>
+          <label className="text-xs text-slate-400 mb-1 block">Intercom App ID</label>
+          <input value={appId} onChange={e => setAppId(e.target.value)}
+            placeholder="e.g. abc12345"
+            className="w-full bg-slatepanel-700 border border-slatepanel-600 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-neon-500" />
+          <p className="text-slate-500 text-xs mt-1">Find your App ID in Intercom Settings → Installation → Web</p>
         </div>
+        <button onClick={save} disabled={saving}
+          className="flex items-center gap-2 px-4 py-2 bg-neon-500/20 hover:bg-neon-500/30 text-neon-400 rounded-xl text-sm transition">
+          <Save className="w-4 h-4" />
+          {saving ? 'Saving...' : saved ? 'Saved!' : 'Save Settings'}
+        </button>
+      </div>
+      <div className="bg-slatepanel-800 rounded-2xl p-5 space-y-2">
+        <h3 className="font-semibold text-slate-300 text-sm">How to embed Intercom</h3>
+        <ol className="text-slate-400 text-sm space-y-2 list-decimal list-inside">
+          <li>Create account at intercom.com</li>
+          <li>Go to Settings → Installation → Web</li>
+          <li>Copy your App ID and paste above</li>
+          <li>Enable and save — Intercom chat widget will appear for users</li>
+        </ol>
       </div>
     </div>
   );
