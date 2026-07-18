@@ -4,7 +4,7 @@ import {
   Cpu, Bell, Megaphone, Wallet, Trophy, Mail, Server, Coins,
   CreditCard, FileText, Image, Gift, Settings, History,
   ShieldBan, MessageSquare, Zap, BarChart2, LogOut, Menu, X,
-  ChevronDown, KeyRound, Eye, EyeOff, RefreshCw
+  ChevronDown, KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -32,6 +32,9 @@ import GameAlgosTab, {
   FiveDHandlingPanel,
   SunMoonHandlingPanel,
   AviatorHandlingPanel,
+  TopRankingsAdminPanel,
+  OnlineCountPanel,
+  TopWinPaidOutPanel,
 } from './admin/GameAlgosTab';
 import GameSettingsTab from './admin/GameSettingsTab';
 import BanSectionTab from './admin/BanSectionTab';
@@ -43,6 +46,8 @@ import RedeemCodesTab from './admin/RedeemCodesTab';
 import SignupBonusTab from './admin/SignupBonusTab';
 import BannerLogoTab from './admin/BannerLogoTab';
 import CrmTab from './admin/CrmTab';
+import TicketAlertOverlay from '../components/TicketAlertOverlay';
+import AdminSupportNotification from '../components/AdminSupportNotification';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager'
@@ -179,6 +184,25 @@ function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () =
   );
 }
 
+// ─── Notification row helper ─────────────────────────────────────────────────
+function NotifRow({ icon: Icon, label, count, onClick, accent }: {
+  icon: typeof Bell; label: string; count: number; onClick: () => void; accent: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors text-left"
+    >
+      <span className="flex items-center gap-2 text-sm text-slate-300">
+        <Icon className={`w-4 h-4 ${accent}`} /> {label}
+      </span>
+      <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${count > 0 ? 'bg-red-500/20 text-red-300' : 'bg-slate-700 text-slate-500'}`}>
+        {count}
+      </span>
+    </button>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r: Route) => void; onOpenMenu?: () => void }) {
   const sessionId = useStaffSession();
@@ -186,13 +210,21 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   const [gameHandlerTab, setGameHandlerTab] = useState<GameHandlerKey>('crash');
   const [sidebarOpen, setSidebarOpen]     = useState(false);
   const [profileOpen, setProfileOpen]     = useState(false);
+  const [notifOpen, setNotifOpen]         = useState(false);
   const [showPwForm, setShowPwForm]       = useState(false);
   const profileRef = useRef<HTMLDivElement | null>(null);
+  const notifRef   = useRef<HTMLDivElement | null>(null);
 
   const staff = useStaff();
-  useFinance();
-  useSupport();
+  const finance = useFinance();
+  const support = useSupport();
   const me = staff.find((s) => s.id === sessionId);
+
+  // Pending counts for bell badge
+  const pendingDeposits    = finance.deposits.filter((d) => d.status === 'pending').length;
+  const pendingWithdrawals = finance.withdrawals.filter((w) => w.status === 'pending').length;
+  const unreadSupport      = support.filter((s) => !s.read).length;
+  const totalUnread        = pendingDeposits + pendingWithdrawals + unreadSupport;
 
   // navigate event from elsewhere in the app
   useEffect(() => {
@@ -216,6 +248,18 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     document.addEventListener('mousedown', close);
     return () => document.removeEventListener('mousedown', close);
   }, [profileOpen]);
+
+  // close notif dropdown on outside click
+  useEffect(() => {
+    if (!notifOpen) return;
+    const close = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setNotifOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [notifOpen]);
 
   const hasPermission = (key: PermissionKey) => {
     if (!me) return false;
@@ -306,7 +350,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* ── Top header ── */}
         <header className="flex items-center justify-between px-4 h-14 border-b border-slate-800 bg-slate-900 shrink-0">
-          {/* Left: hamburger (mobile) + notification */}
+          {/* Left: hamburger (mobile) + user name */}
           <div className="flex items-center gap-3">
             <button
               className="md:hidden text-slate-400 hover:text-white"
@@ -314,77 +358,117 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
             >
               <Menu className="w-5 h-5" />
             </button>
-            <button className="relative text-slate-400 hover:text-white">
-              <Bell className="w-5 h-5" />
-              {/* red dot placeholder */}
-              <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full" />
-            </button>
             <span className="text-sm font-medium text-slate-300">
               {me?.name ?? me?.email ?? 'Admin'}
             </span>
           </div>
 
-          {/* Right: profile button */}
-          <div className="relative" ref={profileRef}>
-            <button
-              onClick={() => { setProfileOpen((v) => !v); setShowPwForm(false); }}
-              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-sm transition-colors"
-            >
-              <div className="w-6 h-6 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold">
-                {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
-              </div>
-              <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
-            </button>
+          {/* Right: notification bell + profile */}
+          <div className="flex items-center gap-2">
+            {/* ── Notification bell with badge ── */}
+            <div className="relative" ref={notifRef}>
+              <button
+                onClick={() => setNotifOpen((v) => !v)}
+                className="relative w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 grid place-items-center hover:border-violet-500/50 transition-colors"
+                aria-label="Notifications"
+              >
+                <Bell className="w-4 h-4 text-slate-300" />
+                {totalUnread > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center border-2 border-slate-900">
+                    {totalUnread}
+                  </span>
+                )}
+              </button>
+              {notifOpen && (
+                <div className="absolute right-0 top-11 w-72 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-50 p-2 overflow-hidden">
+                  <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-3 py-1.5">Notifications</p>
+                  <NotifRow
+                    icon={Banknote}
+                    accent="text-green-400"
+                    label="Pending deposits"
+                    count={pendingDeposits}
+                    onClick={() => { navigate('finance'); setNotifOpen(false); }}
+                  />
+                  <NotifRow
+                    icon={TrendingDown}
+                    accent="text-red-400"
+                    label="Pending withdrawals"
+                    count={pendingWithdrawals}
+                    onClick={() => { navigate('requests'); setNotifOpen(false); }}
+                  />
+                  <NotifRow
+                    icon={MessageSquare}
+                    accent="text-violet-400"
+                    label="Unread support messages"
+                    count={unreadSupport}
+                    onClick={() => { cms.markSupportRead(); setNotifOpen(false); }}
+                  />
+                </div>
+              )}
+            </div>
 
-            {/* Floating profile dropdown */}
-            {profileOpen && (
-              <div className="absolute right-0 top-full mt-2 w-72 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
-                {/* User info */}
-                <div className="px-4 py-3 border-b border-slate-800">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-violet-600 flex items-center justify-center text-lg font-bold shrink-0">
-                      {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-white truncate">{me?.name ?? '—'}</p>
-                      <p className="text-xs text-slate-400 truncate">{me?.email ?? '—'}</p>
-                      <span className="text-[10px] bg-violet-600/30 text-violet-300 px-1.5 py-0.5 rounded-full">
-                        {me?.role === 'superadmin' || me?.isOwner ? 'Super Admin' : me?.role ?? 'Staff'}
-                      </span>
+            {/* ── Profile button ── */}
+            <div className="relative" ref={profileRef}>
+              <button
+                onClick={() => { setProfileOpen((v) => !v); setShowPwForm(false); }}
+                className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg text-sm transition-colors"
+              >
+                <div className="w-6 h-6 rounded-full bg-violet-600 flex items-center justify-center text-xs font-bold">
+                  {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
+                </div>
+                <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${profileOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {/* Floating profile dropdown */}
+              {profileOpen && (
+                <div className="absolute right-0 top-full mt-2 w-72 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden">
+                  {/* User info */}
+                  <div className="px-4 py-3 border-b border-slate-800">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-violet-600 flex items-center justify-center text-lg font-bold shrink-0">
+                        {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-white truncate">{me?.name ?? '—'}</p>
+                        <p className="text-xs text-slate-400 truncate">{me?.email ?? '—'}</p>
+                        <span className="text-[10px] bg-violet-600/30 text-violet-300 px-1.5 py-0.5 rounded-full">
+                          {me?.role === 'superadmin' || me?.isOwner ? 'Super Admin' : me?.role ?? 'Staff'}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Change password toggle */}
-                <div className="px-4 py-2 border-b border-slate-800">
-                  <button
-                    onClick={() => setShowPwForm((v) => !v)}
-                    className="w-full flex items-center gap-2 text-sm text-slate-300 hover:text-white py-1 transition-colors"
-                  >
-                    <KeyRound className="w-4 h-4" />
-                    Change Password
-                    <ChevronDown className={`w-3.5 h-3.5 ml-auto transition-transform ${showPwForm ? 'rotate-180' : ''}`} />
-                  </button>
-                  {showPwForm && me && (
-                    <PasswordChangeForm
-                      staffId={me.id}
-                      onDone={() => { setShowPwForm(false); setProfileOpen(false); }}
-                    />
-                  )}
-                </div>
+                  {/* Change password toggle */}
+                  <div className="px-4 py-2 border-b border-slate-800">
+                    <button
+                      onClick={() => setShowPwForm((v) => !v)}
+                      className="w-full flex items-center gap-2 text-sm text-slate-300 hover:text-white py-1 transition-colors"
+                    >
+                      <KeyRound className="w-4 h-4" />
+                      Change Password
+                      <ChevronDown className={`w-3.5 h-3.5 ml-auto transition-transform ${showPwForm ? 'rotate-180' : ''}`} />
+                    </button>
+                    {showPwForm && me && (
+                      <PasswordChangeForm
+                        staffId={me.id}
+                        onDone={() => { setShowPwForm(false); setProfileOpen(false); }}
+                      />
+                    )}
+                  </div>
 
-                {/* Logout */}
-                <div className="px-4 py-2">
-                  <button
-                    onClick={() => { cms.staffLogout(); }}
-                    className="w-full flex items-center gap-2 text-sm text-red-400 hover:text-red-300 py-1 transition-colors"
-                  >
-                    <LogOut className="w-4 h-4" />
-                    Logout
-                  </button>
+                  {/* Logout */}
+                  <div className="px-4 py-2">
+                    <button
+                      onClick={() => { cms.staffLogout(); }}
+                      className="w-full flex items-center gap-2 text-sm text-red-400 hover:text-red-300 py-1 transition-colors"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      Logout
+                    </button>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </header>
 
@@ -404,6 +488,11 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           {tab === 'algos'              && <GameAlgosTab />}
           {tab === 'games'              && (
             <div className="space-y-4">
+              {/* Extra panels from cloudflare */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <OnlineCountPanel />
+                <TopWinPaidOutPanel />
+              </div>
               <div className="flex flex-wrap gap-2">
                 {GAME_HANDLER_TABS.map((g) => (
                   <button
@@ -424,12 +513,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           )}
           {tab === 'users'              && <UsersTab />}
           {tab === 'balanceHistory'     && <BalanceHistoryTab />}
-          {tab === 'topRankings'        && (
-            <div className="space-y-4">
-              <h2 className="font-bold text-lg">Top Rankings</h2>
-              <p className="text-slate-500 text-sm">Leaderboard coming soon.</p>
-            </div>
-          )}
+          {tab === 'topRankings'        && <TopRankingsAdminPanel />}
           {tab === 'staff'              && hasPermission('staff') && <StaffTab />}
           {tab === 'notifications'      && <NotificationsTab />}
           {tab === 'notificationManager'&& <NotificationManagerTab />}
@@ -455,6 +539,10 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           )}
         </main>
       </div>
+
+      {/* ── Support overlays (from cloudflare) ── */}
+      <TicketAlertOverlay />
+      <AdminSupportNotification />
     </div>
   );
 }
