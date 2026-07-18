@@ -1,9 +1,11 @@
-// Real-time Crash engine. Drives the multiplier loop, computes crash points
-// based on admin config (auto win-probability or manual override), and manages
-// dual independent bets with auto-cashout. Emits state via the event bus.
+// Real-time Crash engine. Drives the multiplier loop. Bust points are fetched
+// from the server (process-bet edge function) BEFORE each round starts so the
+// outcome can never be manipulated client-side. Crash bets are settled via
+// crashSettle so the bets table row is written server-side only.
 
 import { bus, Topics } from './bus';
 import { store } from './store';
+import { crashGetBust, crashSettle } from './processBetApi';
 
 // Real-audio hooks — synthesised via WebAudio, gated by user Sound toggle.
 import { sfx, startHum, updateHum, stopHum } from './crashAudio';
@@ -55,7 +57,9 @@ interface EngineState {
 
 const COUNTDOWN_SECS = 6;
 
-function computeBustPoint(roundId: number): number {
+// Client-side fallback bust point — used only as placeholder until the server
+// responds, or as emergency fallback if the server request fails.
+function computeBustPointFallback(roundId: number): number {
   const cfg = store.admin;
   // Manual override applies only on the targeted round (or next round if null).
   const applyManual =
@@ -93,16 +97,21 @@ class CrashEngine {
     multiplier: 1.0,
     countdown: COUNTDOWN_SECS,
     roundId: 1,
-    bustPoint: computeBustPoint(1),
+    bustPoint: computeBustPointFallback(1),
     history: [],
     bets: { A: freshBet('A'), B: freshBet('B') },
     startedAt: Date.now(),
   };
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastTick = 0;
+  /** True once the server has confirmed the bust point for the current round. */
+  private bustPointReady = false;
 
   start() {
     if (this.timer) return;
+    // Fetch the first round's bust point from the server immediately
+    this.bustPointReady = false;
+    void this.fetchServerBustPoint(this.state.roundId);
     this.lastTick = Date.now();
     this.timer = setInterval(() => this.tick(), 50);
     this.broadcast();
@@ -111,6 +120,25 @@ class CrashEngine {
   stop() {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+  }
+
+  /** Fetch the server bust point for a round. Sets bustPointReady when done. */
+  private async fetchServerBustPoint(roundId: number): Promise<void> {
+    try {
+      const bust = await crashGetBust(roundId);
+      // Only apply if the engine is still on the same round
+      if (this.state.roundId === roundId) {
+        this.state.bustPoint = bust;
+      }
+    } catch (err) {
+      // Fallback: keep the locally-computed placeholder. Log for visibility.
+      console.warn('[crashEngine] fetchServerBustPoint failed, using local fallback:', err);
+    } finally {
+      // Always mark ready so the round can start
+      if (this.state.roundId === roundId) {
+        this.bustPointReady = true;
+      }
+    }
   }
 
   getState(): CrashState {
@@ -183,6 +211,13 @@ class CrashEngine {
     this.lastTick = now;
 
     if (this.state.phase === 'countdown') {
+      // Wait for server bust point before starting the flying phase.
+      // If the server hasn't responded yet, hold the countdown at 0.5s minimum.
+      if (!this.bustPointReady) {
+        this.state.countdown = Math.max(0.5, this.state.countdown - dt);
+        this.broadcast();
+        return;
+      }
       this.state.countdown -= dt;
       if (this.state.countdown <= 0) {
         this.state.phase = 'flying';
@@ -225,6 +260,7 @@ class CrashEngine {
             slot.win = 0;
           }
           if (slot.placed) {
+            // Display-only: update local UI history
             store.recordCrashBet({
               roundId: this.state.roundId,
               amount: slot.amount,
@@ -232,6 +268,16 @@ class CrashEngine {
               bustPoint: this.state.bustPoint,
               win: slot.win || 0,
             });
+            // Server-side: record canonical bet result.
+            // The server verifies the bust point against its stored value so
+            // the client cannot spoof a different outcome.
+            void crashSettle({
+              round_id: this.state.roundId,
+              amount: slot.amount,
+              cash_out_at: slot.win && slot.win > 0 ? slot.cashOutAt : null,
+              bust_point: this.state.bustPoint,
+              win: slot.win || 0,
+            }).catch((err: unknown) => console.error('[crashEngine] crashSettle failed:', err));
           }
         });
         this.state.history = [this.state.bustPoint, ...this.state.history].slice(0, 18);
@@ -252,7 +298,11 @@ class CrashEngine {
     this.state.phase = 'countdown';
     this.state.countdown = COUNTDOWN_SECS;
     this.state.multiplier = 1.0;
-    this.state.bustPoint = computeBustPoint(this.state.roundId);
+    // Compute a local placeholder — server value will overwrite it before flying
+    this.state.bustPoint = computeBustPointFallback(this.state.roundId);
+    this.bustPointReady = false;
+    // Fetch authoritative bust point from server for this round
+    void this.fetchServerBustPoint(this.state.roundId);
     // Manual one-shot: if the just-played round consumed the manual target,
     // flip back to AUTO and clear the target so subsequent rounds are normal.
     const cfg = store.admin;

@@ -3,12 +3,14 @@
  *
  * Game flow per round (20s total):
  *   1. BETTING   (15s) — pick Sun / Moon / Eclipse and set bet amount.
- *   2. PROCESSING (2s) — "Processing…" screen.
+ *   2. PROCESSING (2s) — “Processing…” screen.
  *   3. REVEALED   (3s) — winner icon + win/loss announced.
  *   4. Auto-reset to step 1.
  *
- * Balance and history are wired to the main betwinv4 store so the wallet
- * and game-history panel stay in sync.
+ * Settlement is now server-side: sunMoonSettle() sends stake to the
+ * process-bet edge function which decides the canonical result, deducts
+ * stake, and credits payout atomically in a single Supabase transaction.
+ * The client never calls store.debit/credit for this game.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -21,6 +23,7 @@ import { useBalance } from '../lib/hooks';
 import { cms } from '../lib/cms';
 import { auth } from '../lib/auth';
 import { sunMoonLoop, EngineTopics, type SunMoonState } from '../lib/persistentGameEngine';
+import { sunMoonSettle } from '../lib/processBetApi';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,20 +35,10 @@ type Phase = 'betting' | 'processing' | 'revealed';
 // Constants
 // ---------------------------------------------------------------------------
 const BETTING_DURATION = 15;   // seconds
-const PROCESSING_MS   = 2000;
-const REVEAL_MS       = 3000;
 const YEAR_PREFIX     = 2026;
 
 /** Multipliers (net profit). Sun/Moon pay 1:1; Eclipse pays 8:1. */
 const PAYOUTS: Record<BetChoice, number> = { sun: 1, moon: 1, tie: 8 };
-
-/** Weighted outcome draw. */
-function drawResult(): BetChoice {
-  const r = Math.random();
-  if (r < 0.47) return 'sun';
-  if (r < 0.94) return 'moon';
-  return 'tie';
-}
 
 // ---------------------------------------------------------------------------
 // Mini sub-components
@@ -252,67 +245,78 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
         settledRoundRef.current = rn;
         const sb = selectedBetRef.current;
-        const outcome = s.result;
-        // Update round-history strip (kept in sync with engine history).
-        setHistory((prev) => [{ round: rn, result: outcome }, ...prev].slice(0, 20));
+        const clientOutcome = s.result;
+        // Update round-history strip immediately for smooth UX
+        setHistory((prev) => [{ round: rn, result: clientOutcome }, ...prev].slice(0, 20));
+
         if (sb !== null) {
-          const won = sb === outcome;
           const stake = betAmountRef.current;
-          if (won) {
-            const profit = stake * PAYOUTS[sb];
-            const totalCredit = stake + profit;
-            store.credit(totalCredit);
-            setLastWon(true);
-            setLastPayout(profit);
-          } else {
+          // ── Secure server-side settlement ──────────────────────────────────
+          // sunMoonSettle sends stake + bet to process-bet edge function.
+          // The server decides the canonical result, deducts stake, and
+          // credits payout atomically. We NEVER call store.debit/credit here.
+          void sunMoonSettle({ round_id: s.roundId, bet: sb, stake }).then((res) => {
+            const serverOutcome = res.result;
+            // Correct history strip if server result differs from client display
+            setHistory((prev) => {
+              const first = prev[0];
+              if (first && first.round === rn && first.result !== serverOutcome) {
+                return [{ round: rn, result: serverOutcome }, ...prev.slice(1)];
+              }
+              return prev;
+            });
+            if (res.won) {
+              setLastWon(true);
+              setLastPayout(res.profit);
+            } else {
+              setLastWon(false);
+              setLastPayout(0);
+            }
+            // Sync balance from the authoritative server value
+            store.syncBalanceFromServer(res.balance_after);
+            // Display-only record (server already inserted into bets table)
+            const record: Omit<SunMoonRoundRecord, 'id' | 'ts'> = {
+              roundNumber: rn, stake, bet: sb, result: serverOutcome,
+              payout: PAYOUTS[sb], win: res.won ? stake * PAYOUTS[sb] : 0,
+            };
+            store.recordSunMoonRound(record);
+            setMyBets((prev) => [{
+              id: Math.random().toString(36).slice(2),
+              round: rn, bet: sb, result: serverOutcome,
+              stake, win: res.won ? stake * PAYOUTS[sb] : 0, ts: Date.now(),
+            }, ...prev].slice(0, 50));
+          }).catch((err: unknown) => {
+            console.error('[SunVsMoon] sunMoonSettle failed:', err);
+            // Show error — balance unchanged since server call failed
             setLastWon(false);
             setLastPayout(0);
-          }
-          const record: Omit<SunMoonRoundRecord, 'id' | 'ts'> = {
-            roundNumber: rn,
-            stake,
-            bet: sb,
-            result: outcome,
-            payout: PAYOUTS[sb],
-            win: won ? stake * PAYOUTS[sb] : 0,
-          };
-          store.recordSunMoonRound(record);
-          setMyBets((prev) => [{
-            id: Math.random().toString(36).slice(2),
-            round: rn,
-            bet: sb,
-            result: outcome,
-            stake,
-            win: won ? stake * PAYOUTS[sb] : 0,
-            ts: Date.now(),
-          }, ...prev].slice(0, 50));
+            cms.toast({ title: 'Settlement failed', body: 'Could not connect to server. Please contact support.', kind: 'alert' });
+          });
         }
       }
     });
     return off;
   }, []);
 
-  // ---- Place bet (debit immediately) ----
+  // ---- Place bet (stake is sent with server settlement, NOT debited here) ----
   const handleSelectBet = useCallback((choice: BetChoice) => {
     if (phase !== 'betting') return;
     if (selectedBet !== null) return;
+    if (!auth.getSession()) { bus.emit(Topics.AuthOpenModal, 'login'); return; }
 
     const stake = parseFloat(betAmountStr) || 0;
     if (stake < limits.min || stake > limits.max) {
       cms.toast({ title: 'Bet out of range', body: `Sun vs Moon bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
       return;
     }
-
-    const ok = store.debit(stake);
-    if (!ok) {
+    if (stake > balance) {
       bus.emit(Topics.InsufficientBalance);
-
       return;
     }
-    if (!auth.getSession()) { bus.emit('auth:open_modal' as any, 'login'); return; }
-    if (!auth.getSession()) { bus.emit('auth:open_modal' as any, 'login'); return; }
+    // Record selection only — actual stake deduction happens server-side
+    // in sunMoonSettle() when the round result is revealed.
     setSelectedBet(choice);
-  }, [phase, selectedBet, betAmountStr]);
+  }, [phase, selectedBet, betAmountStr, balance]);
 
   // ---- Bet amount adjustment ----
   const adjustAmount = (delta: number) => {

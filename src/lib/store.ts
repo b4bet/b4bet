@@ -198,8 +198,6 @@ class Store {
   signupBonusHistory: SignupBonusRecord[] = [];
   private static SIGNUP_BONUS_KEY = 'b4bet.signupBonus';
   private static SIGNUP_BONUS_HISTORY_KEY = 'b4bet.signupBonusHistory';
-  // granted tracking is now Supabase-backed via signup_bonus_granted column
-  // Keep a local cache to avoid extra DB calls within the same session
   private signupBonusGrantedCache: Set<string> = new Set();
 
   redeemCodes: Record<string, RedeemCode> = { ...DEFAULT_REDEEM_CODES };
@@ -318,6 +316,48 @@ class Store {
     if (amount > this.balance) return false;
     this.setBalance(this.balance - amount);
     return true;
+  }
+
+  /**
+   * Deduct balance locally for optimistic UI without a Supabase write.
+   * Use when the server will handle the authoritative balance update atomically
+   * (e.g. Trading game stake deduction before tradingSettle resolves).
+   */
+  debitLocalOnly(amount: number): boolean {
+    if (!auth.getSession()) {
+      bus.emit(Topics.AuthOpenModal, 'login');
+      return false;
+    }
+    if (amount > this.balance) return false;
+    const next = Math.max(0, Math.round((this.balance - amount) * 100) / 100);
+    this.balance = next;
+    try {
+      const session = auth.getSession();
+      if (session) {
+        this.balancesByUser[session.username.toLowerCase()] = next;
+        this.persistBalances();
+      }
+    } catch { /* ignore */ }
+    bus.emit(Topics.Balance, this.balance);
+    return true;
+  }
+
+  /**
+   * Sync local balance from a server-authoritative value returned by the
+   * process-bet edge function. Does NOT write back to Supabase (the server
+   * already wrote it).
+   */
+  syncBalanceFromServer(serverBalance: number) {
+    const next = Math.max(0, Math.round(serverBalance * 100) / 100);
+    this.balance = next;
+    try {
+      const session = auth.getSession();
+      if (session) {
+        this.balancesByUser[session.username.toLowerCase()] = next;
+        this.persistBalances();
+      }
+    } catch { /* ignore */ }
+    bus.emit(Topics.Balance, this.balance);
   }
 
   addBalance(amount: number) { this.credit(amount); }
@@ -440,7 +480,8 @@ class Store {
     return rows.slice(0, 200);
   }
 
-  // ---- Bet Recording ----
+  // ---- Bet Recording (display/history only — server writes the canonical bets row) ----
+
   recordCrashBet(rec: Omit<CrashBetRecord, 'id' | 'ts'>) {
     const item: CrashBetRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.crashMyBets = [item, ...this.crashMyBets].slice(0, 100);
@@ -448,11 +489,7 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'crash', amount: rec.amount, win: rec.win,
       result: rec.cashOutAt ? `${rec.cashOutAt.toFixed(2)}x cashout` : `${rec.bustPoint.toFixed(2)}x bust` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.amount, win_amount: rec.win,
-      multiplier: rec.cashOutAt || rec.bustPoint, status: rec.win > 0 ? 'won' : 'lost',
-      bet_details: { cashOutAt: rec.cashOutAt, bustPoint: rec.bustPoint },
-    }).then(() => {}).catch(() => {});
+    // NOTE: bets row is written server-side by crash_settle. Do NOT insert here.
   }
 
   recordMinesRound(rec: Omit<MinesRoundRecord, 'id' | 'ts'>) {
@@ -462,11 +499,7 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'mines', amount: rec.stake, win: rec.win,
       result: rec.busted ? 'busted' : `${rec.multiplier.toFixed(2)}x` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
-      multiplier: rec.multiplier, status: rec.busted ? 'lost' : 'won',
-      bet_details: { mines: rec.mines, gems: rec.gems },
-    }).then(() => {}).catch(() => {});
+    // NOTE: bets row is written server-side by mines_reveal (bust) or mines_cashout. Do NOT insert here.
   }
 
   recordSunMoonRound(rec: Omit<SunMoonRoundRecord, 'id' | 'ts'>) {
@@ -476,11 +509,7 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'sunvsmoon', amount: rec.stake, win: rec.win,
       result: `${rec.bet === 'tie' ? 'Eclipse' : rec.bet.toUpperCase()} \u2192 ${rec.result === 'tie' ? 'Eclipse' : rec.result.toUpperCase()}` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
-      multiplier: rec.payout, status: rec.win > 0 ? 'won' : 'lost',
-      bet_details: { bet: rec.bet, result: rec.result },
-    }).then(() => {}).catch(() => {});
+    // NOTE: bets row is written server-side by sunvsmoon_settle. Do NOT insert here.
   }
 
   recordTradingBet(rec: Omit<TradingBetRecord, 'id' | 'ts'>) {
@@ -490,11 +519,7 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'trading', amount: rec.stake, win: rec.win,
       result: `${rec.symbol} ${rec.direction} \u00B7 ${rec.won ? 'win' : 'loss'}` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
-      multiplier: rec.payout, status: rec.won ? 'won' : 'lost',
-      bet_details: { symbol: rec.symbol, direction: rec.direction, entryPrice: rec.entryPrice, exitPrice: rec.exitPrice },
-    }).then(() => {}).catch(() => {});
+    // NOTE: bets row is written server-side by trading_settle. Do NOT insert here.
   }
 
   // ---- Redeem Codes (Supabase-persisted) ----
@@ -607,12 +632,9 @@ class Store {
       .catch(() => {});
   }
 
-  // Grant signup bonus — checks Supabase profiles.signup_bonus_granted
   async grantSignupBonusAsync(userId: string, username: string): Promise<number> {
     if (!userId || !username) return 0;
-    // Check local cache first
     if (this.signupBonusGrantedCache.has(userId)) return 0;
-    // Check Supabase
     try {
       const { data } = await supabase.from('profiles')
         .select('signup_bonus_granted').eq('id', userId).single();
@@ -629,7 +651,6 @@ class Store {
       this.signupBonusHistory = [rec, ...this.signupBonusHistory].slice(0, 1000);
       this.pushBalanceHistory({ userId, username, type: 'credit', amount, reason: 'Signup bonus (auto)' });
     }
-    // Mark granted in Supabase
     void supabase.rpc('mark_signup_bonus_granted', { p_user_id: userId }).catch(() => {});
     this.signupBonusGrantedCache.add(userId);
     this.persistSignupBonus();
@@ -637,10 +658,9 @@ class Store {
     return amount;
   }
 
-  // Sync wrapper — called from register() which is async anyway
   grantSignupBonus(userId: string, username: string): number {
     void this.grantSignupBonusAsync(userId, username);
-    return this.signupBonus; // optimistic return
+    return this.signupBonus;
   }
 
   getSignupBonusHistory(opts: { search?: string; period?: 'all' | 'today' | 'day' | 'week' | 'month' | 'year' } = {}): SignupBonusRecord[] {

@@ -5,6 +5,12 @@
  *   Top bar:     Asset selector + Binary chip only (no Back button, no Balance widget).
  *   Control panel order: Amount → Active Bets toggle → Expiration → UP/DOWN → Payout.
  *   Active bets panel: toggle above expiry row; no X button; outside-click closes.
+ *
+ * Settlement is now server-side: tradingSettle() sends entry/exit prices and
+ * stake to the process-bet edge function which determines win/loss, debits
+ * stake, and credits payout atomically. The client uses debitLocalOnly() so
+ * the local balance reflects the deduction immediately without a redundant
+ * Supabase write (the server handles the authoritative DB update).
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -18,6 +24,7 @@ import { bus, Topics } from '../lib/bus';
 import type { TradingBetRecord } from '../lib/store';
 import { useBalance } from '../lib/hooks';
 import { cms } from '../lib/cms';
+import { tradingSettle } from '../lib/processBetApi';
 
 // ─────────────────────────────────────────────────────────────
 type AssetCategory = 'Crypto' | 'Forex' | 'Commodities' | 'Stocks';
@@ -341,7 +348,7 @@ function ActiveBetsList({ bets }: { bets: ActiveBet[] }) {
 // ─────────────────────────────────────────────────────────────
 // Main view
 // ─────────────────────────────────────────────────────────────
-export default function TradingGameView({ onBack }: { onBack?: () => void }) {
+export default function TradingGameView({ onBack: _onBack }: { onBack?: () => void }) {
   const balance = useBalance();
 
   const [selectedAsset, setSelectedAsset] = useState<Asset>(ASSETS[0]);
@@ -427,18 +434,43 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
       });
       updated.forEach((bet) => {
         if (bet.timeRemaining <= 0) {
-          const won = bet.isWinning;
-          if (won) {
-            const profit = (bet.betAmount * bet.payoutPercentage) / 100;
-            store.credit(bet.betAmount + profit);
-            addToast(`WIN +${Math.floor(profit)} on ${bet.asset.symbol}`, 'win');
-
-            store.recordTradingBet({ symbol: bet.asset.symbol, direction: bet.direction, stake: bet.betAmount, duration: bet.durationMinutes, entryPrice: bet.entryPrice, exitPrice: currentPriceRef.current, payout: bet.payoutPercentage, win: bet.betAmount + profit, won: true } as Omit<TradingBetRecord, 'id' | 'ts'>);
-          } else {
-            addToast(`LOSS -${Math.floor(bet.betAmount)} on ${bet.asset.symbol}`, 'lose');
-
-            store.recordTradingBet({ symbol: bet.asset.symbol, direction: bet.direction, stake: bet.betAmount, duration: bet.durationMinutes, entryPrice: bet.entryPrice, exitPrice: currentPriceRef.current, payout: bet.payoutPercentage, win: 0, won: false } as Omit<TradingBetRecord, 'id' | 'ts'>);
-          }
+          // ── Secure server-side settlement ────────────────────────────────
+          // tradingSettle sends entry/exit prices + stake to process-bet.
+          // Server verifies direction vs price movement, debits stake,
+          // and credits payout atomically. Client never calls credit/debit here.
+          void tradingSettle({
+            symbol:      bet.asset.symbol,
+            direction:   bet.direction,
+            stake:       bet.betAmount,
+            entry_price: bet.entryPrice,
+            exit_price:  cp,
+            payout_pct:  bet.payoutPercentage,
+          }).then((res) => {
+            if (res.won) {
+              addToast(`WIN +${Math.floor(res.profit)} on ${bet.asset.symbol}`, 'win');
+            } else {
+              addToast(`LOSS -${Math.floor(bet.betAmount)} on ${bet.asset.symbol}`, 'lose');
+            }
+            // Sync balance from authoritative server value
+            store.syncBalanceFromServer(res.balance_after);
+            // Display-only record — server already inserted into bets table
+            store.recordTradingBet({
+              symbol:      bet.asset.symbol,
+              direction:   bet.direction,
+              stake:       bet.betAmount,
+              duration:    bet.durationMinutes,
+              entryPrice:  bet.entryPrice,
+              exitPrice:   cp,
+              payout:      bet.payoutPercentage,
+              win:         res.won ? bet.betAmount + res.profit : 0,
+              won:         res.won,
+            } as Omit<TradingBetRecord, 'id' | 'ts'>);
+          }).catch((err: unknown) => {
+            console.error('[Trading] tradingSettle failed:', err);
+            // Refund the locally-debited stake on server error
+            store.credit(bet.betAmount);
+            addToast(`Error settling ${bet.asset.symbol} trade — stake refunded`, 'info');
+          });
         } else {
           remaining.push(bet);
         }
@@ -466,7 +498,9 @@ export default function TradingGameView({ onBack }: { onBack?: () => void }) {
       addToast('Invalid bet amount', 'info');
       return;
     }
-    const ok = store.debit(amt);
+    // Use debitLocalOnly — no Supabase write here since tradingSettle will
+    // handle the authoritative deduction atomically on the server.
+    const ok = store.debitLocalOnly(amt);
     if (!ok) { bus.emit(Topics.InsufficientBalance); addToast('Insufficient balance', 'info'); return; }
 
     const newBet: ActiveBet = {
