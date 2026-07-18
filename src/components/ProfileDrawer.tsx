@@ -96,9 +96,12 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
 
   return (
     <>
+      {/* Backdrop */}
       {open && <div className="fixed inset-0 bg-black/60 z-40" onClick={onClose} />}
-      <div className={`fixed right-0 top-0 bottom-0 w-80 max-w-[92vw] bg-slatepanel-900 border-l border-borderline-900 z-50 flex flex-col transition-transform duration-300 ${
-        open ? 'translate-x-0' : 'translate-x-full'
+
+      {/* Drawer — slides in from the LEFT */}
+      <div className={`fixed left-0 top-0 bottom-0 w-80 max-w-[92vw] bg-slatepanel-900 border-r border-borderline-900 z-50 flex flex-col transition-transform duration-300 ${
+        open ? 'translate-x-0' : '-translate-x-full'
       }`}>
         {/* ── FIXED TOP: Header + Profile card ── */}
         <div className="shrink-0">
@@ -207,7 +210,7 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
             </button>
 
             {/* Dynamic Pages — always visible */}
-            {dynamicPages.map((page, idx) => (
+            {dynamicPages.map((page) => (
               <div key={page.id}>
                 <div className="border-t border-borderline-900" />
                 <button onClick={() => { setSelectedPage(page); setPagePopupOpen(true); }}
