@@ -1,14 +1,17 @@
 /**
- * SunVsMoonView — Ported from Expo React Native to React Web.
+ * SunVsMoonView — server-side outcome version.
  *
  * Game flow per round (20s total):
  *   1. BETTING   (15s) — pick Sun / Moon / Eclipse and set bet amount.
  *   2. PROCESSING (2s) — "Processing…" screen.
- *   3. REVEALED   (3s) — winner icon + win/loss announced.
+ *   3. REVEALED   (3s) — server settles bet, balance updated.
  *   4. Auto-reset to step 1.
  *
- * Balance and history are wired to the main betwinv4 store so the wallet
- * and game-history panel stay in sync.
+ * The bet is settled via GameService.sunMoonSettle() which calls the
+ * process-bet Edge Function. The server generates the result with
+ * crypto.getRandomValues() and atomically updates profiles.balance + bets.
+ * The local store.recordSunMoonRound() is called only for the "My Bets"
+ * history tab — it never decides the outcome or modifies the balance.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -21,6 +24,7 @@ import { useBalance } from '../lib/hooks';
 import { cms } from '../lib/cms';
 import { auth } from '../lib/auth';
 import { sunMoonLoop, EngineTopics, type SunMoonState } from '../lib/persistentGameEngine';
+import { GameService } from '../lib/game-service';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,26 +36,15 @@ type Phase = 'betting' | 'processing' | 'revealed';
 // Constants
 // ---------------------------------------------------------------------------
 const BETTING_DURATION = 15;   // seconds
-const PROCESSING_MS   = 2000;
-const REVEAL_MS       = 3000;
 const YEAR_PREFIX     = 2026;
 
-/** Multipliers (net profit). Sun/Moon pay 1:1; Eclipse pays 8:1. */
+/** Net-profit multipliers. Sun/Moon pay 1:1; Eclipse pays 8:1. */
 const PAYOUTS: Record<BetChoice, number> = { sun: 1, moon: 1, tie: 8 };
 
-/** Weighted outcome draw. */
-function drawResult(): BetChoice {
-  const r = Math.random();
-  if (r < 0.47) return 'sun';
-  if (r < 0.94) return 'moon';
-  return 'tie';
-}
-
 // ---------------------------------------------------------------------------
-// Mini sub-components
+// Mini sub-components (unchanged UI)
 // ---------------------------------------------------------------------------
 
-/** Circular SVG countdown that turns red as time runs out. */
 function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: number }) {
   const radius = 38;
   const circ   = 2 * Math.PI * radius;
@@ -82,7 +75,6 @@ function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: numbe
   );
 }
 
-/** Bet option button (Sun / Moon / Eclipse). */
 function BetButton({
   choice, label, payout, imageSrc, glowColor,
   selected, disabled, betAmount, onSelect,
@@ -98,14 +90,12 @@ function BetButton({
         'flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 transition-all duration-200 py-3 px-2 flex-1',
         'active:scale-95',
         disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer',
-        selected
-          ? 'border-opacity-100 scale-[1.04]'
-          : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.07]',
+        selected ? 'border-opacity-100 scale-[1.04]' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.07]',
       ].join(' ')}
       style={{
-        borderColor:      selected ? glowColor : undefined,
-        backgroundColor:  selected ? `${glowColor}22` : undefined,
-        boxShadow:        selected ? `0 0 18px 4px ${glowColor}55` : undefined,
+        borderColor:     selected ? glowColor : undefined,
+        backgroundColor: selected ? `${glowColor}22` : undefined,
+        boxShadow:       selected ? `0 0 18px 4px ${glowColor}55` : undefined,
       }}
     >
       <img src={imageSrc} alt={label} className="w-12 h-12 object-contain drop-shadow-lg" />
@@ -120,7 +110,6 @@ function BetButton({
   );
 }
 
-/** Full-screen result overlay. */
 function ResultOverlay({
   visible, result, won, payout, choice,
 }: {
@@ -162,7 +151,6 @@ function ResultOverlay({
   );
 }
 
-/** Horizontal history strip of last 20 results. */
 function HistoryStrip({ history }: { history: Array<{ round: number; result: BetChoice }> }) {
   const images: Record<BetChoice, string> = { sun: '/sun.png', moon: '/moon.png', tie: '/eclipse.png' };
   const colors: Record<BetChoice, string> = { sun: '#FFB627', moon: '#818CF8', tie: '#F59E0B' };
@@ -203,31 +191,27 @@ function HistoryStrip({ history }: { history: Array<{ round: number; result: Bet
 export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const gameLogos = useGameLogos();
   const balance      = useBalance();
-  // String state allows user to clear the field before typing a new value
   const [betAmountStr, setBetAmountStr] = useState('100');
   const betAmount = parseFloat(betAmountStr) || 0;
 
-  // Background persistent engine drives phase / countdown / result. This
-  // view mirrors the shared state so re-mounting picks up the live round.
   const initEng = sunMoonLoop.getState();
   const [selectedBet, setSelectedBet] = useState<BetChoice | null>(null);
-  const [phase,      setPhase]      = useState<Phase>(initEng.phase);
+  const [phase,       setPhase]      = useState<Phase>(initEng.phase);
   const [secondsLeft, setSecondsLeft] = useState(initEng.secondsLeft);
   const [roundNumber, setRoundNumber] = useState(YEAR_PREFIX * 10 + initEng.roundId);
-  const [result,     setResult]     = useState<BetChoice | null>(initEng.result);
-  const [lastWon,    setLastWon]    = useState(false);
-  const [lastPayout, setLastPayout] = useState(0);
-  const [history,    setHistory]    = useState<Array<{ round: number; result: BetChoice }>>(() => {
+  const [result,      setResult]     = useState<BetChoice | null>(initEng.result);
+  const [lastWon,     setLastWon]    = useState(false);
+  const [lastPayout,  setLastPayout] = useState(0);
+  const [history,     setHistory]    = useState<Array<{ round: number; result: BetChoice }>>(() => {
     const h = sunMoonLoop.getHistory();
     return h.map((r, i) => ({ round: YEAR_PREFIX * 10 + initEng.roundId - (i + 1), result: r }));
   });
-  const [myBets,     setMyBets]     = useState<Array<{
+  const [myBets, setMyBets] = useState<Array<{
     id: string; round: number; bet: BetChoice; result: BetChoice; stake: number; win: number; ts: number;
   }>>([]);
   const [historyTab, setHistoryTab] = useState<'rounds' | 'my'>('rounds');
+  const [settling, setSettling] = useState(false);
 
-  // Subscribe to the persistent engine — the same round & timer are shared
-  // globally regardless of whether this view is currently mounted.
   const settledRoundRef = useRef<number>(-1);
   const selectedBetRef  = useRef<BetChoice | null>(null);
   const betAmountRef    = useRef<number>(betAmount);
@@ -243,78 +227,88 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       setPhase(s.phase);
       setSecondsLeft(s.secondsLeft);
       setResult(s.result);
-      // On entering a fresh betting phase for a new round, clear the last
-      // player selection so a new bet can be placed.
+
       if (s.phase === 'betting' && settledRoundRef.current !== -1 && settledRoundRef.current !== rn) {
         setSelectedBet(null);
       }
-      // Settle the pending player bet exactly once per revealed round.
+
+      // Settle exactly once per revealed round — server-side
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
         settledRoundRef.current = rn;
         const sb = selectedBetRef.current;
         const outcome = s.result;
-        // Update round-history strip (kept in sync with engine history).
+
+        // Always update history strip
         setHistory((prev) => [{ round: rn, result: outcome }, ...prev].slice(0, 20));
+
         if (sb !== null) {
-          const won = sb === outcome;
           const stake = betAmountRef.current;
-          if (won) {
-            const profit = stake * PAYOUTS[sb];
-            const totalCredit = stake + profit;
-            store.credit(totalCredit);
-            setLastWon(true);
-            setLastPayout(profit);
-          } else {
-            setLastWon(false);
-            setLastPayout(0);
-          }
-          const record: Omit<SunMoonRoundRecord, 'id' | 'ts'> = {
-            roundNumber: rn,
-            stake,
-            bet: sb,
-            result: outcome,
-            payout: PAYOUTS[sb],
-            win: won ? stake * PAYOUTS[sb] : 0,
-          };
-          store.recordSunMoonRound(record);
-          setMyBets((prev) => [{
-            id: Math.random().toString(36).slice(2),
-            round: rn,
-            bet: sb,
-            result: outcome,
-            stake,
-            win: won ? stake * PAYOUTS[sb] : 0,
-            ts: Date.now(),
-          }, ...prev].slice(0, 50));
+          const session = auth.getSession();
+          if (!session) return;
+
+          // Fire-and-forget settle — server decides win/loss and updates balance
+          setSettling(true);
+          void GameService.sunMoonSettle(session.userId, rn, sb, stake)
+            .then((res) => {
+              // Sync balance from server response
+              store.setBalance(res.balance_after);
+              setLastWon(res.won);
+              setLastPayout(res.profit);
+
+              // Local history record only (no balance calculation here)
+              const record: Omit<SunMoonRoundRecord, 'id' | 'ts'> = {
+                roundNumber: rn,
+                stake,
+                bet: sb,
+                result: outcome,
+                payout: PAYOUTS[sb],
+                win: res.won ? res.profit : 0,
+              };
+              store.recordSunMoonRound(record);
+              setMyBets((prev) => [{
+                id: Math.random().toString(36).slice(2),
+                round: rn,
+                bet: sb,
+                result: outcome,
+                stake,
+                win: res.won ? res.profit : 0,
+                ts: Date.now(),
+              }, ...prev].slice(0, 50));
+            })
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : 'Server error';
+              cms.toast({ title: 'Settle failed', body: msg, kind: 'alert' });
+            })
+            .finally(() => setSettling(false));
         }
       }
     });
     return off;
   }, []);
 
-  // ---- Place bet (debit immediately) ----
+  // ---- Place bet (deduct server-side on settle, no local debit) ----
   const handleSelectBet = useCallback((choice: BetChoice) => {
     if (phase !== 'betting') return;
     if (selectedBet !== null) return;
-
+    const session = auth.getSession();
+    if (!session) {
+      bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login');
+      return;
+    }
     const stake = parseFloat(betAmountStr) || 0;
     if (stake < limits.min || stake > limits.max) {
       cms.toast({ title: 'Bet out of range', body: `Sun vs Moon bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
       return;
     }
-
-    const ok = store.debit(stake);
-    if (!ok) {
+    if (stake > balance) {
       bus.emit(Topics.InsufficientBalance);
-
       return;
     }
-    if (!auth.getSession()) { bus.emit('auth:open_modal' as any, 'login'); return; }
-    if (!auth.getSession()) { bus.emit('auth:open_modal' as any, 'login'); return; }
+    // Optimistic UI — debit shown locally; server reconciles on settle
+    store.debit(stake);
     setSelectedBet(choice);
-  }, [phase, selectedBet, betAmountStr]);
+  }, [phase, selectedBet, betAmountStr, balance]);
 
-  // ---- Bet amount adjustment ----
   const adjustAmount = (delta: number) => {
     const cur = parseFloat(betAmountStr) || 0;
     const next = Math.max(10, Math.min(balance, Math.round(cur + delta)));
@@ -323,8 +317,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
   const limits = store.getGameLimits('sunvsmoon');
   const QUICK_STAKES = [100, 500, 1000, 5000];
-
-  const bettingEnabled = phase === 'betting' && selectedBet === null;
+  const bettingEnabled = phase === 'betting' && selectedBet === null && !settling;
 
   return (
     <div className="relative space-y-4 animate-fade-in">
@@ -360,7 +353,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             ) : phase === 'processing' ? (
               <div className="py-6 flex flex-col items-center gap-3">
                 <div className="w-12 h-12 border-4 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-                <p className="text-sm font-bold text-amber-300">Processing result…</p>
+                <p className="text-sm font-bold text-amber-300">{settling ? 'Settling…' : 'Processing result…'}</p>
               </div>
             ) : null}
           </div>
@@ -385,7 +378,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             </div>
           )}
 
-          {/* ── Bet amount controls ── */}
           {phase === 'betting' && selectedBet === null && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -397,7 +389,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={() => adjustAmount(-50)} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">−</button>
-                {/* String-based input — allows fully clearing the field before typing */}
                 <input
                   type="text"
                   inputMode="decimal"
