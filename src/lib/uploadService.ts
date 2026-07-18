@@ -1,47 +1,47 @@
-// Upload service â€” uses Supabase Storage via centralized client
-// Buckets: admin-uploads for logos, banners, game assets
-
+// Upload service - uses Supabase Storage
 import { supabase } from '@/integrations/supabase/client';
 
 export interface UploadResult { success: boolean; url?: string; path?: string; error?: string; }
 
-/** Upload file to Supabase Storage */
-export async function uploadFile(file: File, bucket: string = 'admin-uploads', folder: string = ''): Promise<UploadResult> {
+interface StorageFile {
+  name: string;
+  id: string | null;
+  updated_at: string | null;
+  created_at: string | null;
+  last_accessed_at: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+export async function uploadFile(file: File, bucket = 'admin-uploads', folder = ''): Promise<UploadResult> {
   try {
     if (!file) return { success: false, error: 'No file selected' };
-    const timestamp = Date.now();
-    const sanitizedName = file.name.replace(/[^a-zA-Z0-9.-]/g, '_');
-    const fileName = `${timestamp}-${sanitizedName}`;
+    const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
     const filePath = folder ? `${folder}/${fileName}` : fileName;
-
     const { error } = await supabase.storage.from(bucket).upload(filePath, file, { cacheControl: '3600', upsert: false });
     if (error) return { success: false, error: error.message };
-
     const { data: publicData } = supabase.storage.from(bucket).getPublicUrl(filePath);
     return { success: true, url: publicData.publicUrl, path: filePath };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Upload failed' };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : 'Upload failed' };
   }
 }
 
-/** Delete file from Supabase Storage */
-export async function deleteFile(filePath: string, bucket: string = 'admin-uploads'): Promise<UploadResult> {
+export async function deleteFile(filePath: string, bucket = 'admin-uploads'): Promise<UploadResult> {
   try {
     const { error } = await supabase.storage.from(bucket).remove([filePath]);
     if (error) return { success: false, error: error.message };
     return { success: true };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'Delete failed' };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : 'Delete failed' };
   }
 }
 
-/** List files in Supabase Storage folder */
-export async function listFiles(bucket: string = 'admin-uploads', folder: string = ''): Promise<{ success: boolean; files?: any[]; error?: string }> {
+export async function listFiles(bucket = 'admin-uploads', folder = ''): Promise<{ success: boolean; files?: StorageFile[]; error?: string }> {
   try {
     const { data, error } = await supabase.storage.from(bucket).list(folder);
     if (error) return { success: false, error: error.message };
-    return { success: true, files: data };
-  } catch (err: any) {
-    return { success: false, error: err?.message || 'List failed' };
+    return { success: true, files: data as StorageFile[] };
+  } catch (err: unknown) {
+    return { success: false, error: err instanceof Error ? err.message : 'List failed' };
   }
 }

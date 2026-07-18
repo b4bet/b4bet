@@ -1,33 +1,28 @@
 import { useEffect, useState } from 'react';
 import { supabase, getCurrentUser, signUpUser, loginUser, logoutUser } from '../supabaseIntegration';
 
+type SupabaseUser = Awaited<ReturnType<typeof getCurrentUser>>;
+
 export function useSupabaseAuth() {
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<SupabaseUser>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Check if user is already logged in
   useEffect(() => {
     const checkUser = async () => {
       try {
         const currentUser = await getCurrentUser();
         setUser(currentUser);
-      } catch (err: any) {
-        setError(err.message);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Unknown error');
       } finally {
         setLoading(false);
       }
     };
-
-    checkUser();
-
-    // Listen to auth changes
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user || null);
+    void checkUser();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
     });
-
     return () => subscription?.unsubscribe();
   }, []);
 
@@ -35,9 +30,7 @@ export function useSupabaseAuth() {
     setLoading(true);
     setError(null);
     const result = await signUpUser(email, password, userData);
-    if (!result.success) {
-      setError(result.error);
-    }
+    if (!result.success) setError(result.error ?? null);
     setLoading(false);
     return result;
   };
@@ -46,11 +39,8 @@ export function useSupabaseAuth() {
     setLoading(true);
     setError(null);
     const result = await loginUser(email, password);
-    if (result.success) {
-      setUser(result.user);
-    } else {
-      setError(result.error);
-    }
+    if (result.success) setUser(result.user ?? null);
+    else setError(result.error ?? null);
     setLoading(false);
     return result;
   };
@@ -62,13 +52,5 @@ export function useSupabaseAuth() {
     setLoading(false);
   };
 
-  return {
-    user,
-    loading,
-    error,
-    signup,
-    login,
-    logout,
-    isAuthenticated: !!user,
-  };
+  return { user, loading, error, signup, login, logout, isAuthenticated: !!user };
 }
