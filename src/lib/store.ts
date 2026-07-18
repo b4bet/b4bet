@@ -1,4 +1,4 @@
-// Store Ã¢â‚¬â€ Supabase-backed balance, transactions, bets, game state
+// Store — Supabase-backed balance, transactions, bets, game state
 // Replaces the old localStorage-only mock store.
 
 import { supabase } from '@/integrations/supabase/client';
@@ -127,6 +127,12 @@ export interface RedeemCode {
   usageByUser: Record<string, number>;
 }
 
+/** Returned by computeAutoOutcome — human-readable outcome for admin preview */
+export interface RoundOutcomePreview {
+  outcome: string;
+  detail: string;
+}
+
 export const globalRounds: Record<string, number> = { wingo: 1, k3: 1, fived: 1, sunvsmoon: 1 };
 
 function seedLeaderboard(prefix: string): { user: string; earnings: number; ts: number }[] {
@@ -145,7 +151,7 @@ function seedLeaderboard(prefix: string): { user: string; earnings: number; ts: 
 
 class Store {
   balance = 0;
-  currency = '\u20B9'; // Ã¢â€šÂ¹
+  currency = '\u20B9'; // ₹
 
   notifications: NotificationItem[] = [];
 
@@ -534,26 +540,54 @@ class Store {
 }
 
 export const store = new Store();
-export function computeAutoOutcome(gameKey: string, config: { targetWinProbability: number; houseEdge: number }): string {
+
+/**
+ * Compute a simulated next-round outcome for admin preview.
+ * Returns a RoundOutcomePreview with a human-readable outcome + detail string.
+ */
+export function computeAutoOutcome(
+  gameKey: string,
+  config: { targetWinProbability: number; houseEdge: number },
+): RoundOutcomePreview {
   const winChance = (config.targetWinProbability - config.houseEdge) / 100;
   const roll = Math.random();
-  if (gameKey === 'crash') {
+
+  if (gameKey === 'crash' || gameKey === 'aviator') {
+    let outcome: string;
     if (roll < winChance) {
       const point = 1 + Math.floor(Math.random() * 100) / 10;
-      return point.toFixed(2);
+      outcome = point.toFixed(2) + 'x';
+    } else {
+      outcome = (1 + Math.floor(Math.random() * 20) / 100).toFixed(2) + 'x';
     }
-    return (1 + Math.floor(Math.random() * 20) / 100).toFixed(2);
+    return { outcome, detail: `Win-prob ${config.targetWinProbability}% · Edge ${config.houseEdge}%` };
   }
-  if (gameKey === 'mines') return roll < winChance ? 'win' : 'bust';
+  if (gameKey === 'mines') {
+    const outcome = roll < winChance ? 'win' : 'bust';
+    return { outcome, detail: `Win-prob ${config.targetWinProbability}%` };
+  }
   if (gameKey === 'sunvsmoon') {
-    if (roll < winChance) return 'sun';
-    if (roll < winChance * 2) return 'moon';
-    return 'eclipse';
+    let outcome: string;
+    if (roll < winChance) outcome = 'sun';
+    else if (roll < winChance * 2) outcome = 'moon';
+    else outcome = 'eclipse';
+    return { outcome, detail: `Auto engine · edge ${config.houseEdge}%` };
   }
-  if (gameKey === 'wingo') return String(Math.floor(Math.random() * 10));
-  if (gameKey === 'k3') return `${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1}`;
-  if (gameKey === 'fived') return String(Math.floor(Math.random() * 100000)).padStart(5, '0');
-  if (gameKey === 'trading') return roll < winChance ? 'up' : 'down';
-  if (gameKey === 'aviator') return (1 + Math.random() * 5).toFixed(2);
-  return '0';
+  if (gameKey === 'wingo') {
+    const outcome = String(Math.floor(Math.random() * 10));
+    return { outcome, detail: `Digit 0–9 · win-prob ${config.targetWinProbability}%` };
+  }
+  if (gameKey === 'k3') {
+    const outcome = `${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1}`;
+    return { outcome, detail: 'Three dice · auto engine' };
+  }
+  if (gameKey === 'fived') {
+    const outcome = String(Math.floor(Math.random() * 100000)).padStart(5, '0');
+    return { outcome, detail: '5-digit result · auto engine' };
+  }
+  if (gameKey === 'trading') {
+    const outcome = roll < winChance ? 'UP' : 'DOWN';
+    return { outcome, detail: `Win-prob ${config.targetWinProbability}%` };
+  }
+  return { outcome: '0', detail: 'Unknown game' };
 }
