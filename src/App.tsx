@@ -13,7 +13,6 @@ import ProfileView from './views/ProfileView';
 import ReferralView from './views/ReferralView';
 import AdminView from './views/AdminView';
 import HistoryView from './views/HistoryView';
-import LudoView from './views/LudoView';
 import WingoView from './views/WingoView';
 import K3View from './views/K3View';
 import FiveDView from './views/FiveDView';
@@ -43,13 +42,13 @@ export default function App() {
     }
     return 'home';
   });
-  const [notifOpen, setNotifOpen] = useState(false);
-  const [walletOpen, setWalletOpen] = useState(false);
+  const [notifOpen, setNotifOpen]           = useState(false);
+  const [walletOpen, setWalletOpen]         = useState(false);
   const [supportChatOpen, setSupportChatOpen] = useState(false);
 
   // Auth modal state
-  const [authModalOpen, setAuthModalOpen] = useState(false);
-  const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
+  const [authModalOpen, setAuthModalOpen]   = useState(false);
+  const [authModalMode, setAuthModalMode]   = useState<AuthModalMode>('login');
 
   useEffect(() => {
     const off = bus.on('auth:open_modal', (payload: unknown) => {
@@ -77,16 +76,16 @@ export default function App() {
     startAllPersistentGameEngines();
   }, []);
 
-  const showHeader   = route !== 'admin';
+  const showHeader    = route !== 'admin';
   const showBottomNav = route !== 'admin';
 
   return (
-    <div className="min-h-screen bg-midnight-900 text-white font-sans">
+    <div className="flex flex-col h-dvh overflow-hidden bg-slate-950 text-white">
       <GeoBlockOverlay />
-      <ToastHost />
 
       {showHeader && (
         <Header
+          route={route}
           onOpenNotifications={() => setNotifOpen(true)}
           onOpenWallet={() => setWalletOpen(true)}
           onBack={undefined}
@@ -95,9 +94,9 @@ export default function App() {
         />
       )}
 
-      <main className={`max-w-xl mx-auto px-3 sm:px-4 py-4 ${showBottomNav ? 'pb-20' : 'pb-6'}`}>
+      <main className="flex-1 overflow-y-auto">
         {route === 'home'      && <HomeView onNavigate={navigate} />}
-        {route === 'mines'     && <MinesView />}
+        {route === 'mines'     && <MinesView onNavigate={navigate} />}
         {route === 'games'     && <GamesView onNavigate={navigate} />}
         {route === 'deposit'   && <DepositView onNavigate={navigate} />}
         {route === 'wallet'    && <WalletView onNavigate={navigate} />}
@@ -105,7 +104,7 @@ export default function App() {
         {route === 'profile'   && (
           <ProfileView
             onNavigate={navigate}
-            onOpenSupportChat={() => setSupportChatOpen(true)}
+            onOpenSupport={() => setSupportChatOpen(true)}
             onOpenAuthModal={openAuthModal}
             onOpenMenu={() => setWalletOpen(true)}
           />
@@ -113,22 +112,18 @@ export default function App() {
         {route === 'referral'  && <ReferralView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
         {route === 'admin'     && <AdminView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
         {route === 'history'   && <HistoryView onNavigate={navigate} />}
-        {route === 'ludo'      && <LudoView />}
 
-        {route === 'crash' && <CrashView />}
-        {route === 'aviator' && <AviatorView />}
-        {route === 'wingo' && <WingoView />}
-        {route === 'k3' && <K3View />}
-        {route === 'fived' && <FiveDView />}
-        {route === 'sunvsmoon' && <SunVsMoonView />}
-        {route === 'trading' && <TradingGameView />}
+        {route === 'crash'     && <CrashView onNavigate={navigate} />}
+        {route === 'aviator'   && <AviatorView onNavigate={navigate} />}
+        {route === 'wingo'     && <WingoView onNavigate={navigate} />}
+        {route === 'k3'        && <K3View onNavigate={navigate} />}
+        {route === 'fived'     && <FiveDView onNavigate={navigate} />}
+        {route === 'sunvsmoon' && <SunVsMoonView onNavigate={navigate} />}
+        {route === 'trading'   && <TradingGameView onNavigate={navigate} />}
       </main>
 
       {showBottomNav && (
-        <BottomNav
-          route={route}
-          onNavigate={navigate}
-        />
+        <BottomNav route={route} onNavigate={navigate} />
       )}
 
       <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
@@ -143,11 +138,12 @@ export default function App() {
 
       <AuthModal
         open={authModalOpen}
-        initialMode={authModalMode}
+        mode={authModalMode}
         onClose={() => setAuthModalOpen(false)}
       />
 
       {staffSession && <AdminSupportNotification />}
+      <ToastHost />
     </div>
   );
 }
