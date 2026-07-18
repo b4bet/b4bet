@@ -244,13 +244,15 @@ class Cms {
     } catch { /* ignore */ }
     // Load all data from Supabase on startup
     this.syncAllFromSupabase();
-    // Start realtime subscriptions for live updates
+    // Start realtime subscriptions for live updates across all browsers/tabs
     this.startRealtimeSubscriptions();
   }
 
   // ---- Realtime subscriptions for live data ----
+  // CRITICAL: Every table that admin can edit must have a subscription here
+  // so the client (user-facing app) sees changes instantly without page refresh.
   private startRealtimeSubscriptions() {
-    // Transactions table - auto refresh when any change happens
+    // Transactions table - auto refresh on any deposit/withdrawal change
     supabase
       .channel('cms_transactions')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
@@ -258,7 +260,7 @@ class Cms {
       })
       .subscribe();
 
-    // Profiles table
+    // Profiles table - user data changes (balance, ban status, etc.)
     supabase
       .channel('cms_profiles')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => {
@@ -282,11 +284,27 @@ class Cms {
       })
       .subscribe();
 
-    // Payment methods — CRITICAL: so client sees methods added/updated by admin in real-time
+    // Payment methods — client sees methods added/updated by admin in real-time
     supabase
       .channel('cms_payment_methods')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, () => {
         void this.syncPaymentMethodsFromSupabase();
+      })
+      .subscribe();
+
+    // Banners — CRITICAL: client slider updates instantly when admin adds/edits/deletes banners
+    supabase
+      .channel('cms_banners')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'banners' }, () => {
+        void this.syncBannersFromSupabase();
+      })
+      .subscribe();
+
+    // Settings — client reflects admin setting changes instantly (referral bonus, signup bonus, etc.)
+    supabase
+      .channel('cms_settings')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => {
+        void this.syncSettingsFromSupabase();
       })
       .subscribe();
   }
@@ -323,6 +341,8 @@ class Cms {
         for (const s of data as Array<{ key: string; value: unknown }>) {
           if (s.key === 'referral_bonus' && s.value) this.referralConfig.rewardAmount = s.value as number;
         }
+        // Emit updated referral config so components using it re-render
+        bus.emit(Topics.ReferralConfig, this.referralConfig);
       }
     } catch { /* ignore */ }
   }
@@ -473,18 +493,25 @@ class Cms {
   addBanner(imageDataUrl: string, linkUrl = '') {
     const rec = { id: Math.random().toString(36).slice(2), imageDataUrl, linkUrl };
     this.banners = [...this.banners, rec]; this.emitBanners();
-    supabase.rpc('admin_upsert_banner', { p_id: null, p_title: 'Banner', p_image_url: imageDataUrl, p_link_url: linkUrl, p_sort_order: this.banners.length, p_is_active: true }).then(() => {}).catch(() => {});
+    // Persist to Supabase — realtime subscription will push update to all connected clients
+    supabase.rpc('admin_upsert_banner', { p_id: null, p_title: 'Banner', p_image_url: imageDataUrl, p_link_url: linkUrl, p_sort_order: this.banners.length, p_is_active: true })
+      .then(() => { void this.syncBannersFromSupabase(); })
+      .catch(() => {});
   }
   updateBanner(id: string, patch: Partial<BannerSlide>) {
     this.banners = this.banners.map(b => b.id === id ? { ...b, ...patch } : b); this.emitBanners();
     if (patch.imageDataUrl || patch.linkUrl) {
       const b = this.banners.find(x => x.id === id);
-      if (b) supabase.rpc('admin_upsert_banner', { p_id: id, p_title: 'Banner', p_image_url: b.imageDataUrl, p_link_url: b.linkUrl, p_sort_order: 0, p_is_active: true }).then(() => {}).catch(() => {});
+      if (b) supabase.rpc('admin_upsert_banner', { p_id: id, p_title: 'Banner', p_image_url: b.imageDataUrl, p_link_url: b.linkUrl, p_sort_order: 0, p_is_active: true })
+        .then(() => { void this.syncBannersFromSupabase(); })
+        .catch(() => {});
     }
   }
   removeBanner(id: string) {
     this.banners = this.banners.filter(b => b.id !== id); this.emitBanners();
-    supabase.rpc('admin_delete_banner', { p_id: id }).then(() => {}).catch(() => {});
+    supabase.rpc('admin_delete_banner', { p_id: id })
+      .then(() => { void this.syncBannersFromSupabase(); })
+      .catch(() => {});
   }
 
   setLogo(dataUrl: string | null) { this.logoDataUrl = dataUrl; this.emitLogo(); }
