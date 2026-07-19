@@ -651,12 +651,15 @@ class Cms {
       const reasonText = reason ? `: ${reason}` : '';
       this.pushFromTemplate('nt_deposit_ok', `Deposit ${statusLabel}`, `Your deposit of ${store.currency}${before.amount.toFixed(2)} via ${before.method} is ${status}${reasonText}.`, status === 'approved' ? 'success' : status === 'processing' ? 'info' : 'warn');
     }
-    if (before && before.status !== 'approved' && status === 'approved') {
-      bus.emit(Topics.ReferralDepositApproved, { username: before.user, amount: before.amount });
-      try { store.creditUser(before.user, before.amount); } catch { /* ignore */ }
+    if (status === 'approved') {
+      if (before) bus.emit(Topics.ReferralDepositApproved, { username: before.user, amount: before.amount });
+      // Reads amount/username straight from the transactions row and is
+      // idempotent server-side, so it works even if the local `before`
+      // cache is stale or missing (see admin_approve_deposit_credit).
+      try { await supabase.rpc('admin_approve_deposit_credit', { p_txn_id: id }); } catch { /* ignore */ }
     }
     this.emitFinance();
-    await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).then(({ error }) => { if (error) alert('DEPOSIT DB ERROR: ' + error.message); });
+    await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).catch(() => {});
   }
 
   async setWithdrawalStatus(id: string, status: WithdrawalRequest['status'], utr?: string, reason?: string) {
@@ -668,7 +671,7 @@ class Cms {
       this.pushFromTemplate('nt_withdrawal_ok', `Withdrawal ${status}`, `Your withdrawal of ${store.currency}${before.amount.toFixed(2)} to ${before.destination} is ${status}${utrText}${reasonText}.`, status === 'approved' ? 'success' : 'info');
     }
     this.emitFinance();
-    await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).then(({ error }) => { if (error) alert('WITHDRAWAL DB ERROR: ' + error.message); });
+    await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).catch(() => {});
   }
 
   totals() {
