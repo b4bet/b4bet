@@ -292,7 +292,7 @@ class Store {
       this.balance = next;
       bus.emit(Topics.Balance, this.balance);
     }
-    supabase.from('profiles').update({ balance: next }).eq('username', username).then(() => {}).catch(() => {});
+    supabase.rpc('admin_credit_balance', { p_username: username, p_amount: amount }).then(() => {}).catch(() => {});
   }
 
   setBalance(next: number) {
