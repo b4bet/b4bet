@@ -8,17 +8,19 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // for every random decision so the browser cannot predict or alter results.
 //
 // Supported game_type / action values:
-//   crash_get_bust      – GET  – returns/stores server bust point for a Crash round
-//   crash_settle        – POST – record crash bets + atomically update balance
-//   mines_start         – POST – create mines session (mine positions secret)
-//   mines_reveal        – POST – reveal a tile; server decides hit/safe
-//   mines_cashout       – POST – cash out an active mines session
-//   sunvsmoon_result    – GET  – return/store server result for a SvM round
-//   sunvsmoon_settle    – POST – settle a player's Sun vs Moon bet
-//   trading_settle      – POST – settle a binary trading bet
-//   aviator_round_start – POST – generate secret crash point for a new Aviator round
-//   aviator_cashout     – POST – cash out a live Aviator bet (server validates timing)
-//   aviator_settle      – POST – settle an un-cashed Aviator bet at round end
+//   crash_get_bust        – GET  – returns/stores server bust point for a Crash round
+//   crash_settle          – POST – record crash bets + atomically update balance
+//   mines_start           – POST – create mines session (mine positions secret)
+//   mines_reveal          – POST – reveal a tile; server decides hit/safe
+//   mines_cashout         – POST – cash out an active mines session
+//   sunvsmoon_result      – GET  – return/store server result for a SvM round
+//   sunvsmoon_settle      – POST – settle a player's Sun vs Moon bet
+//   trading_settle        – POST – settle a binary trading bet
+//   aviator_round_start   – POST – generate secret crash point for a new Aviator round
+//   aviator_round_status  – GET  – returns crashed=true+crash_point once server clock
+//                                  has passed the crash point; safe to poll from client
+//   aviator_cashout       – POST – cash out a live Aviator bet (server validates timing)
+//   aviator_settle        – POST – settle an un-cashed Aviator bet at round end
 // =============================================================================
 
 const corsHeaders = {
@@ -167,6 +169,43 @@ serve(async (req) => {
         const result = generateSunMoonResult();
         await supabase.from("sunvsmoon_rounds").insert({ round_id: roundId, result });
         return json({ result });
+      }
+
+      // ── aviator_round_status ────────────────────────────────────────────
+      // Polled by the client every ~300ms during the flying phase.
+      // Returns crashed=true and reveals crash_point ONLY once the server's
+      // own clock has passed the stored crash point — so the client can never
+      // learn the value early by polling. Safe to call without auth.
+      if (action === "aviator_round_status") {
+        const roundId = parseInt(url.searchParams.get("round_id") ?? "0", 10);
+        if (!roundId || roundId < 1) return json({ error: "Missing round_id" }, 400);
+
+        const { data: roundRow } = await supabase
+          .from("aviator_rounds")
+          .select("crash_point, started_at")
+          .eq("round_id", roundId)
+          .single();
+
+        if (!roundRow) {
+          // Round not started yet — treat as not crashed
+          return json({ crashed: false, crash_point: null });
+        }
+
+        const r = roundRow as { crash_point: number; started_at: string };
+        const flightStartMs = new Date(r.started_at).getTime() + 6000; // 6s waiting phase
+        const nowMs = Date.now();
+        const elapsedMs = nowMs - flightStartMs;
+
+        // If flight hasn't started per server clock, definitely not crashed
+        if (elapsedMs <= 0) {
+          return json({ crashed: false, crash_point: null });
+        }
+
+        const currentMultiplier = aviatorMultiplierAt(elapsedMs);
+        const crashed = currentMultiplier >= r.crash_point;
+
+        // Only reveal crash_point after server confirms the round has crashed
+        return json({ crashed, crash_point: crashed ? r.crash_point : null });
       }
 
       return json({ error: "Unknown GET action" }, 400);
