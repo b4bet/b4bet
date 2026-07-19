@@ -217,10 +217,22 @@ class AuthManager {
     return { ok: true };
   }
 
+  private isLoggingOut = false;
+
   async logout() {
-    await supabase.auth.signOut();
-    this.session = null; this.persistSession(); this.emitState();
-    cms.pushFromTemplate('nt_logout', 'Logged Out', 'Your session has ended. See you next time!', 'info');
+    // Guard against re-entrant calls: supabase.auth.signOut() fires a
+    // 'SIGNED_OUT' auth event which App.tsx also listens for and calls
+    // logout() again. Without this guard, logout runs twice concurrently,
+    // causing duplicate toasts and a race between the two session clears.
+    if (this.isLoggingOut) return;
+    this.isLoggingOut = true;
+    try {
+      await supabase.auth.signOut();
+      this.session = null; this.persistSession(); this.emitState();
+      cms.pushFromTemplate('nt_logout', 'Logged Out', 'Your session has ended. See you next time!', 'info');
+    } finally {
+      this.isLoggingOut = false;
+    }
   }
 
   async forgotPassword(email: string): Promise<{ ok: boolean; error?: string }> {
