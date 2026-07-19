@@ -1,25 +1,27 @@
 /**
  * Persistent background game engines for the auto-run games:
- *   • Sun vs Moon
- *   • Wingo
- *   • K3
- *   • 5D
- *   • Aviator
+ * • Sun vs Moon
+ * • Wingo
+ * • K3
+ * • 5D
+ * • Aviator
  *
  * These engines run at module level (imported from App.tsx) so their round /
  * timer / result cycles keep progressing even when the corresponding view is
  * unmounted — the same continuous-loop pattern already used by `crashEngine`.
  *
  * SECURITY NOTE — Aviator:
- *   The crash point for each round is generated EXCLUSIVELY server-side via
- *   the process-bet Edge Function (aviator_round_start endpoint), which uses
- *   crypto.getRandomValues(). The seededRng(Date.now()) approach has been
- *   removed because Date.now() is client-controlled and predictable.
+ * The crash point for each round is generated EXCLUSIVELY server-side via
+ * the process-bet Edge Function, which uses crypto.getRandomValues().
  *
- *   The crash point is never stored in client memory until the round has
- *   already crashed — it is fetched from the server at that point as part of
- *   the aviatorRoundStatus poll response (once the server's clock has passed
- *   the crash point) or the aviator_settle/aviator_cashout response.
+ * SHARED ROUND MODEL (v2):
+ * The server owns ONE shared `aviator_current_round` row. Every client polls
+ * `aviator_get_current_round` every ~300ms.  On mount the client immediately
+ * jumps to the server's current phase/elapsed time so a user opening mid-flight
+ * sees the right multiplier — not "waiting" / round 1.
+ *
+ * The crash point is never stored in client memory until the round has
+ * already crashed — it is only returned when phase === 'crashed'.
  */
 
 import { bus } from './bus';
@@ -260,35 +262,24 @@ class FiveDLoop extends BaseLoop<number[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Aviator — variable-length phases (waiting 6s → flying → crashed 3s).
+// Aviator — SERVER-DRIVEN shared round model (v2)
 //
-// SECURITY REDESIGN:
-//   OLD: crashPoint = aviatorCrashPoint(seededRng(Date.now() >>> 0))
-//        — entirely client-side, seeded from the client clock.
+// Architecture:
+//   • ONE shared round lives in `aviator_current_round` (Supabase).
+//   • This loop polls `aviator_get_current_round` every AV_POLL_INTERVAL_MS.
+//   • On the first poll (and on mount) the client snaps to whatever phase the
+//     server is in — a user opening mid-flight immediately sees the correct
+//     flying multiplier, not "waiting".
+//   • Between polls the multiplier is advanced locally (smooth 50ms animation).
+//   • When the server returns phase='crashed', the loop snaps to the real
+//     crash_point and queues the hold period — no more 200x fallback.
 //
-//   NEW: crashPoint is generated server-side by the process-bet Edge Function
-//        using crypto.getRandomValues(). The AviatorLoop:
-//          1. Calls GameService.aviatorRoundStart() at the start of every
-//             waiting phase. The server generates and stores the crash point
-//             — it is NEVER returned to the client here.
-//          2. Polls GameService.aviatorRoundStatus() every AV_POLL_INTERVAL_MS
-//             during the flying phase. The server computes the current
-//             multiplier using its own clock and returns crashed=true +
-//             crash_point only once its clock has passed the crash point.
-//             This way the client NEVER sees the crash point before it happens.
-//          3. On receiving crashed=true, calls handleCrash(crash_point) so the
-//             UI snaps to the real server-decided value instead of climbing to
-//             the 200x safety cap every round.
-//          4. AV_MAX_MULTIPLIER (200x) remains only as a hard safety ceiling in
-//             case of a network outage — it should be hit rarely in normal play.
-//
-//   The frontend BettingPanel calls GameService.aviatorCashout() when the
-//   player clicks Cash Out. The server validates timing using its own clock
-//   and atomically credits the balance.
-//
-//   IMPORTANT: The client NEVER holds the crash point before the round ends.
-//   Any devtools inspection during the flying phase will show crashPoint = null
-//   or a very large placeholder — not the real value.
+// SECURITY:
+//   • crash_point is NEVER returned by the server while phase='flying'.
+//   • During flight, devtools will show crash_point: null — the real value
+//     is never in client memory before the round ends.
+//   • AV_MAX_MULTIPLIER (200x) remains only as an extreme safety ceiling for
+//     network outages; it should never be hit in normal play.
 // ---------------------------------------------------------------------------
 export type AviatorPhase = 'waiting' | 'flying' | 'crashed';
 export interface AviatorEngineState {
@@ -302,10 +293,7 @@ export interface AviatorEngineState {
 
 const AV_WAIT_MS = 6_000;
 const AV_CRASH_HOLD_MS = 3_000;
-// Safe multiplier cap — at 200x we force-end the round regardless.
-// The REAL crash point is determined server-side and will always be ≤ 200x.
 const AV_MAX_MULTIPLIER = 200;
-// How often (ms) to ask the server whether the current round has crashed.
 const AV_POLL_INTERVAL_MS = 300;
 
 function aviatorMultiplierAt(msElapsed: number): number {
@@ -315,38 +303,100 @@ function aviatorMultiplierAt(msElapsed: number): number {
 
 class AviatorLoop {
   private phase: AviatorPhase = 'waiting';
+  // phaseStart is the local timestamp that anchors the animation.
+  // It is re-synced from server on every poll to correct for drift.
   private phaseStart = Date.now();
+  // roundId is an opaque counter used by the UI — not the DB primary key.
   private roundId = 1;
-  // crashPoint is NULL during waiting+flying — only set when round crashes.
-  // This is the core security property: the value is never in client memory
-  // before the round ends.
+  // roundUuid is the server's UUID for the active round — used for cashout/settle.
+  private roundUuid: string | null = null;
+  // crashPoint is NULL during waiting+flying — never exposed before round ends.
   private crashPoint: number | null = null;
   private history: number[] = [];
   private multiplier = 1;
   private lastCrash: number | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
-  // Track whether we have called aviatorRoundStart for the current round.
-  private roundStarted = false;
-  // Timestamp of the last server poll — used to throttle aviatorRoundStatus calls.
   private lastPollMs = 0;
+  // Track whether we have bootstrapped from the server yet.
+  private bootstrapped = false;
 
   constructor() {
-    // Kick off server registration immediately.
-    this.startRound();
+    // Immediately do first server sync to jump into the right phase.
+    void this.syncFromServer();
   }
 
-  private startRound() {
-    if (this.roundStarted) return;
-    this.roundStarted = true;
-    this.lastPollMs = 0; // reset poll timer for new round
-    const session = auth.getSession();
-    if (session) {
-      void GameService.aviatorRoundStart(session.userId, this.roundId).catch(() => {
-        // Non-fatal: the round will still play out client-side; the server
-        // will generate the crash point on the next valid call.
-      });
+  // ── Server sync ────────────────────────────────────────────────────────────
+
+  private async syncFromServer(): Promise<void> {
+    try {
+      const res = await GameService.aviatorGetCurrentRound();
+      this.applyServerState(res);
+    } catch {
+      // Non-fatal — keep running from local state until next poll.
     }
   }
+
+  private applyServerState(res: {
+    phase: 'waiting' | 'flying' | 'crashed';
+    elapsed_ms: number;
+    round_uuid: string | null;
+    crash_point: number | null;
+    last_crash_point?: number | null;
+  }) {
+    const now = Date.now();
+
+    // Update UUID for the active round so cashout/settle calls use the right key.
+    if (res.round_uuid && res.round_uuid !== this.roundUuid) {
+      if (this.roundUuid !== null) {
+        // A new UUID means a new round started — advance local counter.
+        this.roundId += 1;
+      }
+      this.roundUuid = res.round_uuid;
+    }
+
+    if (res.phase === 'crashed') {
+      if (this.phase !== 'crashed') {
+        // Snap to crashed state immediately.
+        const cp = res.crash_point ?? res.last_crash_point ?? AV_MAX_MULTIPLIER;
+        this.handleCrash(cp, now - Math.min(res.elapsed_ms, AV_CRASH_HOLD_MS - 1));
+      }
+      // Advance phaseStart to account for how far into the hold we are.
+      this.phaseStart = now - res.elapsed_ms;
+      return;
+    }
+
+    if (res.phase === 'flying') {
+      if (this.phase === 'waiting' || this.phase === 'crashed') {
+        // We were behind — jump into flying immediately at the right elapsed.
+        this.phase = 'flying';
+        this.multiplier = aviatorMultiplierAt(res.elapsed_ms);
+      }
+      // Resync phaseStart to server time so local animation stays accurate.
+      this.phaseStart = now - res.elapsed_ms;
+      this.crashPoint = null; // never stored before crash
+      return;
+    }
+
+    if (res.phase === 'waiting') {
+      if (this.phase === 'crashed') {
+        // Crash hold ended on server — advance local round.
+        const cp = res.last_crash_point;
+        if (cp !== null && cp !== undefined && cp !== this.lastCrash) {
+          this.history = [cp, ...this.history].slice(0, 18);
+          this.lastCrash = cp;
+        }
+        this.phase = 'waiting';
+        this.multiplier = 1.0;
+        this.crashPoint = null;
+        this.lastCrash = null;
+      }
+      // Resync countdown anchor.
+      this.phaseStart = now - res.elapsed_ms;
+      return;
+    }
+  }
+
+  // ── Local tick (50ms) ──────────────────────────────────────────────────────
 
   start() {
     if (this.timer) return;
@@ -371,92 +421,79 @@ class AviatorLoop {
     };
   }
 
-  /**
-   * Called by BettingPanel when the player clicks Cash Out.
-   * Delegates to GameService.aviatorCashout() so the server validates timing
-   * and atomically credits the balance.
-   * Returns the server response so the panel can update UI.
-   */
+  /** Returns the current server round UUID — used by BettingPanel for cashout. */
+  getRoundUuid(): string | null { return this.roundUuid; }
+
   cashoutBet(betAmount: number, placedAtMs: number): Promise<import('./game-service').AviatorCashoutResult> {
     const session = auth.getSession();
     if (!session) return Promise.reject(new Error('Not authenticated'));
-    return GameService.aviatorCashout(session.userId, this.roundId, betAmount, placedAtMs);
-  }
-
-  /**
-   * Polls the server for the current round's crash status.
-   * Called every AV_POLL_INTERVAL_MS during the flying phase.
-   * The server only reveals crash_point after its own clock has passed it,
-   * so this never exposes the value early.
-   */
-  private pollServerCrash() {
-    const roundId = this.roundId;
-    void GameService.aviatorRoundStatus(roundId).then((res) => {
-      // Guard: still in the same round's flying phase when the response arrives
-      if (this.phase !== 'flying' || this.roundId !== roundId) return;
-      if (res.crashed && res.crash_point !== null) {
-        this.handleCrash(res.crash_point, Date.now());
-      }
-    }).catch(() => { /* non-fatal — next poll will retry */ });
+    return GameService.aviatorCashout(
+      session.userId,
+      this.roundUuid,
+      this.roundId,
+      betAmount,
+      placedAtMs,
+    );
   }
 
   private tick() {
     const now = Date.now();
     const elapsed = now - this.phaseStart;
 
+    // Poll server every AV_POLL_INTERVAL_MS to stay in sync.
+    if (now - this.lastPollMs >= AV_POLL_INTERVAL_MS) {
+      this.lastPollMs = now;
+      void this.syncFromServer();
+    }
+
     if (this.phase === 'waiting') {
       if (elapsed >= AV_WAIT_MS) {
+        // Server will confirm the transition on next poll; locally advance.
         this.phase = 'flying';
         this.phaseStart = now;
         this.multiplier = 1.0;
-        this.lastPollMs = 0; // ensure first poll fires immediately
       }
     } else if (this.phase === 'flying') {
       const m = aviatorMultiplierAt(elapsed);
-      // Hard safety ceiling — should rarely be reached now that the server
-      // reports the real crash point via polls.
       if (m >= AV_MAX_MULTIPLIER) {
+        // Extreme safety cap — server should have crashed us long before this.
         this.handleCrash(AV_MAX_MULTIPLIER, now);
       } else {
         this.multiplier = m;
-        // Periodically ask the server whether the round has crashed.
-        if (now - this.lastPollMs >= AV_POLL_INTERVAL_MS) {
-          this.lastPollMs = now;
-          this.pollServerCrash();
-        }
       }
     } else if (this.phase === 'crashed') {
-      if (elapsed >= AV_CRASH_HOLD_MS) {
-        this.roundId += 1;
+      // Server will send the next round on its next poll response.
+      // Local hold: just keep counting elapsed until server says waiting.
+      if (elapsed >= AV_CRASH_HOLD_MS + 500) {
+        // Safety: if server hasn't responded yet, show waiting locally.
         this.phase = 'waiting';
         this.phaseStart = now;
         this.multiplier = 1.0;
         this.lastCrash = null;
         this.crashPoint = null;
-        this.roundStarted = false;
-        this.startRound();
       }
     }
+
     bus.emit('engine:aviator:state', this.getState());
   }
 
-  private handleCrash(crashAt: number, now: number) {
+  private handleCrash(crashAt: number, phaseStartOverride?: number) {
     this.phase = 'crashed';
-    this.phaseStart = now;
+    this.phaseStart = phaseStartOverride ?? Date.now();
     this.multiplier = crashAt;
     this.lastCrash = crashAt;
-    this.crashPoint = crashAt; // set to known value only after crash
+    this.crashPoint = crashAt;
     this.history = [crashAt, ...this.history].slice(0, 18);
+    bus.emit('engine:aviator:state', this.getState());
   }
 
   /**
-   * Called externally (e.g. by BettingPanel) when the server reports a crash
-   * via aviatorCashout response (crash_point is non-null = already crashed).
-   * Snaps the engine into the crashed state with the server's real crash point.
+   * Called by BettingPanel when aviatorSettle returns a crash_point that
+   * we don't yet know about (edge case: network delay).
    */
   reportServerCrash(serverCrashPoint: number) {
     if (this.phase !== 'flying') return;
-    this.handleCrash(serverCrashPoint, Date.now());
+    this.handleCrash(serverCrashPoint);
   }
 }
 
