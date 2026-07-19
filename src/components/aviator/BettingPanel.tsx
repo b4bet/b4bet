@@ -135,7 +135,12 @@ export function BettingPanel({
       const session = auth.getSession();
       if (session) {
         void import('../../lib/game-service').then(({ GameService }) => {
-          void GameService.aviatorSettle(session.userId, bet.roundId, bet.amount)
+          void GameService.aviatorSettle(
+            session.userId,
+            aviatorLoop.getRoundUuid(),
+            bet.roundId,
+            bet.amount,
+          )
             .then((res) => {
               // Update history with real crash point if not already shown
               if (res.crash_point) {
@@ -223,7 +228,7 @@ export function BettingPanel({
     onCancelBet(amt);
   }
 
-  /** Server-validated cash out. */
+  /** Server-validated cash out. Uses round_uuid from the engine for accurate server validation. */
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
     const at = atOverride ?? multiplier;
@@ -241,10 +246,8 @@ export function BettingPanel({
         if (res.crash_point !== null) {
           aviatorLoop.reportServerCrash(res.crash_point);
         }
-        // No credit — balance already debited, no cashout awarded
       }
     } catch {
-      // On error: conservative — treat as no cashout, no credit
       cms.toast({ title: 'Cashout error', body: 'Could not confirm cashout. Please check your balance.', kind: 'alert' });
     }
   }
