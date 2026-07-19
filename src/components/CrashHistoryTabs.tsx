@@ -2,6 +2,10 @@
  * CrashHistoryTabs — spec §7
  * "My Bets" table gets a Net P/L column and every column header uses an explicit
  * minWidth style so wider labels (e.g. "Net P/L") are never clipped on narrow screens.
+ *
+ * Round number column removed from "My Bets" — the local roundId counter is
+ * per-tab and not synced with the server, so displaying it was misleading.
+ * The time column still gives users enough context to identify their bets.
  */
 import { useMemo, useState } from 'react';
 import { useCrashMyBets } from '../lib/hooks';
@@ -119,7 +123,7 @@ export default function CrashHistoryTabs() {
           <table className="w-full text-[11px]">
             <thead className="text-slate-500 uppercase tracking-wider sticky top-0 bg-slatepanel-900">
               <tr>
-                <th className="text-left  py-1.5 px-1" style={{ minWidth: '3rem'  }}>Round</th>
+                {/* Round column removed — local roundId counter is per-tab and misleading */}
                 <th className="text-left  py-1.5 px-1" style={{ minWidth: '3rem'  }}>Time</th>
                 <th className="text-right py-1.5 px-1" style={{ minWidth: '3.5rem' }}>Stake</th>
                 <th className="text-right py-1.5 px-1" style={{ minWidth: '2.5rem' }}>×</th>
@@ -130,14 +134,13 @@ export default function CrashHistoryTabs() {
             </thead>
             <tbody className="tabular">
               {mine.length === 0 && (
-                <tr><td colSpan={6} className="py-4 text-center text-slate-500">No bets yet.</td></tr>
+                <tr><td colSpan={5} className="py-4 text-center text-slate-500">No bets yet.</td></tr>
               )}
               {mine.map((b) => {
                 const netpl = (b.win ?? 0) - (b.amount ?? 0);
                 return (
                   <tr key={b.id} className="border-t border-borderline-900/60">
-                    <td className="py-1.5 px-1 text-slate-300">#{b.roundId}</td>
-                    <td className="px-1 text-slate-500">{fmtTime(b.ts)}</td>
+                    <td className="py-1.5 px-1 text-slate-500">{fmtTime(b.ts)}</td>
                     <td className="px-1 text-right text-slate-300">{store.currency}{b.amount}</td>
                     <td className={`px-1 text-right font-bold ${b.win > 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
                       {b.cashOutAt ? `${b.cashOutAt.toFixed(2)}×` : '—'}
