@@ -39,7 +39,7 @@ function profileToEdit(u: SupabaseProfile): EditState {
 }
 
 // ---- Main component ----
-export default function UsersTab() {
+export default function UsersTab({ currentStaffEmail }: { currentStaffEmail?: string }) {
   const [users, setUsers]     = useState<SupabaseProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ]             = useState('');
@@ -62,7 +62,12 @@ export default function UsersTab() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const filtered = users.filter((u) => {
+  // Exclude the currently logged-in staff member's own player account (matched by email)
+  const visibleUsers = currentStaffEmail
+    ? users.filter((u) => u.email !== currentStaffEmail)
+    : users;
+
+  const filtered = visibleUsers.filter((u) => {
     const query = q.toLowerCase();
     return (
       (u.username     ?? '').toLowerCase().includes(query) ||
@@ -212,7 +217,7 @@ export default function UsersTab() {
         </div>
       )}
 
-      {/* Floating edit panel */}
+      {/* Floating edit panel — no is_admin field (intentional security decision) */}
       {editUser && form && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"

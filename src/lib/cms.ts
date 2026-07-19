@@ -27,12 +27,14 @@ export type PermissionKey =
   | 'finance' | 'banner' | 'deposit' | 'emails' | 'staff' | 'marketing'
   | 'algos' | 'users' | 'smtp' | 'currencies' | 'crm' | 'intercom' | 'notify'
   | 'gateways' | 'tickets' | 'history' | 'withdrawals' | 'redeem'
-  | 'gameSettings' | 'paymentMethods' | 'dynamicPages' | 'ban' | 'notifyManager';
+  | 'gameSettings' | 'paymentMethods' | 'dynamicPages' | 'ban' | 'notifyManager'
+  | 'requests' | 'affiliates';
 export const ALL_PERMISSIONS: PermissionKey[] = [
   'finance','banner','deposit','emails','staff','marketing',
   'algos','users','smtp','currencies','crm','intercom','notify',
   'gateways','tickets','history','withdrawals','redeem',
   'gameSettings','paymentMethods','dynamicPages','ban','notifyManager',
+  'requests','affiliates',
 ];
 export interface StaffAccount {
   id: string; name: string; password: string; role: StaffRole; online: boolean;

@@ -16,6 +16,7 @@ const ALL_PERMISSIONS = [
   'algos', 'users', 'smtp', 'currencies', 'crm', 'intercom', 'notify',
   'gateways', 'tickets', 'history', 'withdrawals', 'redeem',
   'gameSettings', 'paymentMethods', 'dynamicPages', 'ban', 'notifyManager',
+  'requests', 'affiliates',
 ] as const;
 
 type PermKey = typeof ALL_PERMISSIONS[number];
@@ -114,6 +115,7 @@ export default function StaffTab() {
     history: 'History', withdrawals: 'Withdrawals', redeem: 'Redeem Codes',
     gameSettings: 'Game Settings', paymentMethods: 'Payment Methods',
     dynamicPages: 'Dynamic Pages', ban: 'Ban Section', notifyManager: 'Notif Manager',
+    requests: 'Requests', affiliates: 'Affiliates',
   };
 
   return (

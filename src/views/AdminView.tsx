@@ -46,9 +46,10 @@ import AffiliatesTab from './admin/AffiliatesTab';
 import TopRankingsTab from './admin/TopRankingsTab';
 import SocialLinksTab from './admin/SocialLinksTab';
 
+// Tab keys — some map to PermissionKey directly, others are routed via TAB_PERM_MAP below
 type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager'
   | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory'
-  | 'requests' | 'signupBonus' | 'dashboard' | 'affiliates' | 'socialLinks';
+  | 'signupBonus' | 'dashboard' | 'socialLinks';
 
 type GameHandlerKey = 'crash' | 'wingo' | 'k3' | 'fived' | 'sunvsmoon' | 'aviator';
 type FloatToast = { id: number; message: string; icon: 'deposit' | 'withdrawal' | 'support' };
@@ -85,6 +86,20 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'ban',                 label: 'Ban Section',      icon: ShieldBan },
   { key: 'intercom',            label: 'Intercom',         icon: MessageSquare },
 ];
+
+// Maps tab keys that don't match a PermissionKey to the permission that gates them.
+// Tabs not listed here are expected to share the same name as their PermissionKey.
+const TAB_PERM_MAP: Partial<Record<string, PermissionKey>> = {
+  notifications:       'notify',
+  notificationManager: 'notifyManager',
+  email:               'emails',
+  games:               'algos',        // Game Handlers shares Game Algos permission
+  handlers:            'paymentMethods',
+  balanceHistory:      'history',
+  topRankings:         'history',
+  signupBonus:         'marketing',
+  socialLinks:         'marketing',
+};
 
 const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.Element }[] = [
   { key: 'crash',     label: 'Crash',       Panel: CrashHandlingPanel },
@@ -284,20 +299,41 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     return () => document.removeEventListener('mousedown', close);
   }, [profileOpen]);
 
-  const hasPermission = (key: PermissionKey) => {
+  /**
+   * Returns true if the current staff member has access to the given tab.
+   * - 'dashboard' and 'manageProfile' are always visible to all authenticated staff.
+   * - superadmin / isOwner sees everything.
+   * - Tab keys that don't directly match a PermissionKey are mapped via TAB_PERM_MAP.
+   */
+  const hasPermission = (key: string): boolean => {
+    // Always-visible tabs
+    if (key === 'dashboard' || key === 'manageProfile') return true;
     if (!me) return false;
     if (me.role === 'superadmin' || me.isOwner) return true;
-    return me.permissions?.[key as keyof typeof me.permissions] === true;
+    const permKey = (TAB_PERM_MAP[key] ?? key) as PermissionKey;
+    return me.permissions?.[permKey as keyof typeof me.permissions] === true;
   };
+
+  // If the current tab is no longer permitted (e.g. permissions were revoked while
+  // the user was already on that tab), redirect to the first accessible tab.
+  useEffect(() => {
+    if (!me) return;
+    if (!hasPermission(tab)) {
+      const first = TABS.find(t => hasPermission(t.key));
+      if (first && first.key !== tab) setTab(first.key);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, me?.id, JSON.stringify(me?.permissions)]);
 
   if (!sessionId) return <AdminLoginPage />;
 
   const navigate = (t: Tab) => { setTab(t); setSidebarOpen(false); };
   const ActiveGamePanel = GAME_HANDLER_TABS.find(g => g.key === gameHandlerTab)?.Panel ?? CrashHandlingPanel;
 
+  // Sidebar only shows tabs the current staff member can access
   const SidebarNav = () => (
     <nav className="flex-1 overflow-y-auto py-2">
-      {TABS.map(t => (
+      {TABS.filter(t => hasPermission(t.key)).map(t => (
         <button key={t.key} onClick={() => navigate(t.key)}
           className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
             tab === t.key ? 'bg-violet-600/20 text-violet-300 border-r-2 border-violet-500' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
@@ -378,15 +414,20 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
 
         <main className="flex-1 overflow-y-auto p-4">
           {tab === 'dashboard'            && <DashboardOverviewTab />}
-          {tab === 'finance'              && <FinanceTab />}
-          {tab === 'requests'             && <RequestsTab />}
-          {tab === 'tickets'              && <TicketsTab />}
-          {tab === 'affiliates'           && <AffiliatesTab />}
-          {tab === 'socialLinks'          && <SocialLinksTab />}
-          {tab === 'gateways'             && <AutoGatewaysTab />}
-          {tab === 'handlers'             && <div className="space-y-4"><h2 className="font-bold text-lg">Payment Handlers</h2><p className="text-slate-500 text-sm">Configure deposit/withdrawal handler logic here.</p></div>}
-          {tab === 'algos'                && <GameAlgosTab />}
-          {tab === 'games'               && (
+          {tab === 'finance'              && hasPermission('finance') && <FinanceTab />}
+          {tab === 'requests'             && hasPermission('requests') && <RequestsTab />}
+          {tab === 'tickets'              && hasPermission('tickets') && <TicketsTab />}
+          {tab === 'affiliates'           && hasPermission('affiliates') && <AffiliatesTab />}
+          {tab === 'socialLinks'          && hasPermission('socialLinks') && <SocialLinksTab />}
+          {tab === 'gateways'             && hasPermission('gateways') && <AutoGatewaysTab />}
+          {tab === 'handlers'             && hasPermission('handlers') && (
+            <div className="space-y-4">
+              <h2 className="font-bold text-lg">Payment Handlers</h2>
+              <p className="text-slate-500 text-sm">Configure deposit/withdrawal handler logic here.</p>
+            </div>
+          )}
+          {tab === 'algos'                && hasPermission('algos') && <GameAlgosTab />}
+          {tab === 'games'               && hasPermission('games') && (
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><OnlineCountPanel /><TopWinPaidOutPanel /></div>
               <div className="flex flex-wrap gap-2">
@@ -400,27 +441,32 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
               <ActiveGamePanel />
             </div>
           )}
-          {tab === 'users'               && <UsersTab />}
-          {tab === 'balanceHistory'      && <BalanceHistoryTab />}
-          {tab === 'topRankings'         && <TopRankingsTab />}
+          {tab === 'users'               && hasPermission('users') && <UsersTab currentStaffEmail={me?.email} />}
+          {tab === 'balanceHistory'      && hasPermission('balanceHistory') && <BalanceHistoryTab />}
+          {tab === 'topRankings'         && hasPermission('topRankings') && <TopRankingsTab />}
           {tab === 'staff'               && hasPermission('staff') && <StaffTab />}
-          {tab === 'notifications'       && <NotificationsTab />}
-          {tab === 'notificationManager' && <NotificationManagerTab />}
-          {tab === 'marketing'           && <MarketingTab />}
-          {tab === 'crm'                 && <CrmTab />}
-          {tab === 'email'               && <EmailManagerTab />}
-          {tab === 'smtp'                && <SmtpTab />}
-          {tab === 'currencies'          && <CurrenciesTab />}
-          {tab === 'paymentMethods'      && <PaymentMethodsTab />}
-          {tab === 'dynamicPages'        && <DynamicPagesTab />}
-          {tab === 'banner'              && <BannerLogoTab />}
-          {tab === 'redeem'              && <RedeemCodesTab />}
-          {tab === 'signupBonus'         && <SignupBonusTab />}
-          {tab === 'gameSettings'        && <GameSettingsTab />}
-          {tab === 'history'             && <HistoryTab />}
-          {tab === 'ban'                 && <BanSectionTab />}
-          {tab === 'intercom'            && <IntercomTab />}
-          {tab === 'manageProfile'       && <div className="space-y-4"><h2 className="font-bold text-lg">Profile</h2><p className="text-slate-500 text-sm">Use the profile button in the header to change your password.</p></div>}
+          {tab === 'notifications'       && hasPermission('notifications') && <NotificationsTab />}
+          {tab === 'notificationManager' && hasPermission('notificationManager') && <NotificationManagerTab />}
+          {tab === 'marketing'           && hasPermission('marketing') && <MarketingTab />}
+          {tab === 'crm'                 && hasPermission('crm') && <CrmTab />}
+          {tab === 'email'               && hasPermission('email') && <EmailManagerTab />}
+          {tab === 'smtp'                && hasPermission('smtp') && <SmtpTab />}
+          {tab === 'currencies'          && hasPermission('currencies') && <CurrenciesTab />}
+          {tab === 'paymentMethods'      && hasPermission('paymentMethods') && <PaymentMethodsTab />}
+          {tab === 'dynamicPages'        && hasPermission('dynamicPages') && <DynamicPagesTab />}
+          {tab === 'banner'              && hasPermission('banner') && <BannerLogoTab />}
+          {tab === 'redeem'              && hasPermission('redeem') && <RedeemCodesTab />}
+          {tab === 'signupBonus'         && hasPermission('signupBonus') && <SignupBonusTab />}
+          {tab === 'gameSettings'        && hasPermission('gameSettings') && <GameSettingsTab />}
+          {tab === 'history'             && hasPermission('history') && <HistoryTab />}
+          {tab === 'ban'                 && hasPermission('ban') && <BanSectionTab />}
+          {tab === 'intercom'            && hasPermission('intercom') && <IntercomTab />}
+          {tab === 'manageProfile'       && (
+            <div className="space-y-4">
+              <h2 className="font-bold text-lg">Profile</h2>
+              <p className="text-slate-500 text-sm">Use the profile button in the header to change your password.</p>
+            </div>
+          )}
         </main>
       </div>
 
