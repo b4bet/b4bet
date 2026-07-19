@@ -25,14 +25,20 @@ function generateAccountId(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-function getOrCreateClientIp(): string {
+// Calls the `record-ip` Edge Function, which reads the caller's REAL IP from
+// request headers (server-side) and logs it to `ip_logs`. Returns that IP so
+// the caller can also use it for the same-request signup-bonus check.
+async function recordSignupIp(accessToken: string, action: 'signup' | 'login' = 'signup'): Promise<string> {
   try {
-    const stored = localStorage.getItem('b4bet.clientIp');
-    if (stored) return stored;
-    const ip = `${Math.floor(Math.random() * 200) + 10}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}.${Math.floor(Math.random() * 254) + 1}`;
-    localStorage.setItem('b4bet.clientIp', ip);
-    return ip;
-  } catch { return '0.0.0.0'; }
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/record-ip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ action }),
+    });
+    if (!res.ok) return '';
+    const json = await res.json();
+    return (json?.ip as string) ?? '';
+  } catch { return ''; }
 }
 
 class AuthManager {
@@ -125,11 +131,10 @@ class AuthManager {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(umail)) return { ok: false, error: 'Please enter a valid email address.' };
     if (!/^\d{7,15}$/.test(umobile)) return { ok: false, error: 'Please enter a valid mobile number (digits only).' };
     if (password.length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
-    const clientIp = getOrCreateClientIp();
     const accountId = generateAccountId();
     const { data, error } = await supabase.auth.signUp({
       email: umail, password,
-      options: { data: { username: uname, accountId, mobile: umobile, referralCode: uref || null, registrationIp: clientIp } },
+      options: { data: { username: uname, accountId, mobile: umobile, referralCode: uref || null } },
     });
     if (error) {
       if (error.message.includes('already registered') || error.message.includes('already exists'))
@@ -137,13 +142,19 @@ class AuthManager {
       return { ok: false, error: error.message };
     }
     if (!data.user) return { ok: false, error: 'Registration failed. Please try again.' };
+    // Record the REAL IP (server-side, via Edge Function) now that we have a session token
+    let realIp = '';
+    if (data.session?.access_token) {
+      realIp = await recordSignupIp(data.session.access_token, 'signup');
+    }
     // Save profile WITH account_id and is_active
-    await supabase.from('profiles').upsert({
+    const { error: profileErr } = await supabase.from('profiles').upsert({
       id: data.user.id, username: uname, display_name: uname, phone: umobile,
       balance: 0, total_deposit: 0, total_withdrawal: 0, vip_level: 0, is_admin: false,
       account_id: accountId, is_active: true, signup_bonus_granted: false,
     });
-    try { store.grantSignupBonus(data.user.id, uname); } catch { /* ignore */ }
+    if (profileErr) console.error('[auth] profile upsert error:', profileErr);
+    try { store.grantSignupBonus(data.user.id, uname, realIp); } catch { /* ignore */ }
     this.session = { userId: data.user.id, accountId, username: uname, email: umail, loggedInAt: Date.now() };
     this.persistSession();
     this.emitState();
