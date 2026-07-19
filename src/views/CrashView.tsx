@@ -36,7 +36,7 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
 
   return (
     <div className="space-y-2 animate-fade-in">
-      {/* Top header row — logo · round number (digits only, no "Round:" prefix — spec §1) · settings · feed */}
+      {/* Top header row — logo · settings · feed */}
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-2 flex-shrink-0">
           <div className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center overflow-hidden">
@@ -48,12 +48,8 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
           </div>
         </div>
 
-        <div className="flex-1 min-w-0 flex items-center gap-2">
-          {/* Spec §1: render ONLY the raw digit string — no "Round:" alphabetical prefix */}
-          <div className="px-3 py-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900">
-            <span className="tabular text-sm font-extrabold text-neon-300">#{state.roundId}</span>
-          </div>
-        </div>
+        {/* Round number badge removed — local counter was not in sync with server */}
+        <div className="flex-1 min-w-0" />
 
         <button
           ref={settingsButtonRef}
