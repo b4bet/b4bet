@@ -608,7 +608,8 @@ class Store {
   }
 
   // Grant signup bonus — checks Supabase profiles.signup_bonus_granted
-  async grantSignupBonusAsync(userId: string, username: string): Promise<number> {
+  // and (if an ip is supplied) checks whether that IP already received a bonus before.
+  async grantSignupBonusAsync(userId: string, username: string, ip?: string): Promise<number> {
     if (!userId || !username) return 0;
     // Check local cache first
     if (this.signupBonusGrantedCache.has(userId)) return 0;
@@ -622,6 +623,17 @@ class Store {
         return 0;
       }
     } catch { /* ignore */ }
+    // IP abuse check — same IP already used for a signup bonus? Skip granting again.
+    if (ip) {
+      try {
+        const { data: alreadyUsed, error } = await supabase.rpc('check_ip_signup_bonus', { p_ip: ip });
+        if (!error && alreadyUsed) {
+          this.signupBonusGrantedCache.add(userId);
+          void supabase.rpc('mark_signup_bonus_granted', { p_user_id: userId }).catch(() => {});
+          return 0;
+        }
+      } catch { /* ignore — if the check fails, fall through rather than block a real signup */ }
+    }
     const amount = this.signupBonus;
     if (amount > 0) {
       this.creditUser(username, amount);
@@ -638,8 +650,8 @@ class Store {
   }
 
   // Sync wrapper — called from register() which is async anyway
-  grantSignupBonus(userId: string, username: string): number {
-    void this.grantSignupBonusAsync(userId, username);
+  grantSignupBonus(userId: string, username: string, ip?: string): number {
+    void this.grantSignupBonusAsync(userId, username, ip);
     return this.signupBonus; // optimistic return
   }
 
