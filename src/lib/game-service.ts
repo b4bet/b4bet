@@ -33,6 +33,12 @@ export interface AviatorCashoutResult  {
   crash_point: number | null; // only non-null if round already crashed
 }
 export interface AviatorSettleResult   { success: boolean; crash_point: number; }
+export interface AviatorRoundStatusResult {
+  /** True once the server's own clock has passed the crash point. */
+  crashed: boolean;
+  /** Only non-null when crashed === true — safe to display/use as the real crash value. */
+  crash_point: number | null;
+}
 
 // ── Helper ───────────────────────────────────────────────────────────────────
 
@@ -171,5 +177,15 @@ export const GameService = {
       round_id: roundId,
       bet_amount: betAmount,
     });
+  },
+
+  /**
+   * Polled every ~300ms during the flying phase to detect when the server has
+   * passed its crash point. Returns crash_point only AFTER the server's own
+   * clock has crossed it — the client never learns the value early.
+   * No user auth required; all players see the same public crash event.
+   */
+  aviatorRoundStatus(roundId: number): Promise<AviatorRoundStatusResult> {
+    return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: String(roundId) });
   },
 };
