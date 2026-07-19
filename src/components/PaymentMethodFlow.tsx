@@ -145,9 +145,9 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
         cms.toast({ title: 'UTR/Ref required', body: 'Enter your UTR / Transaction Reference ID.', kind: 'alert' });
         return;
       }
-      cms.submitDeposit(user, amt, destLabel, utr.trim(), JSON.stringify(destDetails));
+      cms.submitDeposit(user, amt, destLabel, utr.trim(), JSON.stringify(destDetails), session?.userId);
     } else {
-      cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails));
+      cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails), session?.userId);
     }
     setSubmitted(true);
   };
