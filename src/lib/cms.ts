@@ -656,7 +656,7 @@ class Cms {
       try { store.creditUser(before.user, before.amount); } catch { /* ignore */ }
     }
     this.emitFinance();
-    await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).catch(() => {});
+    await await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).catch(() => {});
   }
 
   async setWithdrawalStatus(id: string, status: WithdrawalRequest['status'], utr?: string, reason?: string) {
