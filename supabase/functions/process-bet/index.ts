@@ -8,19 +8,21 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 // for every random decision so the browser cannot predict or alter results.
 //
 // Supported game_type / action values:
-//   crash_get_bust        – GET  – returns/stores server bust point for a Crash round
-//   crash_settle          – POST – record crash bets + atomically update balance
-//   mines_start           – POST – create mines session (mine positions secret)
-//   mines_reveal          – POST – reveal a tile; server decides hit/safe
-//   mines_cashout         – POST – cash out an active mines session
-//   sunvsmoon_result      – GET  – return/store server result for a SvM round
-//   sunvsmoon_settle      – POST – settle a player's Sun vs Moon bet
-//   trading_settle        – POST – settle a binary trading bet
-//   aviator_round_start   – POST – generate secret crash point for a new Aviator round
-//   aviator_round_status  – GET  – returns crashed=true+crash_point once server clock
-//                                  has passed the crash point; safe to poll from client
-//   aviator_cashout       – POST – cash out a live Aviator bet (server validates timing)
-//   aviator_settle        – POST – settle an un-cashed Aviator bet at round end
+//   crash_get_bust             – GET  – returns/stores server bust point for a Crash round
+//   crash_settle               – POST – record crash bets + atomically update balance
+//   mines_start                – POST – create mines session (mine positions secret)
+//   mines_reveal               – POST – reveal a tile; server decides hit/safe
+//   mines_cashout              – POST – cash out an active mines session
+//   sunvsmoon_result           – GET  – return/store server result for a SvM round
+//   sunvsmoon_settle           – POST – settle a player's Sun vs Moon bet
+//   trading_settle             – POST – settle a binary trading bet
+//   aviator_get_current_round  – GET  – returns live round state for ALL clients to observe
+//                                        (crash_point is NEVER returned before round crashes)
+//   aviator_round_start        – POST – (legacy / internal) generate secret crash point
+//   aviator_round_status       – GET  – returns crashed=true+crash_point once server clock
+//                                       has passed the crash point; safe to poll from client
+//   aviator_cashout            – POST – cash out a live Aviator bet (server validates timing)
+//   aviator_settle             – POST – settle an un-cashed Aviator bet at round end
 // =============================================================================
 
 const corsHeaders = {
@@ -36,7 +38,6 @@ function secureRandom(): number {
   return buf[0] / 0x100000000;
 }
 
-// Suppress unused warning — kept for parity with other generators
 // deno-lint-ignore no-unused-vars
 function secureRandomInt(min: number, max: number): number {
   return min + Math.floor(secureRandom() * (max - min + 1));
@@ -55,7 +56,6 @@ function generateBustPoint(targetWinProb: number, houseEdge: number): number {
 }
 
 // ── Aviator crash point generation ──────────────────────────────────────────
-// Same distribution as the original aviatorCrashPoint() but with server RNG.
 function generateAviatorCrashPoint(): number {
   const r = secureRandom();
   if (r < 0.03) return 1.0;
@@ -101,6 +101,10 @@ function aviatorMultiplierAt(msElapsed: number): number {
   return Math.max(1.0, Math.floor(Math.pow(Math.E, 0.14 * t) * 100) / 100);
 }
 
+// Phase durations (must match client constants)
+const AV_WAIT_MS      = 6_000;
+const AV_CRASH_HOLD_MS = 3_000;
+
 // =============================================================================
 // Main handler
 // =============================================================================
@@ -117,6 +121,124 @@ serve(async (req) => {
 
     // ── GET endpoints ───────────────────────────────────────────────────────
     if (req.method === "GET") {
+
+      // ── aviator_get_current_round ────────────────────────────────────────
+      // Called on mount and every ~300ms by every Aviator client.
+      // Returns the ONE shared live round so all clients stay in sync.
+      // SECURITY: crash_point is NEVER returned here — only after the round
+      // has crashed. Clients receive phase, elapsed_ms, round_uuid (for
+      // cashout/settle calls), and last_crash_point (post-crash only).
+      if (action === "aviator_get_current_round") {
+        const { data: row, error } = await supabase
+          .from("aviator_current_round")
+          .select("round_uuid, phase, phase_started_at, crash_point")
+          .eq("id", 1)
+          .single();
+
+        if (error || !row) {
+          // Table not seeded yet — return a waiting state
+          return json({ phase: "waiting", elapsed_ms: 0, round_uuid: null, crash_point: null });
+        }
+
+        const r = row as { round_uuid: string; phase: string; phase_started_at: string; crash_point: number };
+        const nowMs = Date.now();
+        const phaseStartMs = new Date(r.phase_started_at).getTime();
+        const elapsed = Math.max(0, nowMs - phaseStartMs);
+
+        // ── Advance phase if enough time has elapsed ──────────────────────
+        // This function is purely derived from stored timestamps — no cron
+        // needed. Each client poll may trigger a phase transition if it's
+        // the first one to notice the elapsed time.
+
+        if (r.phase === "waiting" && elapsed >= AV_WAIT_MS) {
+          // Transition: waiting → flying
+          const newStart = new Date(phaseStartMs + AV_WAIT_MS).toISOString();
+          await supabase
+            .from("aviator_current_round")
+            .update({ phase: "flying", phase_started_at: newStart })
+            .eq("id", 1);
+          const flyingElapsed = Math.max(0, nowMs - new Date(newStart).getTime());
+          return json({
+            phase: "flying",
+            elapsed_ms: flyingElapsed,
+            round_uuid: r.round_uuid,
+            crash_point: null,   // never revealed early
+          });
+        }
+
+        if (r.phase === "flying") {
+          const currentMultiplier = aviatorMultiplierAt(elapsed);
+          if (currentMultiplier >= r.crash_point) {
+            // Transition: flying → crashed
+            const crashedAt = new Date().toISOString();
+
+            // Archive to aviator_rounds history
+            await supabase.from("aviator_rounds").upsert({
+              round_id: 0,        // legacy integer field — unused for uuid rounds
+              crash_point: r.crash_point,
+              phase: "crashed",
+              started_at: r.phase_started_at,
+            }, { onConflict: "round_id", ignoreDuplicates: false }).then(() => {
+              // best-effort — ignore errors from the legacy integer pk
+            }).catch(() => {});
+
+            // Start next round immediately
+            const newUuid = crypto.randomUUID();
+            const newCrashPoint = generateAviatorCrashPoint();
+            await supabase
+              .from("aviator_current_round")
+              .update({
+                round_uuid: newUuid,
+                phase: "crashed",
+                phase_started_at: crashedAt,
+                crash_point: newCrashPoint,  // next round's secret stored already
+              })
+              .eq("id", 1);
+
+            return json({
+              phase: "crashed",
+              elapsed_ms: 0,
+              round_uuid: r.round_uuid,
+              crash_point: r.crash_point,   // safe to reveal — round is over
+              last_crash_point: r.crash_point,
+            });
+          }
+
+          return json({
+            phase: "flying",
+            elapsed_ms: elapsed,
+            round_uuid: r.round_uuid,
+            crash_point: null,   // NEVER revealed during flight
+          });
+        }
+
+        if (r.phase === "crashed" && elapsed >= AV_CRASH_HOLD_MS) {
+          // Transition: crashed → waiting (new round already has uuid+crash_point)
+          const newStart = new Date().toISOString();
+          await supabase
+            .from("aviator_current_round")
+            .update({ phase: "waiting", phase_started_at: newStart })
+            .eq("id", 1);
+          return json({
+            phase: "waiting",
+            elapsed_ms: 0,
+            round_uuid: r.round_uuid,   // new uuid already stored from previous transition
+            crash_point: null,
+            last_crash_point: r.crash_point,  // show in history bar
+          });
+        }
+
+        // Phase hasn't changed — return current state
+        return json({
+          phase: r.phase,
+          elapsed_ms: elapsed,
+          round_uuid: r.round_uuid,
+          // Only reveal crash_point if already crashed
+          crash_point: r.phase === "crashed" ? r.crash_point : null,
+          last_crash_point: r.phase === "crashed" ? r.crash_point : null,
+        });
+      }
+
       // ── crash_get_bust ──────────────────────────────────────────────────
       if (action === "crash_get_bust") {
         const roundId = parseInt(url.searchParams.get("round_id") ?? "0", 10);
@@ -172,10 +294,7 @@ serve(async (req) => {
       }
 
       // ── aviator_round_status ────────────────────────────────────────────
-      // Polled by the client every ~300ms during the flying phase.
-      // Returns crashed=true and reveals crash_point ONLY once the server's
-      // own clock has passed the stored crash point — so the client can never
-      // learn the value early by polling. Safe to call without auth.
+      // Legacy polling endpoint — still used by cashout/settle as fallback.
       if (action === "aviator_round_status") {
         const roundId = parseInt(url.searchParams.get("round_id") ?? "0", 10);
         if (!roundId || roundId < 1) return json({ error: "Missing round_id" }, 400);
@@ -187,24 +306,20 @@ serve(async (req) => {
           .single();
 
         if (!roundRow) {
-          // Round not started yet — treat as not crashed
           return json({ crashed: false, crash_point: null });
         }
 
         const r = roundRow as { crash_point: number; started_at: string };
-        const flightStartMs = new Date(r.started_at).getTime() + 6000; // 6s waiting phase
+        const flightStartMs = new Date(r.started_at).getTime() + 6000;
         const nowMs = Date.now();
         const elapsedMs = nowMs - flightStartMs;
 
-        // If flight hasn't started per server clock, definitely not crashed
         if (elapsedMs <= 0) {
           return json({ crashed: false, crash_point: null });
         }
 
         const currentMultiplier = aviatorMultiplierAt(elapsedMs);
         const crashed = currentMultiplier >= r.crash_point;
-
-        // Only reveal crash_point after server confirms the round has crashed
         return json({ crashed, crash_point: crashed ? r.crash_point : null });
       }
 
@@ -278,14 +393,11 @@ serve(async (req) => {
     }
 
     // ── aviator_round_start ──────────────────────────────────────────────────
-    // Called by the AviatorLoop at the START of waiting phase for every new
-    // round. Generates crash point using crypto.getRandomValues() and stores it
-    // encrypted in the DB. Returns ONLY round metadata (no crash point).
+    // Legacy endpoint kept for backward compat. New code uses aviator_get_current_round.
     if (game_type === "aviator_round_start") {
       const { round_id } = body as { round_id: number };
       if (!round_id || round_id < 1) return json({ error: "Missing round_id" }, 400);
 
-      // Idempotent — return existing if already generated
       const { data: existing } = await supabase
         .from("aviator_rounds")
         .select("id, started_at")
@@ -300,7 +412,7 @@ serve(async (req) => {
 
       await supabase.from("aviator_rounds").insert({
         round_id,
-        crash_point: crashPoint,   // stored server-side, never returned in API
+        crash_point: crashPoint,
         started_at: startedAt,
         phase: "waiting",
       });
@@ -309,40 +421,54 @@ serve(async (req) => {
     }
 
     // ── aviator_cashout ──────────────────────────────────────────────────────
-    // Called when a player presses "Cash Out" during the flying phase.
-    // The server:
-    //   1. Looks up the server crash point for the round
-    //   2. Computes the multiplier at the CURRENT server time
-    //   3. If multiplier < crash_point: cashout is valid, credits balance
-    //   4. If multiplier >= crash_point: round already crashed, bet is lost
+    // Validates timing against the SHARED current round (aviator_current_round).
     if (game_type === "aviator_cashout") {
-      const { round_id, bet_amount, placed_at_ms } = body as {
-        round_id: number; bet_amount: number; placed_at_ms: number;
+      const { round_uuid, round_id, bet_amount, placed_at_ms } = body as {
+        round_uuid?: string; round_id?: number; bet_amount: number; placed_at_ms: number;
       };
-      if (!round_id || !bet_amount || bet_amount <= 0) return json({ error: "Missing fields" }, 400);
+      if (!bet_amount || bet_amount <= 0) return json({ error: "Missing fields" }, 400);
       if (bet_amount > userBalance) return json({ error: "Insufficient balance" }, 400);
 
-      const { data: roundRow } = await supabase
-        .from("aviator_rounds")
-        .select("crash_point, started_at")
-        .eq("round_id", round_id)
-        .single();
-      if (!roundRow) return json({ error: "Round not found" }, 400);
+      // Prefer uuid-based lookup (new flow), fall back to integer round_id (old flow)
+      let crashPointVal: number;
+      let startedAtVal: string;
 
-      const r = roundRow as { crash_point: number; started_at: string };
-      const flightStartMs = new Date(r.started_at).getTime() + 6000; // 6s waiting phase
+      if (round_uuid) {
+        const { data: curRow } = await supabase
+          .from("aviator_current_round")
+          .select("round_uuid, crash_point, phase, phase_started_at")
+          .eq("id", 1)
+          .single();
+        if (!curRow) return json({ error: "No active round" }, 400);
+        const cr = curRow as { round_uuid: string; crash_point: number; phase: string; phase_started_at: string };
+        if (cr.round_uuid !== round_uuid) return json({ error: "Round has changed" }, 400);
+        crashPointVal = cr.crash_point;
+        startedAtVal  = cr.phase_started_at;
+      } else if (round_id) {
+        const { data: roundRow } = await supabase
+          .from("aviator_rounds")
+          .select("crash_point, started_at")
+          .eq("round_id", round_id)
+          .single();
+        if (!roundRow) return json({ error: "Round not found" }, 400);
+        const r = roundRow as { crash_point: number; started_at: string };
+        crashPointVal = r.crash_point;
+        startedAtVal  = r.started_at;
+      } else {
+        return json({ error: "Missing round_uuid or round_id" }, 400);
+      }
+
+      const flightStartMs = new Date(startedAtVal).getTime() + (round_uuid ? 0 : 6000);
       const nowMs = Date.now();
       const elapsedMs = Math.max(0, nowMs - flightStartMs);
       const currentMultiplier = aviatorMultiplierAt(elapsedMs);
 
-      const crashed = currentMultiplier >= r.crash_point;
-      const cashoutMultiplier = crashed ? null : Math.min(currentMultiplier, r.crash_point - 0.01);
+      const crashed = currentMultiplier >= crashPointVal;
+      const cashoutMultiplier = crashed ? null : Math.min(currentMultiplier, crashPointVal - 0.01);
       const win = cashoutMultiplier !== null
         ? Math.round(bet_amount * cashoutMultiplier * 100) / 100
         : 0;
 
-      // Debit stake if not already done, credit winnings
-      // (client debits stake locally; server credits payout net of stake on win)
       const newBalance = win > 0
         ? Math.round((userBalance + win) * 100) / 100
         : userBalance;
@@ -363,9 +489,10 @@ serve(async (req) => {
         status: win > 0 ? "won" : "lost",
         bet_details: {
           game: "aviator",
-          round_id,
+          round_uuid: round_uuid ?? null,
+          round_id: round_id ?? null,
           cashout_at: cashoutMultiplier,
-          crash_point: r.crash_point,
+          crash_point: crashPointVal,
           placed_at_ms,
         },
         resolved_at: new Date().toISOString(),
@@ -377,24 +504,33 @@ serve(async (req) => {
         cashout_at: cashoutMultiplier,
         win,
         balance_after: newBalance,
-        // Reveal crash point only if round already crashed
-        crash_point: crashed ? r.crash_point : null,
+        crash_point: crashed ? crashPointVal : null,
       });
     }
 
     // ── aviator_settle ───────────────────────────────────────────────────────
-    // Called after a round ends for any bet that did NOT cash out.
-    // Always a loss — just records the bet row.
     if (game_type === "aviator_settle") {
-      const { round_id, bet_amount } = body as { round_id: number; bet_amount: number };
-      if (!round_id || !bet_amount || bet_amount <= 0) return json({ error: "Missing fields" }, 400);
+      const { round_uuid, round_id, bet_amount } = body as { round_uuid?: string; round_id?: number; bet_amount: number };
+      if (!bet_amount || bet_amount <= 0) return json({ error: "Missing fields" }, 400);
 
-      const { data: roundRow } = await supabase
-        .from("aviator_rounds")
-        .select("crash_point")
-        .eq("round_id", round_id)
-        .single();
-      const crashPoint = roundRow ? (roundRow as { crash_point: number }).crash_point : 0;
+      let crashPoint = 0;
+      if (round_uuid) {
+        const { data: curRow } = await supabase
+          .from("aviator_current_round")
+          .select("crash_point, round_uuid")
+          .eq("id", 1)
+          .single();
+        if (curRow && (curRow as { round_uuid: string }).round_uuid === round_uuid) {
+          crashPoint = (curRow as { crash_point: number }).crash_point;
+        }
+      } else if (round_id) {
+        const { data: roundRow } = await supabase
+          .from("aviator_rounds")
+          .select("crash_point")
+          .eq("round_id", round_id)
+          .single();
+        if (roundRow) crashPoint = (roundRow as { crash_point: number }).crash_point;
+      }
 
       await supabase.from("bets").insert({
         user_id,
@@ -402,7 +538,7 @@ serve(async (req) => {
         win_amount: 0,
         multiplier: 0,
         status: "lost",
-        bet_details: { game: "aviator", round_id, crash_point: crashPoint },
+        bet_details: { game: "aviator", round_uuid: round_uuid ?? null, round_id: round_id ?? null, crash_point: crashPoint },
         resolved_at: new Date().toISOString(),
       });
 
