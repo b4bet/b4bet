@@ -2,8 +2,10 @@
 -- 1. Replace admin_get_profiles to also return is_active, account_id
 -- 2. Add admin_update_user_full RPC — edits all profile fields EXCEPT is_admin
 
--- 1. Replace admin_get_profiles
-CREATE OR REPLACE FUNCTION public.admin_get_profiles()
+-- 1. Drop and recreate admin_get_profiles (return type is extended)
+DROP FUNCTION IF EXISTS public.admin_get_profiles();
+
+CREATE FUNCTION public.admin_get_profiles()
 RETURNS TABLE (
   id              uuid,
   username        text,
@@ -42,10 +44,9 @@ END;
 $$;
 
 -- 2. admin_update_user_full — intentionally omits is_admin
--- Drop all existing overloads of admin_update_user_full before recreating
 DROP FUNCTION IF EXISTS public.admin_update_user_full(uuid, text, text, text, text, bigint, integer, boolean, boolean, text);
 
-CREATE OR REPLACE FUNCTION public.admin_update_user_full(
+CREATE FUNCTION public.admin_update_user_full(
   p_user_id     uuid,
   p_username    text    DEFAULT NULL,
   p_display_name text   DEFAULT NULL,
