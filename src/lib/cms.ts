@@ -656,7 +656,7 @@ class Cms {
       try { store.creditUser(before.user, before.amount); } catch { /* ignore */ }
     }
     this.emitFinance();
-    await await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).catch(() => {});
+    await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).then(({ error }) => { if (error) alert('DEPOSIT DB ERROR: ' + error.message); });
   }
 
   async setWithdrawalStatus(id: string, status: WithdrawalRequest['status'], utr?: string, reason?: string) {
@@ -668,7 +668,7 @@ class Cms {
       this.pushFromTemplate('nt_withdrawal_ok', `Withdrawal ${status}`, `Your withdrawal of ${store.currency}${before.amount.toFixed(2)} to ${before.destination} is ${status}${utrText}${reasonText}.`, status === 'approved' ? 'success' : 'info');
     }
     this.emitFinance();
-    await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).catch(() => {});
+    await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).then(({ error }) => { if (error) alert('WITHDRAWAL DB ERROR: ' + error.message); });
   }
 
   totals() {
