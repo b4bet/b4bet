@@ -141,7 +141,7 @@ export default function App() {
         onOpenAuthModal={openAuthModal}
       />
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
-      <AuthModal open={authModalOpen} mode={authModalMode} onClose={() => setAuthModalOpen(false)} />
+      <AuthModal open={authModalOpen} initialMode={authModalMode} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
     </div>
   );
