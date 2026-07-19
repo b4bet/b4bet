@@ -259,7 +259,7 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
       </div>
 
       <DynamicPagePopup page={selectedPage} open={pagePopupOpen} onClose={() => setPagePopupOpen(false)} />
-      <PaymentMethodFlow mode="withdrawal" open={withdrawalOpen} onClose={() => setWithdrawalOpen(false)} />
+      <PaymentMethodFlow flow="withdrawal" open={withdrawalOpen} onClose={() => setWithdrawalOpen(false)} />
     </>
   );
 }
