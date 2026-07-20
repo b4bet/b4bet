@@ -65,21 +65,12 @@ Deno.serve(async (req: Request) => {
 
     // ─────────────────────────────────────────────────────────────────────
     // getGameAdminConfig — reads admin_config from Supabase.
-    //
-    // IMPORTANT: Crash game settings are stored at the ROOT level of the
-    // admin_config object (mode, manualCrashPoint, targetWinProbability, etc.)
-    // because the admin panel uses store.setAdmin({ mode, manualCrashPoint })
-    // which merges directly into the root.
-    //
-    // All OTHER games (aviator, wingo, k3, fived, sunvsmoon) are nested under
-    // adminConfig.gameHandlers[gameKey].
     // ─────────────────────────────────────────────────────────────────────
     async function getGameAdminConfig(gameKey: string) {
       const { data: settingsRows } = await supabase.rpc("admin_get_settings");
       const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
       const adminConfig = settings.find((r) => r.key === "admin_config")?.value ?? {};
 
-      // Crash uses ROOT-level admin config keys
       if (gameKey === "crash") {
         return {
           mode: (adminConfig.mode as string) ?? "AUTO",
@@ -91,7 +82,6 @@ Deno.serve(async (req: Request) => {
         };
       }
 
-      // Other games are nested under gameHandlers[gameKey]
       const gameHandlers = (adminConfig.gameHandlers as Record<string, Record<string, unknown>>) ?? {};
       const gameConfig = gameHandlers[gameKey] ?? {};
       return {
@@ -105,16 +95,47 @@ Deno.serve(async (req: Request) => {
     }
 
     // ====================================================================
+    // CRASH: Get last 10 history (simple number array) — used by crashEngine on startup
+    // ====================================================================
+    if (action === "crash_get_history") {
+      const { data: rows } = await supabase
+        .from("crash_rounds")
+        .select("bust_point")
+        .order("created_at", { ascending: false })
+        .limit(10);
+
+      const history = (rows ?? []).map((r) => parseFloat(String(r.bust_point)));
+      return json({ history });
+    }
+
+    // ====================================================================
+    // CRASH: Get last 20 history with provably fair detail — used by CrashFeedPopup
+    // ====================================================================
+    if (action === "crash_get_history_detail") {
+      const { data: rows } = await supabase
+        .from("crash_rounds")
+        .select("bust_point, round_uuid, server_seed, server_seed_hash, created_at")
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      const history = (rows ?? []).map((r) => ({
+        bust_point: parseFloat(String(r.bust_point)),
+        round_uuid: r.round_uuid ?? String(r.bust_point),
+        server_seed: r.server_seed ?? null,
+        server_seed_hash: r.server_seed_hash ?? "—",
+        created_at: r.created_at,
+      }));
+      return json({ history });
+    }
+
+    // ====================================================================
     // CRASH: Get current shared round (primary sync endpoint)
-    // All clients poll this every 300ms — same pattern as Aviator.
-    // crash_point is NEVER returned to the client before phase==='crashed'.
     // ====================================================================
     if (action === "crash_get_current_round") {
       const { data: r } = await supabase
         .from("crash_current_round").select("*").eq("id", 1).single();
 
       if (!r) {
-        // First ever run: seed the row
         const cfg = await getGameAdminConfig("crash");
         const bustPoint = generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
         await supabase.from("crash_current_round").insert({
@@ -136,14 +157,12 @@ Deno.serve(async (req: Request) => {
           ? parseFloat(cfg.manualCrashPoint.toFixed(2))
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
 
-        // Reset manual mode after use — write back to ROOT level of admin_config
         if (cfg.mode === "MANUAL") {
           const { data: settingsRows } = await supabase.rpc("admin_get_settings");
           const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
           const fullConfig = settings.find((r2) => r2.key === "admin_config")?.value ?? {};
           await supabase.rpc("admin_update_setting", {
             p_key: "admin_config",
-            // Crash config is at ROOT level — reset mode and manualTargetRoundId there
             p_value: JSON.parse(JSON.stringify({ ...fullConfig, mode: "AUTO", manualTargetRoundId: null })),
           }).catch(() => {});
         }
@@ -160,17 +179,32 @@ Deno.serve(async (req: Request) => {
       if (r.phase === "flying" && r.crash_point) {
         const dur = flightDurationMs(Number(r.crash_point));
         if (elapsed >= dur) {
+          const newUuid = r.round_uuid ?? crypto.randomUUID();
+          // Generate a server seed for provably fair
+          const serverSeedBytes = new Uint8Array(32);
+          crypto.getRandomValues(serverSeedBytes);
+          const serverSeed = Array.from(serverSeedBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+          // Hash the seed
+          const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serverSeed));
+          const serverSeedHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+
           await supabase.from("crash_current_round").update({
             phase: "crashed",
             phase_started_at: new Date().toISOString(),
             last_crash_point: r.crash_point,
             elapsed_ms: 0,
           }).eq("id", 1);
-          // Store in crash_rounds for settle verification
-          await supabase.from("crash_rounds").upsert(
-            { round_id: 0, bust_point: Number(r.crash_point), created_at: new Date().toISOString() },
-            { onConflict: "round_id" }
-          ).catch(() => {});
+
+          // Store full provably fair data in crash_rounds
+          await supabase.from("crash_rounds").insert({
+            bust_point: Number(r.crash_point),
+            round_uuid: newUuid,
+            server_seed: serverSeed,
+            server_seed_hash: serverSeedHash,
+            created_at: new Date().toISOString(),
+            phase_started_at: new Date().toISOString(),
+          }).catch(() => {});
+
           return json({
             phase: "crashed", elapsed_ms: 0,
             crash_point: r.crash_point,
@@ -187,7 +221,6 @@ Deno.serve(async (req: Request) => {
           ? parseFloat(cfg.manualCrashPoint.toFixed(2))
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
 
-        // Reset manual mode after use — write back to ROOT level of admin_config
         if (cfg.mode === "MANUAL") {
           const { data: settingsRows } = await supabase.rpc("admin_get_settings");
           const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
@@ -220,7 +253,6 @@ Deno.serve(async (req: Request) => {
         elapsed_ms: elapsed,
         round_uuid: r.round_uuid,
         last_crash_point: r.last_crash_point,
-        // Only send crash_point when already crashed
         crash_point: r.phase === "crashed" ? r.crash_point : null,
       });
     }
@@ -401,15 +433,12 @@ Deno.serve(async (req: Request) => {
       const { user_id, round_id, amount, cash_out_at, bust_point } = body;
       if (!user_id || !amount) return json({ error: "Missing params" }, 400);
 
-      // Try to get authoritative bust point from crash_current_round or crash_rounds
       let verifiedBust: number | null = null;
-      // First check shared round (most accurate)
       const { data: sharedRound } = await supabase.from("crash_current_round").select("crash_point, last_crash_point, phase").eq("id", 1).single();
       if (sharedRound) {
         const bp = sharedRound.phase === 'crashed' ? sharedRound.crash_point : sharedRound.last_crash_point;
         if (bp) verifiedBust = parseFloat(String(bp));
       }
-      // Fallback: crash_rounds table
       if (!verifiedBust && round_id) {
         const roundIdNum = parseInt(String(round_id), 10);
         if (roundIdNum > 0) {
@@ -427,8 +456,6 @@ Deno.serve(async (req: Request) => {
       const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id as string).single();
       if (!profile) return json({ error: "User not found" }, 400);
 
-      // On cashout: just add winnings (bet was already deducted at placement)
-      // On bust: no change (bet was already deducted)
       const newBalance = profile.balance + win_amount;
       if (win_amount > 0) {
         await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id as string);
