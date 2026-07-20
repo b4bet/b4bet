@@ -63,11 +63,37 @@ Deno.serve(async (req: Request) => {
         status, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
 
+    // ─────────────────────────────────────────────────────────────────────
+    // getGameAdminConfig — reads admin_config from Supabase.
+    //
+    // IMPORTANT: Crash game settings are stored at the ROOT level of the
+    // admin_config object (mode, manualCrashPoint, targetWinProbability, etc.)
+    // because the admin panel uses store.setAdmin({ mode, manualCrashPoint })
+    // which merges directly into the root.
+    //
+    // All OTHER games (aviator, wingo, k3, fived, sunvsmoon) are nested under
+    // adminConfig.gameHandlers[gameKey].
+    // ─────────────────────────────────────────────────────────────────────
     async function getGameAdminConfig(gameKey: string) {
       const { data: settingsRows } = await supabase.rpc("admin_get_settings");
       const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
       const adminConfig = settings.find((r) => r.key === "admin_config")?.value ?? {};
-      const gameConfig = (adminConfig as Record<string, Record<string, unknown>>)[gameKey] ?? {};
+
+      // Crash uses ROOT-level admin config keys
+      if (gameKey === "crash") {
+        return {
+          mode: (adminConfig.mode as string) ?? "AUTO",
+          targetWinProbability: (adminConfig.targetWinProbability as number) ?? 55,
+          houseEdge: (adminConfig.houseEdge as number) ?? 4,
+          manualCrashPoint: (adminConfig.manualCrashPoint as number) ?? 2.0,
+          manualTargetRoundId: (adminConfig.manualTargetRoundId as number | null) ?? null,
+          manualResult: (adminConfig.manualResult as string) ?? "",
+        };
+      }
+
+      // Other games are nested under gameHandlers[gameKey]
+      const gameHandlers = (adminConfig.gameHandlers as Record<string, Record<string, unknown>>) ?? {};
+      const gameConfig = gameHandlers[gameKey] ?? {};
       return {
         mode: (gameConfig.mode as string) ?? "AUTO",
         targetWinProbability: (gameConfig.targetWinProbability as number) ?? 55,
@@ -109,14 +135,16 @@ Deno.serve(async (req: Request) => {
         const bustPoint = cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01
           ? parseFloat(cfg.manualCrashPoint.toFixed(2))
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
-        // Reset manual mode after use
+
+        // Reset manual mode after use — write back to ROOT level of admin_config
         if (cfg.mode === "MANUAL") {
           const { data: settingsRows } = await supabase.rpc("admin_get_settings");
           const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
           const fullConfig = settings.find((r2) => r2.key === "admin_config")?.value ?? {};
           await supabase.rpc("admin_update_setting", {
             p_key: "admin_config",
-            p_value: JSON.parse(JSON.stringify({ ...fullConfig, crash: { ...cfg, mode: "AUTO", manualTargetRoundId: null } })),
+            // Crash config is at ROOT level — reset mode and manualTargetRoundId there
+            p_value: JSON.parse(JSON.stringify({ ...fullConfig, mode: "AUTO", manualTargetRoundId: null })),
           }).catch(() => {});
         }
         await supabase.from("crash_current_round").update({
@@ -132,7 +160,6 @@ Deno.serve(async (req: Request) => {
       if (r.phase === "flying" && r.crash_point) {
         const dur = flightDurationMs(Number(r.crash_point));
         if (elapsed >= dur) {
-          const newUuid = crypto.randomUUID();
           await supabase.from("crash_current_round").update({
             phase: "crashed",
             phase_started_at: new Date().toISOString(),
@@ -159,6 +186,18 @@ Deno.serve(async (req: Request) => {
         const bustPoint = cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01
           ? parseFloat(cfg.manualCrashPoint.toFixed(2))
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
+
+        // Reset manual mode after use — write back to ROOT level of admin_config
+        if (cfg.mode === "MANUAL") {
+          const { data: settingsRows } = await supabase.rpc("admin_get_settings");
+          const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
+          const fullConfig = settings.find((r2) => r2.key === "admin_config")?.value ?? {};
+          await supabase.rpc("admin_update_setting", {
+            p_key: "admin_config",
+            p_value: JSON.parse(JSON.stringify({ ...fullConfig, mode: "AUTO", manualTargetRoundId: null })),
+          }).catch(() => {});
+        }
+
         const newUuid = crypto.randomUUID();
         await supabase.from("crash_current_round").update({
           phase: "waiting",
