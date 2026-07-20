@@ -1,19 +1,18 @@
 // crashEngine.ts — SERVER-SYNCED shared round.
 // All users see the same phase, multiplier, and crash point.
-// Client polls crash_get_current_round every 300 ms (same pattern as Aviator).
-// Bust point is NEVER sent to the client before the round crashes.
+// Client polls crash_get_current_round every 300ms.
+// On startup, loads last 20 rounds from server for history bar.
 
 import { bus, Topics } from './bus';
 import { store } from './store';
 import { GameService } from './game-service';
 import { auth } from './auth';
-import { cms } from './cms';
 
 import { sfx, startHum, updateHum, stopHum } from './crashAudio';
-function playStartSound() { sfx.start(); startHum(); }
-function playTickSound(m: number) { updateHum(m); }
-function playCrashSound() { stopHum(); sfx.crash(); }
-function playCashoutSound() { sfx.cashout(); }
+function playStartSound() { try { sfx.start(); startHum(); } catch { /* ignore */ } }
+function playTickSound(m: number) { try { updateHum(m); } catch { /* ignore */ } }
+function playCrashSound() { try { stopHum(); sfx.crash(); } catch { /* ignore */ } }
+function playCashoutSound() { try { sfx.cashout(); } catch { /* ignore */ } }
 
 export type CrashPhase = 'countdown' | 'flying' | 'busted';
 
@@ -31,8 +30,8 @@ export interface CrashState {
   phase: CrashPhase;
   multiplier: number;
   countdown: number;
-  roundId: string;   // round_uuid from server
-  roundSeq: number;  // local incrementing counter for display
+  roundId: string;
+  roundSeq: number;
   bustPoint: number;
   history: number[];
   bets: { A: BetSlot; B: BetSlot };
@@ -50,18 +49,16 @@ interface EngineState {
   bets: { A: BetSlot; B: BetSlot };
   startedAt: number;
   win: number | null;
-  // server-reported elapsed when we first connected mid-flight
   serverElapsedAtConnect: number;
   connectTime: number;
 }
 
-const POLL_MS = 300;  // poll server every 300 ms
+const POLL_MS = 300;
 
 function freshBet(id: 'A' | 'B'): BetSlot {
   return { id, amount: 100, placed: false, autoCashAt: null, cashedOutAt: null, cashedOut: false, win: null };
 }
 
-// Multiplier formula — must match edge function's flight duration calculation
 function multiplierFromElapsed(elapsedMs: number): number {
   return Math.pow(Math.E, 0.12 * (elapsedMs / 1000));
 }
@@ -71,15 +68,10 @@ async function settleSlotOnServer(slot: BetSlot, roundId: string, bustPoint: num
   if (!session) return;
   try {
     const result = await GameService.crashSettle(
-      session.userId,
-      roundId as unknown as number,
-      slot.amount,
-      slot.cashedOutAt,
-      bustPoint,
+      session.userId, roundId as unknown as number,
+      slot.amount, slot.cashedOutAt, bustPoint,
     );
-    if (typeof result.balance_after === 'number') {
-      store.setBalance(result.balance_after);
-    }
+    if (typeof result.balance_after === 'number') store.setBalance(result.balance_after);
   } catch (err) {
     console.warn('[CrashEngine] crashSettle failed:', (err as Error)?.message ?? err);
   }
@@ -99,12 +91,14 @@ class CrashEngine {
   private rafId: number = 0;
   private lastKnownRoundId = '';
   private lastKnownPhase: 'waiting' | 'flying' | 'crashed' | '' = '';
-  // sounds guard
   private didPlayStart = false;
   private didPlayCrash = false;
+  private historyLoaded = false;
 
   start() {
     if (this.pollTimer) return;
+    // Load history from server on startup
+    void this.loadHistory();
     void this.poll();
     this.pollTimer = setInterval(() => { void this.poll(); }, POLL_MS);
     this.rafId = requestAnimationFrame(() => this.animate());
@@ -116,18 +110,28 @@ class CrashEngine {
     cancelAnimationFrame(this.rafId);
   }
 
-  // ── Server poll ──────────────────────────────────────────────────────────
+  // Load last 20 crash points from server for history bar
+  private async loadHistory() {
+    try {
+      const r = await GameService.crashGetHistory();
+      if (r.history && r.history.length > 0) {
+        this.state.history = r.history;
+        this.historyLoaded = true;
+        this.publish();
+      }
+    } catch (err) {
+      console.warn('[CrashEngine] loadHistory failed:', (err as Error)?.message ?? err);
+    }
+  }
+
+  // Server poll
   private async poll() {
     try {
       const r = await GameService.crashGetCurrentRound();
 
-      const newRound = r.round_uuid !== this.lastKnownRoundId;
+      const newRound = r.round_uuid && r.round_uuid !== this.lastKnownRoundId;
 
-      // ── Round changed (new round started) ───────────────────────────────
       if (newRound) {
-        if (this.lastKnownRoundId !== '') {
-          // Previous round just ended — carry over any history we have
-        }
         this.lastKnownRoundId = r.round_uuid ?? '';
         this.state.bets = { A: freshBet('A'), B: freshBet('B') };
         this.state.win = null;
@@ -138,53 +142,61 @@ class CrashEngine {
         this.broadcastBets();
       }
 
-      // ── Phase transitions ────────────────────────────────────────────────
       const prevPhase = this.lastKnownPhase;
       this.lastKnownPhase = r.phase;
 
       if (r.phase === 'waiting') {
-        // Countdown — compute from server elapsed
-        const waitTotal = 6000; // ms
+        const waitTotal = 6000;
         const remaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
         this.state.phase = 'countdown';
         this.state.countdown = remaining;
         this.state.multiplier = 1.0;
-        // If we just transitioned from crashed → waiting, record history
-        if (prevPhase === 'crashed' && r.last_crash_point) {
-          this.state.history = [r.last_crash_point, ...this.state.history].slice(0, 20);
+        // Add last crash point to history when transitioning crashed -> waiting
+        if (r.last_crash_point && prevPhase === 'crashed') {
+          const bp = Number(r.last_crash_point);
+          // Avoid duplicate — only add if not already first item
+          if (this.state.history[0] !== bp) {
+            this.state.history = [bp, ...this.state.history].slice(0, 20);
+          }
+        }
+        // Also capture last_crash_point on first load if history is empty
+        if (r.last_crash_point && this.state.history.length === 0) {
+          this.state.history = [Number(r.last_crash_point)];
         }
       }
 
       if (r.phase === 'flying') {
         if (prevPhase !== 'flying') {
-          // Just started flying
           this.state.phase = 'flying';
           this.state.serverElapsedAtConnect = r.elapsed_ms;
           this.state.connectTime = Date.now();
           this.state.startedAt = Date.now() - r.elapsed_ms;
-          this.state.bustPoint = 0; // still secret
+          this.state.bustPoint = 0;
           if (!this.didPlayStart) { playStartSound(); this.didPlayStart = true; }
-        } else {
-          // Already flying — keep startedAt anchored at first connect
         }
         this.state.phase = 'flying';
         this.state.countdown = 0;
-        // Check auto cashouts
         this.checkAutoCashouts();
       }
 
       if (r.phase === 'crashed') {
         if (prevPhase !== 'crashed') {
-          // Just crashed
           this.state.phase = 'busted';
           this.state.bustPoint = r.crash_point ?? this.state.multiplier;
           this.state.multiplier = this.state.bustPoint;
           if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
-          this.state.history = [this.state.bustPoint, ...this.state.history].slice(0, 20);
+          // Add to history immediately on crash
+          const bp = this.state.bustPoint;
+          if (this.state.history[0] !== bp) {
+            this.state.history = [bp, ...this.state.history].slice(0, 20);
+          }
           this.settleBustedBets();
         } else {
           this.state.phase = 'busted';
-          if (r.crash_point) this.state.bustPoint = r.crash_point;
+          if (r.crash_point) {
+            this.state.bustPoint = r.crash_point;
+            this.state.multiplier = r.crash_point;
+          }
         }
       }
 
@@ -194,14 +206,13 @@ class CrashEngine {
     }
   }
 
-  // ── Animation loop (smooth multiplier between polls) ─────────────────────
+  // Smooth animation between polls
   private animate() {
     if (this.state.phase === 'flying') {
       const elapsed = Date.now() - this.state.startedAt;
       const m = multiplierFromElapsed(elapsed);
       playTickSound(m);
       this.state.multiplier = m;
-      // Auto-cashout check every frame
       this.checkAutoCashouts();
       this.publish();
     }
@@ -219,9 +230,8 @@ class CrashEngine {
 
   private publish() { bus.emit(Topics.CrashState, this.getState()); }
   private broadcastBets() {
-    const bets = { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
-    bus.emit(Topics.CrashBets, bets);
-    bus.emit(Topics.CrashTick, bets);
+    bus.emit(Topics.CrashBets, { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } });
+    bus.emit(Topics.CrashTick, { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } });
   }
 
   private performCashOut(id: 'A' | 'B', cashOutAt: number) {
@@ -251,7 +261,7 @@ class CrashEngine {
     this.broadcastBets();
   }
 
-  // ── Public API ───────────────────────────────────────────────────────────
+  // Public API
   placeBet(id: 'A' | 'B', amount: number): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (this.state.phase !== 'countdown') return { ok: false, reason: 'Round not in betting phase' };
@@ -296,7 +306,11 @@ class CrashEngine {
 
   getState(): CrashState {
     const { phase, multiplier, countdown, roundId, roundSeq, bustPoint, history, startedAt } = this.state;
-    return { phase, multiplier, countdown, roundId, roundSeq, bustPoint, history, bets: { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } }, startedAt };
+    return {
+      phase, multiplier, countdown, roundId, roundSeq, bustPoint, history,
+      bets: { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } },
+      startedAt,
+    };
   }
 }
 
