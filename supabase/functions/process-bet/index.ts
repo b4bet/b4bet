@@ -1,4 +1,4 @@
-// process-bet — Supabase Edge Function v5
+// process-bet — Supabase Edge Function v7
 // Supports GET (query params) + POST (JSON body)
 // Supports both 'action' and 'game_type' fields
 
@@ -40,6 +40,10 @@ const AV_WAIT_MS       = 6_000;   // 6 s betting window
 const AV_CRASH_HOLD_MS = 3_000;   // 3 s show crash result
 const AV_CASHOUT_GRACE_MS = 800;  // 0.8 s race-condition grace
 
+// Crash game timing constants  
+const CRASH_WAIT_MS       = 5_000;   // 5 s betting window
+const CRASH_CRASH_HOLD_MS = 3_000;   // 3 s show crash result
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -80,9 +84,6 @@ Deno.serve(async (req: Request) => {
 
     // ====================================================================
     // AVIATOR: Get current round (also advances phase if needed)
-    // This is the main polling endpoint — clients call this every ~300ms.
-    // It both reads AND advances the game state, so no separate game_loop
-    // scheduler is needed.
     // ====================================================================
     if (action === "aviator_get_current_round" || action === "aviator_round_status" || action === "aviator_game_loop") {
       const { data: r } = await supabase
@@ -145,7 +146,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // ── FLYING but crash_point null = bad state, fix it
+      // ── FLYING (but crash_point null = bad state, fix it)
       if (r.phase === "flying" && !r.crash_point) {
         const cfg = await getGameAdminConfig("aviator");
         const bustPoint = generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
@@ -180,7 +181,9 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ── AVIATOR: Place bet ──────────────────────────────────────────────
+    // ====================================================================
+    // AVIATOR: Place bet
+    // ====================================================================
     if (action === "aviator_place_bet") {
       const { user_id, bet_amount, round_uuid } = body;
       if (!user_id || !bet_amount || (bet_amount as number) <= 0)
@@ -205,7 +208,9 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, bet_id: bet?.id });
     }
 
-    // ── AVIATOR: Cash out ───────────────────────────────────────────────
+    // ====================================================================
+    // AVIATOR: Cash out
+    // ====================================================================
     if (action === "aviator_cashout") {
       const { user_id, bet_id, cashout_multiplier, round_uuid, round_id } = body;
       if (!user_id || !cashout_multiplier)
@@ -259,12 +264,15 @@ Deno.serve(async (req: Request) => {
       }).eq("id", bet.id as string);
 
       const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id as string).single();
-      await supabase.from("profiles").update({ balance: (profile?.balance ?? 0) + win_amount }).eq("id", user_id as string);
+      const newBalance = (profile?.balance ?? 0) + win_amount;
+      await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id as string);
 
-      return json({ success: true, win_amount, multiplier: cashout_multiplier, bustPoint: round.crash_point });
+      return json({ success: true, win_amount, balance_after: newBalance, multiplier: cashout_multiplier, bustPoint: round.crash_point });
     }
 
-    // ── AVIATOR: Settle lost bets ───────────────────────────────────────
+    // ====================================================================
+    // AVIATOR: Settle lost bets
+    // ====================================================================
     if (action === "aviator_settle_lost" || action === "aviator_settle") {
       const { round_uuid, user_id } = body;
       let q = supabase.from("bets").update({ status: "lost", resolved_at: new Date().toISOString() }).eq("status", "pending");
@@ -274,13 +282,23 @@ Deno.serve(async (req: Request) => {
       return json({ success: true });
     }
 
-    // ── CRASH: Get bust point ───────────────────────────────────────────
+    // ====================================================================
+    // CRASH: Get bust point for round
+    // Server generates bust point and stores it in crash_rounds for
+    // consistency — crash_settle will use this same stored value.
+    //
+    // FIX: Returns snake_case bust_point to match frontend CrashBustResult
+    // type { bust_point: number }. Previously returned camelCase bustPoint
+    // which caused res.bust_point to always be undefined → game crashed at
+    // the default 2.0 placeholder every round.
+    // ====================================================================
     if (action === "crash_get_bust") {
       const { round_id } = body;
       const cfg = await getGameAdminConfig("crash");
       let bustPoint: number;
       if (cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01) {
         bustPoint = parseFloat(cfg.manualCrashPoint.toFixed(2));
+        // Reset manual mode after use so next round is AUTO
         const { data: settingsRows } = await supabase.rpc("admin_get_settings");
         const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
         const fullConfig = settings.find((r) => r.key === "admin_config")?.value ?? {};
@@ -291,19 +309,136 @@ Deno.serve(async (req: Request) => {
       } else {
         bustPoint = generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
       }
-      return json({ bustPoint, round_id });
+
+      // Store bust point in crash_rounds so crash_settle can verify it server-side
+      const roundIdNum = round_id ? parseInt(String(round_id), 10) : 0;
+      if (roundIdNum > 0) {
+        // Upsert: if round already exists keep its value (prevents double-generation)
+        const { data: existing } = await supabase
+          .from("crash_rounds")
+          .select("bust_point")
+          .eq("round_id", roundIdNum)
+          .maybeSingle();
+        if (!existing) {
+          await supabase.from("crash_rounds").insert({ round_id: roundIdNum, bust_point: bustPoint }).catch(() => {});
+        } else {
+          // Use stored bust point for consistency
+          bustPoint = parseFloat(String(existing.bust_point));
+        }
+      }
+
+      // Return snake_case bust_point to match frontend CrashBustResult type
+      return json({ bust_point: bustPoint, round_id });
     }
 
-    // ── CRASH: Place bet ────────────────────────────────────────────────
+    // ====================================================================
+    // CRASH: Settle round (called after round ends — cashout OR bust)
+    // game-service.ts calls this with game_type: "crash_settle"
+    // Validates bust point server-side, updates balance, records bet.
+    // ====================================================================
+    if (action === "crash_settle") {
+      const { user_id, round_id, amount, cashout_at, bust_point, won: clientWon } = body;
+      if (!user_id || !amount) return json({ error: "Missing params" }, 400);
+
+      // Look up authoritative bust point from crash_rounds table
+      let verifiedBust: number | null = null;
+      if (round_id) {
+        const roundIdNum = parseInt(String(round_id), 10);
+        if (roundIdNum > 0) {
+          const { data: cr } = await supabase
+            .from("crash_rounds")
+            .select("bust_point")
+            .eq("round_id", roundIdNum)
+            .maybeSingle();
+          if (cr) verifiedBust = parseFloat(String(cr.bust_point));
+        }
+      }
+
+      // If no stored bust point, accept client value but generate fresh for recording
+      const bustPoint = verifiedBust ?? (bust_point ? parseFloat(String(bust_point)) : null);
+
+      // Determine win/loss authoritatively on server
+      const cashoutAt = cashout_at ? parseFloat(String(cashout_at)) : null;
+      const won = cashoutAt !== null && bustPoint !== null && cashoutAt <= bustPoint;
+      const betAmount = parseFloat(String(amount));
+      const win_amount = won ? Math.floor(betAmount * cashoutAt!) : 0;
+
+      // Get current balance
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("balance")
+        .eq("id", user_id as string)
+        .single();
+      if (!profile) return json({ error: "User not found" }, 400);
+
+      // Check sufficient balance for bet deduction
+      if (profile.balance < betAmount) return json({ error: "Insufficient balance" }, 400);
+
+      // Update balance: deduct bet, add winnings if won
+      const newBalance = profile.balance - betAmount + win_amount;
+      await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id as string);
+
+      // Record bet in bets table
+      const { data: gameRow } = await supabase.from("games").select("id").eq("slug", "crash").single();
+      await supabase.from("bets").insert({
+        user_id,
+        game_id: gameRow?.id,
+        bet_amount: betAmount,
+        win_amount,
+        multiplier: won ? cashoutAt : 1,
+        status: won ? "won" : "lost",
+        bet_details: { bustPoint, cashOutAt: cashoutAt },
+        resolved_at: new Date().toISOString(),
+      }).catch(() => {});
+
+      // Record in crash_rounds if not already done
+      if (round_id && bustPoint) {
+        const roundIdNum = parseInt(String(round_id), 10);
+        if (roundIdNum > 0) {
+          await supabase.from("crash_rounds")
+            .upsert({ round_id: roundIdNum, bust_point: bustPoint }, { onConflict: "round_id" })
+            .catch(() => {});
+        }
+      }
+
+      return json({
+        success: true,
+        won,
+        win: win_amount,
+        verified_bust: bustPoint,
+        balance_after: newBalance,
+      });
+    }
+
+    // ====================================================================
+    // CRASH: Place bet (legacy endpoint - kept for compatibility)
+    // ====================================================================
     if (action === "crash_place_bet") {
       const { user_id, bet_amount, cashout_at, round_id } = body;
       if (!user_id || !bet_amount || !cashout_at)
         return json({ error: "Invalid bet" }, 400);
 
-      const cfg = await getGameAdminConfig("crash");
-      const bustPoint = cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01
-        ? parseFloat(cfg.manualCrashPoint.toFixed(2))
-        : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
+      // Try to use stored bust point for this round for consistency
+      let bustPoint: number | null = null;
+      if (round_id) {
+        const roundIdNum = parseInt(String(round_id), 10);
+        if (roundIdNum > 0) {
+          const { data: cr } = await supabase
+            .from("crash_rounds")
+            .select("bust_point")
+            .eq("round_id", roundIdNum)
+            .maybeSingle();
+          if (cr) bustPoint = parseFloat(String(cr.bust_point));
+        }
+      }
+
+      // Fallback: generate fresh bust point
+      if (!bustPoint) {
+        const cfg = await getGameAdminConfig("crash");
+        bustPoint = cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01
+          ? parseFloat(cfg.manualCrashPoint.toFixed(2))
+          : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
+      }
 
       const won = (cashout_at as number) <= bustPoint;
       const win_amount = won ? Math.floor((bet_amount as number) * (cashout_at as number)) : 0;
@@ -325,11 +460,13 @@ Deno.serve(async (req: Request) => {
         bet_details: { bustPoint, cashOutAt: cashout_at },
         resolved_at: new Date().toISOString(),
       });
-      await supabase.from("crash_rounds").insert({ round_id: round_id ?? 0, bust_point: bustPoint });
-      return json({ success: true, won, bustPoint, win_amount });
+      await supabase.from("crash_rounds").insert({ round_id: round_id ?? 0, bust_point: bustPoint }).catch(() => {});
+      return json({ success: true, won, bustPoint, win_amount, balance_after: newBalance });
     }
 
-    // ── ADMIN: Preview next round ───────────────────────────────────────
+    // ====================================================================
+    // ADMIN: Preview next round
+    // ====================================================================
     if (action === "admin_preview_next_round") {
       const { game } = body;
       const gameKey = (game as string) ?? "aviator";
@@ -341,7 +478,9 @@ Deno.serve(async (req: Request) => {
       return json({ mode: cfg.mode, preview: samples[0], samples, gameKey });
     }
 
-    // ── WINGO / K3 / 5D / SunVsMoon: Place bet ─────────────────────────
+    // ====================================================================
+    // WINGO / K3 / 5D / SunVsMoon: Place bet
+    // ====================================================================
     if (action === "place_bet") {
       const { user_id, game_slug, bet_amount, bet_details, round_id } = body;
       if (!user_id || !game_slug || !bet_amount)
@@ -361,7 +500,9 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, bet_id: bet?.id, config_mode: cfg.mode });
     }
 
-    // ── ADMIN: Set crash point ──────────────────────────────────────────
+    // ====================================================================
+    // ADMIN: Set crash point for next round
+    // ====================================================================
     if (action === "admin_set_next_crash") {
       const { game, crash_point, round_id } = body;
       const gameKey = (game as string) ?? "aviator";
@@ -379,7 +520,9 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, game: gameKey, crash_point });
     }
 
-    // ── ADMIN: Reset to AUTO ────────────────────────────────────────────
+    // ====================================================================
+    // ADMIN: Reset to AUTO mode
+    // ====================================================================
     if (action === "admin_reset_to_auto") {
       const { game } = body;
       const gameKey = (game as string) ?? "aviator";
