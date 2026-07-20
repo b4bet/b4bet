@@ -93,11 +93,9 @@ class CrashEngine {
   private lastKnownPhase: 'waiting' | 'flying' | 'crashed' | '' = '';
   private didPlayStart = false;
   private didPlayCrash = false;
-  private historyLoaded = false;
 
   start() {
     if (this.pollTimer) return;
-    // Load history from server on startup
     void this.loadHistory();
     void this.poll();
     this.pollTimer = setInterval(() => { void this.poll(); }, POLL_MS);
@@ -110,13 +108,13 @@ class CrashEngine {
     cancelAnimationFrame(this.rafId);
   }
 
-  // Load last 20 crash points from server for history bar
+  // Load last 20 crash points from server on startup
   private async loadHistory() {
     try {
       const r = await GameService.crashGetHistory();
       if (r.history && r.history.length > 0) {
         this.state.history = r.history;
-        this.historyLoaded = true;
+        this.publishHistory();
         this.publish();
       }
     } catch (err) {
@@ -124,7 +122,6 @@ class CrashEngine {
     }
   }
 
-  // Server poll
   private async poll() {
     try {
       const r = await GameService.crashGetCurrentRound();
@@ -151,17 +148,14 @@ class CrashEngine {
         this.state.phase = 'countdown';
         this.state.countdown = remaining;
         this.state.multiplier = 1.0;
-        // Add last crash point to history when transitioning crashed -> waiting
-        if (r.last_crash_point && prevPhase === 'crashed') {
+
+        // Add last_crash_point to history whenever it arrives
+        if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
-          // Avoid duplicate — only add if not already first item
           if (this.state.history[0] !== bp) {
             this.state.history = [bp, ...this.state.history].slice(0, 20);
+            this.publishHistory();
           }
-        }
-        // Also capture last_crash_point on first load if history is empty
-        if (r.last_crash_point && this.state.history.length === 0) {
-          this.state.history = [Number(r.last_crash_point)];
         }
       }
 
@@ -189,6 +183,7 @@ class CrashEngine {
           const bp = this.state.bustPoint;
           if (this.state.history[0] !== bp) {
             this.state.history = [bp, ...this.state.history].slice(0, 20);
+            this.publishHistory();
           }
           this.settleBustedBets();
         } else {
@@ -206,7 +201,6 @@ class CrashEngine {
     }
   }
 
-  // Smooth animation between polls
   private animate() {
     if (this.state.phase === 'flying') {
       const elapsed = Date.now() - this.state.startedAt;
@@ -229,6 +223,12 @@ class CrashEngine {
   }
 
   private publish() { bus.emit(Topics.CrashState, this.getState()); }
+
+  // Emit history on Topics.CrashHistory so useCrashHistory hook receives updates
+  private publishHistory() {
+    bus.emit(Topics.CrashHistory, [...this.state.history]);
+  }
+
   private broadcastBets() {
     bus.emit(Topics.CrashBets, { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } });
     bus.emit(Topics.CrashTick, { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } });
