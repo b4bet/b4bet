@@ -1,24 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   TrendingUp, TrendingDown, DollarSign, Clock, Loader2, RefreshCw, Calendar,
-  Gamepad2, Gift, Plus, Minus, Banknote, Wifi, Bell, ArrowRight,
+  Gamepad2, Gift, Plus, Minus, Wifi,
 } from 'lucide-react';
 import { supabase } from '../../integrations/supabase/client';
 import { supabaseGetTransactions, supabaseGetBets, type SupabaseTransaction, type SupabaseBet } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
   return '\u20B9' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function fmtDate(s: string) {
-  return new Date(s).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
-}
-function statusChip(status: string) {
-  switch (status) {
-    case 'completed': case 'approved': return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
-    case 'processing': return 'bg-blue-500/15 text-blue-300 border-blue-500/30';
-    case 'failed': case 'cancelled': case 'rejected': return 'bg-red-500/15 text-red-300 border-red-500/30';
-    default: return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
-  }
 }
 
 type Period = 'day' | 'week' | 'month' | 'year' | 'custom';
@@ -86,9 +75,7 @@ export default function FinanceTab() {
   const adjPositive      = filteredTxns.filter((t) => t.type === 'adjustment' && t.amount > 0).reduce((s, t) => s + t.amount, 0);
   const adjNegative      = filteredTxns.filter((t) => t.type === 'adjustment' && t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
   const liveProfit       = totalDeposits - totalWithdrawals + gameProfit - bonusTotal;
-
-  const pendingTxns  = filteredTxns.filter((t) => t.status === 'pending' || t.status === 'processing');
-  const recentPending = [...pendingTxns].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 6);
+  const betVolume        = filteredBets.reduce((s, b) => s + b.bet_amount, 0);
 
   return (
     <div className="space-y-4">
@@ -157,48 +144,28 @@ export default function FinanceTab() {
         </div>
       </div>
 
-      {/* New Requests — notification only, action happens in Requests tab */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="font-bold text-white flex items-center gap-2">
-            <Bell className="w-4 h-4 text-amber-400" /> New Requests
-            {pendingCount > 0 && <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center">{pendingCount}</span>}
-          </h3>
-          <a href="#requests" className="flex items-center gap-1 text-[11px] font-semibold text-violet-300 hover:text-violet-200">
-            Go to Requests tab <ArrowRight className="w-3 h-3" />
-          </a>
+      {/* Bet volume */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard label="Bet Volume" value={fmt(betVolume)} icon={Plus} accent="text-blue-300" />
+      </div>
+
+      {/* Net Profit Formula */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-4">
+        <h3 className="text-xs font-display font-bold text-white mb-3 flex items-center gap-2">
+          <DollarSign className="w-4 h-4 text-violet-300" /> Net Profit Formula
+        </h3>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 font-mono font-bold">{fmt(totalDeposits)}</span>
+          <Minus className="w-3 h-3 text-slate-500" />
+          <span className="px-2 py-1 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 font-mono font-bold">{fmt(totalWithdrawals)}</span>
+          <Plus className="w-3 h-3 text-slate-500" />
+          <span className="px-2 py-1 rounded-lg bg-violet-500/10 border border-violet-500/20 text-violet-300 font-mono font-bold">{fmt(gameProfit)}</span>
+          <Minus className="w-3 h-3 text-slate-500" />
+          <span className="px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 font-mono font-bold">{fmt(bonusTotal)}</span>
+          <span className="text-slate-500 text-xs">=</span>
+          <span className={`px-3 py-1 rounded-lg border font-display font-extrabold text-base ${liveProfit >= 0 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-red-500/10 border-red-500/30 text-red-300'}`}>{fmt(liveProfit)}</span>
         </div>
-        {loading ? (
-          <div className="flex items-center justify-center p-8 text-slate-400 gap-2"><Loader2 className="w-5 h-5 animate-spin" /> Loading…</div>
-        ) : recentPending.length === 0 ? (
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-sm text-slate-500 text-center">No pending deposit/withdrawal requests right now.</div>
-        ) : (
-          <div className="space-y-2">
-            {recentPending.map((t) => (
-              <div key={t.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  {t.type === 'deposit'
-                    ? <Banknote className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                    : <TrendingDown className="w-4 h-4 text-red-400 flex-shrink-0" />}
-                  <div className="min-w-0">
-                    <div className="text-xs text-white font-semibold truncate">{t.type === 'deposit' ? 'Deposit' : 'Withdrawal'} request</div>
-                    <div className="text-[10px] text-slate-500 truncate">{fmtDate(t.created_at)}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${statusChip(t.status)}`}>
-                    {t.status === 'processing' && <Loader2 className="w-3 h-3 animate-spin" />}
-                    {t.status}
-                  </span>
-                  <span className="text-sm font-bold text-white tabular">{fmt(t.amount)}</span>
-                </div>
-              </div>
-            ))}
-            {pendingTxns.length > recentPending.length && (
-              <p className="text-[11px] text-slate-600 text-center">+{pendingTxns.length - recentPending.length} more waiting — see Requests tab</p>
-            )}
-          </div>
-        )}
+        <p className="text-[10px] text-slate-600 mt-2">Deposits − Withdrawals + Game Profit − Bonuses = Net Profit</p>
       </div>
 
       <p className="text-[11px] text-slate-600 text-center">Showing {filteredTxns.length} of {transactions.length} transactions</p>
