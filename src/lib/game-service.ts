@@ -8,6 +8,13 @@
 
 const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
 
+// Use whichever key is available — new projects use VITE_SUPABASE_PUBLISHABLE_KEY,
+// older projects use VITE_SUPABASE_ANON_KEY. Fall back gracefully.
+const SUPABASE_KEY: string =
+  (import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string) ||
+  (import.meta.env.VITE_SUPABASE_ANON_KEY as string) ||
+  '';
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface CrashBustResult { bust_point: number; }
@@ -57,7 +64,7 @@ export interface AviatorCurrentRoundResult {
   /**
    * UUID that identifies this specific round.
    * Used as the key for cashout/settle calls instead of the old integer round_id.
-   * null only if the table hasn't been seeded yet (edge case, treat as waiting).
+   * null only if the table hasn't been seeded yet (edge case, treat as waiting).\
    */
   round_uuid: string | null;
   /**
@@ -78,7 +85,7 @@ async function get<T>(params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams(params).toString();
   const res = await fetch(`${EDGE_FN}?${qs}`, {
     method: "GET",
-    headers: { "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY },
+    headers: { "apikey": SUPABASE_KEY },
   });
   const data = await res.json() as T & { error?: string };
   if (!res.ok || data.error) throw new Error((data as { error?: string }).error ?? "Server error");
@@ -90,7 +97,7 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+      "apikey": SUPABASE_KEY,
     },
     body: JSON.stringify(body),
   });
@@ -228,7 +235,7 @@ export const GameService = {
 
   /**
    * Legacy per-round status poll — kept for backward compat.
-   * @deprecated Prefer aviatorGetCurrentRound for new code.
+   * @deprecated Prefer aviatorGetCurrentRound for new code.\
    */
   aviatorRoundStatus(roundId: number): Promise<AviatorRoundStatusResult> {
     return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: String(roundId) });
