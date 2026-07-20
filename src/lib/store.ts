@@ -151,8 +151,6 @@ function seedLeaderboard(prefix: string): { user: string; earnings: number; ts: 
   return rows.map(r => ({ ...r, user: r.user + (prefix === 'mines' ? '\u00B7M' : '') }));
 }
 
-// All game keys whose configs live at root level in admin_config in Supabase.
-// DB structure: admin_config = { crash: {...}, aviator: {...}, wingo: {...}, ... }
 const GAME_HANDLER_KEYS = ['crash', 'aviator', 'wingo', 'k3', 'fived', 'sunvsmoon', 'trading'] as const;
 
 const DEFAULT_CRASH_HANDLER: GameHandlerConfig = {
@@ -181,14 +179,15 @@ const DEFAULT_REDEEM_CODES: Record<string, RedeemCode> = {
 };
 
 class Store {
-  balance = 0;
+  // Balance starts at -1 (sentinel) to distinguish "not loaded yet" from actual 0.
+  // UI should show a loading skeleton while balance === -1.
+  balance = -1;
   currency = '\u20B9'; // ₹
 
   notifications: NotificationItem[] = [];
 
   admin: AdminConfig = { ...DEFAULT_ADMIN_CONFIG, gameHandlers: { ...DEFAULT_ADMIN_CONFIG.gameHandlers } };
 
-  // Per-user history
   crashMyBets: CrashBetRecord[] = [];
   minesMyHistory: MinesRoundRecord[] = [];
   sunMoonHistory: SunMoonRoundRecord[] = [];
@@ -203,7 +202,6 @@ class Store {
   private balancesByUser: Record<string, number> = {};
   private static BALANCES_KEY = 'b4bet.balances';
 
-  // Supabase realtime channel for the logged-in user's profile row
   private userBalanceChannel: RealtimeChannel | null = null;
 
   signupBonus = 100;
@@ -233,9 +231,11 @@ class Store {
           ? await supabase.from('profiles').select('balance').eq('id', session.userId).single()
           : await supabase.from('profiles').select('balance').eq('username', session.username).single();
         if (profile) {
-          this.balance = (profile as { balance: number }).balance || 0;
+          this.balance = (profile as { balance: number }).balance ?? 0;
         } else if (profileErr) {
           console.warn('[store] failed to load profile balance:', profileErr.message);
+          // On error, fall back to 0 so UI doesn't hang on loading state forever
+          this.balance = 0;
         }
         bus.emit(Topics.Balance, this.balance);
 
@@ -273,17 +273,15 @@ class Store {
 
   // ---- Balance ----
   private restoreBalances() {
+    // Do NOT restore balance from localStorage on startup — it can be stale and show
+    // wrong numbers (e.g. "4") before Supabase profile loads.
+    // Balance is always fetched fresh from Supabase on auth state change.
+    // We still persist balancesByUser so creditUser() can update the right slot.
     try {
       const raw = localStorage.getItem(Store.BALANCES_KEY);
       if (raw) this.balancesByUser = JSON.parse(raw);
     } catch { /* ignore */ }
-    try {
-      const session = auth.getSession();
-      if (session) {
-        const key = session.username.toLowerCase();
-        this.balance = this.balancesByUser[key] ?? 0;
-      }
-    } catch { /* ignore */ }
+    // balance stays -1 (loading sentinel) until Supabase auth resolves
   }
 
   private persistBalances() {
@@ -337,7 +335,7 @@ class Store {
     bus.emit(Topics.Balance, this.balance);
   }
 
-  credit(amount: number) { this.setBalance(this.balance + amount); }
+  credit(amount: number) { this.setBalance(Math.max(0, this.balance) + amount); }
 
   debit(amount: number): boolean {
     if (!auth.getSession()) {
@@ -364,19 +362,7 @@ class Store {
     bus.emit(Topics.Notification, this.notifications);
   }
 
-  // ---- Admin Config (Supabase-persisted) ----
-  //
-  // DB structure for admin_config:
-  //   { crash: { mode, houseEdge, manualCrashPoint, ... },
-  //     aviator: { ... }, wingo: { ... }, ... ,
-  //     minBet, maxBet, perGameLimits, gameHandlers, ... }
-  //
-  // Game handler configs are stored BOTH at root level (e.g. admin_config.crash)
-  // AND inside gameHandlers (e.g. admin_config.gameHandlers.crash).
-  // Root-level game keys are what the Edge Function reads.
-  // gameHandlers is what the frontend reads via useAdminConfig().
-  // Both are kept in sync on every save.
-  //
+  // ---- Admin Config ----
   async loadAdminConfigFromSupabase() {
     try {
       const { data } = await supabase.rpc('admin_get_settings');
@@ -386,14 +372,11 @@ class Store {
         if (row?.value && typeof row.value === 'object') {
           const loaded = row.value as Record<string, unknown>;
 
-          // Start from defaults
           this.admin = { ...DEFAULT_ADMIN_CONFIG, gameHandlers: { ...DEFAULT_ADMIN_CONFIG.gameHandlers } };
 
-          // Apply top-level non-game fields
           const { gameHandlers: _gh, ...topLevel } = loaded;
           Object.assign(this.admin, topLevel);
 
-          // Apply gameHandlers from the gameHandlers key (if present)
           if (_gh && typeof _gh === 'object') {
             const gh = _gh as Record<string, unknown>;
             for (const key of Object.keys(gh)) {
@@ -406,9 +389,6 @@ class Store {
             }
           }
 
-          // Also check root-level game keys — DB stores them there (Edge Function reads from here).
-          // Root-level values WIN over gameHandlers if both present, since root is what gets
-          // written by setGameHandler and read by the Edge Function.
           for (const key of GAME_HANDLER_KEYS) {
             const rootVal = loaded[key];
             if (rootVal && typeof rootVal === 'object') {
@@ -431,8 +411,6 @@ class Store {
     void this._persistAdminConfig();
   }
 
-  // Build the DB payload: all standard fields + game handler configs hoisted to root level
-  // (so the Edge Function can read adminConfig['crash'] directly) + gameHandlers key.
   private _buildDbPayload(): Record<string, unknown> {
     const payload: Record<string, unknown> = {
       mode: this.admin.mode,
@@ -446,7 +424,6 @@ class Store {
       perGameLimits: this.admin.perGameLimits,
       gameHandlers: this.admin.gameHandlers,
     };
-    // Hoist each game handler to root level so Edge Function reads it correctly
     for (const key of GAME_HANDLER_KEYS) {
       const handler = this.admin.gameHandlers[key];
       if (handler) payload[key] = handler;
@@ -485,9 +462,7 @@ class Store {
     const current = this.getGameHandler(gameKey);
     const updated = { ...current, ...patch };
     const nextHandlers = { ...this.admin.gameHandlers, [gameKey]: updated };
-    // Update in-memory state (includes gameHandlers + root-level fields for crash)
     this.admin = { ...this.admin, gameHandlers: nextHandlers };
-    // Keep legacy root-level crash fields in sync for any code still reading them
     if (gameKey === 'crash') {
       if (patch.mode !== undefined) this.admin.mode = patch.mode;
       if (patch.manualCrashPoint !== undefined) this.admin.manualCrashPoint = patch.manualCrashPoint;
@@ -495,7 +470,6 @@ class Store {
       if (patch.targetWinProbability !== undefined) this.admin.targetWinProbability = patch.targetWinProbability;
     }
     bus.emit(Topics.AdminConfig, this.admin);
-    // Persist — game handler is hoisted to root level in the DB payload
     void this._persistAdminConfig();
   }
 
@@ -551,7 +525,6 @@ class Store {
     return rows.slice(0, 200);
   }
 
-  // ---- Bet Recording ----
   recordCrashBet(rec: Omit<CrashBetRecord, 'id' | 'ts'>) {
     const item: CrashBetRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.crashMyBets = [item, ...this.crashMyBets].slice(0, 100);
@@ -608,7 +581,7 @@ class Store {
     }).then(() => {}).catch(() => {});
   }
 
-  // ---- Redeem Codes (Supabase-persisted) ----
+  // ---- Redeem Codes ----
   async loadRedeemCodesFromSupabase() {
     try {
       const { data } = await supabase.rpc('admin_get_settings');
@@ -676,7 +649,7 @@ class Store {
     }));
   }
 
-  // ---- Signup Bonus (Supabase-backed grant tracking) ----
+  // ---- Signup Bonus ----
   private restoreSignupBonus() {
     try {
       const b = localStorage.getItem(Store.SIGNUP_BONUS_KEY);
@@ -714,8 +687,7 @@ class Store {
     this.persistSignupBonus();
     bus.emit(Topics.SignupBonus, { amount: this.signupBonus, history: this.signupBonusHistory });
     void supabase.rpc('admin_update_setting', { p_key: 'signup_bonus', p_value: this.signupBonus as unknown as string })
-      .then(() => {})
-      .catch(() => {});
+      .then(() => {}).catch(() => {});
   }
 
   async grantSignupBonusAsync(userId: string, username: string, ip?: string): Promise<number> {
@@ -778,9 +750,6 @@ class Store {
 
 export const store = new Store();
 
-/**
- * Compute a simulated next-round outcome for admin preview.
- */
 export function computeAutoOutcome(
   gameKey: string,
   config: { targetWinProbability: number; houseEdge: number },
