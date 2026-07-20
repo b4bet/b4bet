@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Banknote, TrendingDown, CheckCircle2, XCircle, Clock, Loader2,
-  FileText, Search, Calendar, RefreshCw,
+  FileText, Search, Calendar, RefreshCw, History,
 } from 'lucide-react';
 import { cms } from '../../lib/cms';
-import { supabaseGetTransactions, type SupabaseTransaction } from '../../lib/supabaseIntegration';
+import { supabaseGetTransactions, supabaseGetUsers, type SupabaseTransaction, type SupabaseProfile } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
   return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -34,6 +34,7 @@ const MS: Record<string, number> = { day: 86400000, week: 604800000, month: 2592
 
 export default function RequestsTab() {
   const [transactions, setTransactions] = useState<SupabaseTransaction[]>([]);
+  const [profiles, setProfiles]         = useState<SupabaseProfile[]>([]);
   const [loading, setLoading]           = useState(true);
   const [view, setView]                 = useState<'deposit' | 'withdrawal'>('deposit');
   const [query, setQuery]               = useState('');
@@ -47,9 +48,19 @@ export default function RequestsTab() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setTransactions(await supabaseGetTransactions()); }
-    finally { setLoading(false); }
+    try {
+      const [txns, users] = await Promise.all([supabaseGetTransactions(), supabaseGetUsers()]);
+      setTransactions(txns);
+      setProfiles(users);
+    } finally { setLoading(false); }
   }, []);
+
+  // user_id (uuid) -> 6-digit account_id lookup
+  const accountIdMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of profiles) if (p.id && p.account_id) map[p.id] = p.account_id;
+    return map;
+  }, [profiles]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -67,11 +78,16 @@ export default function RequestsTab() {
     if (ts < cutoff || ts > endCutoff) return false;
     if (!query.trim()) return true;
     const q = query.toLowerCase();
-    return (t.user_id ?? '').toLowerCase().includes(q) || t.id.toLowerCase().includes(q) || t.status.toLowerCase().includes(q) || String(t.amount).includes(q);
-  }), [transactions, view, cutoff, endCutoff, query]);
+    const acc = t.user_id ? (accountIdMap[t.user_id] ?? '') : '';
+    return (t.user_id ?? '').toLowerCase().includes(q) || acc.toLowerCase().includes(q) || t.id.toLowerCase().includes(q) || t.status.toLowerCase().includes(q) || String(t.amount).includes(q);
+  }), [transactions, view, cutoff, endCutoff, query, accountIdMap]);
 
   const pendingDep = transactions.filter((t) => t.type === 'deposit'    && (t.status === 'pending' || t.status === 'processing')).length;
   const pendingWd  = transactions.filter((t) => t.type === 'withdrawal' && (t.status === 'pending' || t.status === 'processing')).length;
+
+  // Needs action vs finalized (read-only history)
+  const queueItems   = useMemo(() => filtered.filter((t) => t.status === 'pending' || t.status === 'processing'), [filtered]);
+  const historyItems = useMemo(() => filtered.filter((t) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'), [filtered]);
 
   // ── Actions: go through cms so user gets notification + realtime bell update ──
   const handleAccept = async (id: string) => {
@@ -190,7 +206,7 @@ export default function RequestsTab() {
           className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-9 pr-4 py-2 text-sm text-white outline-none" />
       </div>
 
-      {/* Cards */}
+      {/* Split: items needing action vs finalized history */}
       {loading ? (
         <div className="flex items-center justify-center p-10 text-slate-400 gap-2"><Loader2 className="w-5 h-5 animate-spin" /> Loading from Supabase…</div>
       ) : filtered.length === 0 ? (
@@ -199,66 +215,104 @@ export default function RequestsTab() {
           No {view} requests in this period.
         </div>
       ) : (
-        <div className="space-y-2">
-          {filtered.map((t) => {
-            const { cls, label } = statusChip(t.status);
-            const isActing   = acting?.id === t.id;
-            const isTerminal = t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled';
-            const meta       = localMeta[t.id];
-            return (
-              <div key={t.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-sm text-white font-semibold font-mono truncate">{(t.user_id ?? '—').slice(0, 14)}…</div>
-                    <div className="text-[10px] text-slate-500 truncate">{t.reference ?? t.id.slice(0, 10)} · {fmtDate(t.created_at)}</div>
-                  </div>
-                  <div className="text-sm font-bold text-white tabular flex-shrink-0">{fmt(t.amount)}</div>
-                </div>
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}>
-                    {t.status === 'processing' && <Loader2 className="w-3 h-3 animate-spin" />}
-                    {label}
-                  </span>
-                  {!isTerminal && updatingId !== t.id && (
-                    <div className="flex gap-1.5">
-                      {t.status === 'pending' && (
-                        <button onClick={() => void handleAccept(t.id)} className="px-3 py-1.5 rounded-lg bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-semibold hover:text-blue-200">Accept</button>
-                      )}
-                      {t.status === 'processing' && (
-                        <button onClick={() => { setActing({ id: t.id, mode: 'accept' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold hover:text-emerald-200">Approve (UTR)</button>
-                      )}
-                      <button onClick={() => { setActing({ id: t.id, mode: 'reject' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/40 text-red-300 text-[10px] font-semibold hover:text-red-200">Reject</button>
-                    </div>
-                  )}
-                  {updatingId === t.id && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
-                </div>
-                {isActing && (
-                  <div className="flex items-center gap-2">
-                    <input type="text" value={inputVal} onChange={(e) => setInputVal(e.target.value)}
-                      placeholder={acting?.mode === 'accept' ? 'UTR / Transaction ID (required)' : 'Reason (optional)'}
-                      className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none" autoFocus />
-                    <button onClick={() => void handleSubmit()} className="px-3 py-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Save
-                    </button>
-                    <button onClick={clearAct} className="px-2 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-white">
-                      <XCircle className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
-                {(meta?.utr || meta?.reason) && (
-                  <div className="text-[11px] space-y-1">
-                    {meta.utr && <div className="text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-2 py-1 flex items-center gap-1"><FileText className="w-3 h-3" /> UTR: <span className="font-mono">{meta.utr}</span></div>}
-                    {meta.reason && <div className="text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-2 py-1 flex items-center gap-1"><XCircle className="w-3 h-3" /> {meta.reason}</div>}
-                  </div>
-                )}
+        <>
+          {/* Pending Actions — needs admin action */}
+          <div>
+            <h3 className="text-xs font-bold text-amber-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5" /> Pending Actions ({queueItems.length})
+            </h3>
+            {queueItems.length === 0 ? (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-xs text-slate-500 text-center">Nothing waiting on you right now.</div>
+            ) : (
+              <div className="space-y-2">
+                {queueItems.map((t) => renderCard(t, true))}
               </div>
-            );
-          })}
-        </div>
+            )}
+          </div>
+
+          {/* History — finalized, read-only */}
+          <div>
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <History className="w-3.5 h-3.5" /> History ({historyItems.length})
+            </h3>
+            {historyItems.length === 0 ? (
+              <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-xs text-slate-500 text-center">No finalized {view} requests in this period.</div>
+            ) : (
+              <div className="space-y-2">
+                {historyItems.map((t) => renderCard(t, false))}
+              </div>
+            )}
+          </div>
+        </>
       )}
       <p className="text-[11px] text-slate-600 text-center">{filtered.length} {view} request{filtered.length !== 1 ? 's' : ''} shown</p>
     </div>
   );
+
+  function renderCard(t: SupabaseTransaction, showActions: boolean) {
+    const { cls, label } = statusChip(t.status);
+    const isActing   = acting?.id === t.id;
+    const isTerminal = t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled';
+    const meta       = localMeta[t.id];
+    const txnMeta    = (t.metadata as Record<string, unknown>) ?? {};
+    const accountId  = t.user_id ? (accountIdMap[t.user_id] ?? '—') : '—';
+    const method     = t.type === 'deposit'
+      ? ((txnMeta.method as string) || 'Manual')
+      : ((txnMeta.destination as string) || (txnMeta.upi_id as string) || '—');
+    const utr        = meta?.utr || (txnMeta.utr as string | undefined);
+    return (
+      <div key={t.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-sm text-white font-semibold font-mono truncate">ID: {accountId}</div>
+            <div className="text-[10px] text-slate-500 truncate">{fmtDate(t.created_at)} · {method}</div>
+          </div>
+          <div className="text-sm font-bold text-white tabular flex-shrink-0">{fmt(t.amount)}</div>
+        </div>
+        {utr && (
+          <div className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-2 py-1 flex items-center gap-1">
+            <FileText className="w-3 h-3" /> UTR: <span className="font-mono">{utr}</span>
+          </div>
+        )}
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}>
+            {t.status === 'processing' && <Loader2 className="w-3 h-3 animate-spin" />}
+            {label}
+          </span>
+          {showActions && !isTerminal && updatingId !== t.id && (
+            <div className="flex gap-1.5">
+              {t.status === 'pending' && (
+                <button onClick={() => void handleAccept(t.id)} className="px-3 py-1.5 rounded-lg bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-semibold hover:text-blue-200">Accept</button>
+              )}
+              {t.status === 'processing' && (
+                <button onClick={() => { setActing({ id: t.id, mode: 'accept' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold hover:text-emerald-200">Approve (UTR)</button>
+              )}
+              <button onClick={() => { setActing({ id: t.id, mode: 'reject' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/40 text-red-300 text-[10px] font-semibold hover:text-red-200">Reject</button>
+            </div>
+          )}
+          {updatingId === t.id && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+        </div>
+        {showActions && isActing && (
+          <div className="flex items-center gap-2">
+            <input type="text" value={inputVal} onChange={(e) => setInputVal(e.target.value)}
+              placeholder={acting?.mode === 'accept' ? 'UTR / Transaction ID (required)' : 'Reason (optional)'}
+              className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none" autoFocus />
+            <button onClick={() => void handleSubmit()} className="px-3 py-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Save
+            </button>
+            <button onClick={clearAct} className="px-2 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-white">
+              <XCircle className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+        {meta?.reason && (
+          <div className="text-[11px] text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-2 py-1 flex items-center gap-1">
+            <XCircle className="w-3 h-3" /> {meta.reason}
+          </div>
+        )}
+      </div>
+    );
+  }
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
