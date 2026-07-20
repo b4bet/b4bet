@@ -15,18 +15,36 @@ function secureRandom(): number {
   return buf[0] / 0xFFFFFFFF;
 }
 
+/**
+ * generateBustPoint — fixed formula allowing full 1x–200x range.
+ *
+ * targetWinProb  : % of rounds that survive past 1.00x  (e.g. 55 → 55%)
+ * houseEdge      : house edge %                          (e.g. 5  → 5%)
+ *
+ * Distribution: p fraction of rounds go above 1x.
+ * For surviving rounds, crash point follows 1/(1-v)*(1-edge)
+ * → gives correct heavy-tail distribution (2x common, 50x rare, 200x very rare)
+ */
 function generateBustPoint(targetWinProb: number, houseEdge: number): number {
-  const p = Math.min(99, Math.max(1, targetWinProb)) / 100;
   const edge = Math.max(0.01, houseEdge / 100);
-  const instantBust = secureRandom() < (1 - p) * 0.12;
-  if (instantBust) return 1.00;
+  const p = Math.min(0.99, Math.max(0.01, targetWinProb / 100));
+
   const u = secureRandom();
-  const raw = 1 / (1 - u * p) * (1 - edge);
+  // (1-p) fraction of rounds instant-bust at 1.00x
+  if (u > p) return 1.00;
+
+  // For surviving rounds use inverse-CDF of Pareto-like distribution
+  const v = secureRandom();
+  // v must be < 1 − (1/200) ≈ 0.995 to stay within 200x cap after edge scaling
+  const vCapped = Math.min(v, 1 - 1 / (200 / (1 - edge) + 1));
+  const raw = (1 / (1 - vCapped)) * (1 - edge);
   return Math.min(200, Math.max(1.01, parseFloat(raw.toFixed(2))));
 }
 
 const AV_WAIT_MS       = 6_000;
 const AV_CRASH_HOLD_MS = 3_000;
+// Grace period for cashout: allow cashout up to 800ms after crash phase starts
+const AV_CASHOUT_GRACE_MS = 800;
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -124,7 +142,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ── AVIATOR: Get current round / round status ────────────────────────────
+    // ── AVIATOR: Get current round / round status ───────────────────────────
     if (action === "aviator_get_current_round" || action === "aviator_round_status") {
       const { data: r } = await supabase
         .from("aviator_current_round").select("*").eq("id", 1).single();
@@ -137,7 +155,7 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // ── AVIATOR: Place bet ───────────────────────────────────────────────────
+    // ── AVIATOR: Place bet ──────────────────────────────────────────────────
     if (action === "aviator_place_bet") {
       const { user_id, bet_amount, round_uuid } = body;
       if (!user_id || !bet_amount || (bet_amount as number) <= 0)
@@ -163,22 +181,31 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, bet_id: bet?.id });
     }
 
-    // ── AVIATOR: Cash out ────────────────────────────────────────────────────
+    // ── AVIATOR: Cash out ──────────────────────────────────────────────────
     if (action === "aviator_cashout") {
       const { user_id, bet_id, cashout_multiplier, round_uuid, round_id } = body;
       if (!user_id || !cashout_multiplier)
         return json({ error: "Missing params" }, 400);
 
       const { data: round } = await supabase
-        .from("aviator_current_round").select("phase, crash_point, round_uuid").eq("id", 1).single();
+        .from("aviator_current_round")
+        .select("phase, crash_point, round_uuid, phase_started_at")
+        .eq("id", 1).single();
 
-      if (!round || round.phase !== "flying")
+      // Allow cashout if flying, OR if crashed but within grace window (race-condition safety)
+      const phaseElapsed = round ? Date.now() - new Date(round.phase_started_at).getTime() : Infinity;
+      const canCashout = round && (
+        round.phase === "flying" ||
+        (round.phase === "crashed" && phaseElapsed < AV_CASHOUT_GRACE_MS)
+      );
+
+      if (!canCashout)
         return json({ error: "Cannot cashout now", phase: round?.phase }, 400);
 
       if (round.crash_point && (cashout_multiplier as number) > Number(round.crash_point))
         return json({ error: "Crashed before cashout", bustPoint: round.crash_point }, 400);
 
-      // Find bet by bet_id, then by round_uuid, then by round_id
+      // Find bet by bet_id, or by round_uuid match, or by round_id
       let betData: Record<string, unknown> | null = null;
       if (bet_id) {
         const { data } = await supabase.from("bets").select("*").eq("id", bet_id as string).eq("user_id", user_id as string).eq("status", "pending").single();
@@ -191,6 +218,12 @@ Deno.serve(async (req: Request) => {
       }
       if (!betData && round_id) {
         const { data } = await supabase.from("bets").select("*").eq("user_id", user_id as string).eq("status", "pending").eq("round_id", String(round_id)).maybeSingle();
+        betData = data;
+      }
+      // Last resort: find any pending bet for this user in this round by round_uuid
+      if (!betData) {
+        const rv = round.round_uuid;
+        const { data } = await supabase.from("bets").select("*").eq("user_id", user_id as string).eq("status", "pending").eq("round_id", rv).maybeSingle();
         betData = data;
       }
 
@@ -212,7 +245,7 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, win_amount, multiplier: cashout_multiplier, bustPoint: round.crash_point });
     }
 
-    // ── AVIATOR: Settle lost bets ────────────────────────────────────────────
+    // ── AVIATOR: Settle lost bets ───────────────────────────────────────────
     if (action === "aviator_settle_lost" || action === "aviator_settle") {
       const { round_uuid, user_id } = body;
       let q = supabase.from("bets").update({ status: "lost", resolved_at: new Date().toISOString() }).eq("status", "pending");
@@ -222,7 +255,7 @@ Deno.serve(async (req: Request) => {
       return json({ success: true });
     }
 
-    // ── CRASH: Get bust point for round (called at round start) ──────────────
+    // ── CRASH: Get bust point for round (called at round start by crashEngine) ──
     if (action === "crash_get_bust") {
       const { round_id } = body;
       const cfg = await getGameAdminConfig("crash");
@@ -243,7 +276,7 @@ Deno.serve(async (req: Request) => {
       return json({ bustPoint, round_id });
     }
 
-    // ── CRASH: Place bet ─────────────────────────────────────────────────────
+    // ── CRASH: Place bet ──────────────────────────────────────────────────────
     if (action === "crash_place_bet") {
       const { user_id, bet_amount, cashout_at, round_id } = body;
       if (!user_id || !bet_amount || !cashout_at)
@@ -275,7 +308,7 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, won, bustPoint, win_amount });
     }
 
-    // ── ADMIN: Preview next round ────────────────────────────────────────────
+    // ── ADMIN: Preview next round ───────────────────────────────────────────────
     if (action === "admin_preview_next_round") {
       const { game } = body;
       const gameKey = (game as string) ?? "aviator";
@@ -287,7 +320,7 @@ Deno.serve(async (req: Request) => {
       return json({ mode: cfg.mode, preview: samples[0], samples, gameKey });
     }
 
-    // ── WINGO / K3 / 5D / SunVsMoon: Place bet ──────────────────────────────
+    // ── WINGO / K3 / 5D / SunVsMoon: Place bet ───────────────────────────────
     if (action === "place_bet") {
       const { user_id, game_slug, bet_amount, bet_details, round_id } = body;
       if (!user_id || !game_slug || !bet_amount)
