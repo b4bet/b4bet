@@ -54,6 +54,11 @@ interface EngineState {
 }
 
 const POLL_MS = 300;
+// SessionStorage key — survives page refresh within the same browser tab.
+// We store the last known round_uuid so that on refresh the first poll does
+// NOT incorrectly treat the current (unchanged) round as a "new" round.
+const SESSION_ROUND_KEY = 'b4bet.crash.lastRoundId';
+const SESSION_PHASE_KEY = 'b4bet.crash.lastPhase';
 
 function freshBet(id: 'A' | 'B'): BetSlot {
   return { id, amount: 100, placed: false, autoCashAt: null, cashedOutAt: null, cashedOut: false, win: null };
@@ -89,8 +94,10 @@ class CrashEngine {
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private rafId: number = 0;
-  private lastKnownRoundId = '';
-  private lastKnownPhase: 'waiting' | 'flying' | 'crashed' | '' = '';
+  // Restored from sessionStorage so refresh doesn't look like a new round
+  private lastKnownRoundId: string = sessionStorage.getItem(SESSION_ROUND_KEY) ?? '';
+  private lastKnownPhase: 'waiting' | 'flying' | 'crashed' | '' =
+    (sessionStorage.getItem(SESSION_PHASE_KEY) as 'waiting' | 'flying' | 'crashed' | '') ?? '';
   private didPlayStart = false;
   private didPlayCrash = false;
 
@@ -108,7 +115,6 @@ class CrashEngine {
     cancelAnimationFrame(this.rafId);
   }
 
-  // Load last 20 crash points from server on startup
   private async loadHistory() {
     try {
       const r = await GameService.crashGetHistory();
@@ -130,6 +136,8 @@ class CrashEngine {
 
       if (newRound) {
         this.lastKnownRoundId = r.round_uuid ?? '';
+        // Persist so next refresh doesn't re-trigger this
+        try { sessionStorage.setItem(SESSION_ROUND_KEY, this.lastKnownRoundId); } catch { /* ignore */ }
         this.state.bets = { A: freshBet('A'), B: freshBet('B') };
         this.state.win = null;
         this.state.roundId = r.round_uuid ?? '';
@@ -141,6 +149,7 @@ class CrashEngine {
 
       const prevPhase = this.lastKnownPhase;
       this.lastKnownPhase = r.phase;
+      try { sessionStorage.setItem(SESSION_PHASE_KEY, r.phase); } catch { /* ignore */ }
 
       if (r.phase === 'waiting') {
         const waitTotal = 6000;
@@ -149,7 +158,6 @@ class CrashEngine {
         this.state.countdown = remaining;
         this.state.multiplier = 1.0;
 
-        // Add last_crash_point to history whenever it arrives
         if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
           if (this.state.history[0] !== bp) {
@@ -160,13 +168,20 @@ class CrashEngine {
       }
 
       if (r.phase === 'flying') {
+        // On refresh into a mid-flight round: prevPhase restored from sessionStorage
+        // will already be 'flying', so we skip the re-init and just sync time.
         if (prevPhase !== 'flying') {
           this.state.phase = 'flying';
           this.state.serverElapsedAtConnect = r.elapsed_ms;
           this.state.connectTime = Date.now();
+          // Sync multiplier to server elapsed so animation starts from correct position
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.bustPoint = 0;
-          if (!this.didPlayStart) { playStartSound(); this.didPlayStart = true; }
+          // Don't play start sound on refresh — only on genuine new round start
+          if (!this.didPlayStart && !this.lastKnownRoundId) {
+            playStartSound();
+            this.didPlayStart = true;
+          }
         }
         this.state.phase = 'flying';
         this.state.countdown = 0;
@@ -179,7 +194,6 @@ class CrashEngine {
           this.state.bustPoint = r.crash_point ?? this.state.multiplier;
           this.state.multiplier = this.state.bustPoint;
           if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
-          // Add to history immediately on crash
           const bp = this.state.bustPoint;
           if (this.state.history[0] !== bp) {
             this.state.history = [bp, ...this.state.history].slice(0, 20);
@@ -224,7 +238,6 @@ class CrashEngine {
 
   private publish() { bus.emit(Topics.CrashState, this.getState()); }
 
-  // Emit history on Topics.CrashHistory so useCrashHistory hook receives updates
   private publishHistory() {
     bus.emit(Topics.CrashHistory, [...this.state.history]);
   }
@@ -261,7 +274,6 @@ class CrashEngine {
     this.broadcastBets();
   }
 
-  // Public API
   placeBet(id: 'A' | 'B', amount: number): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (this.state.phase !== 'countdown') return { ok: false, reason: 'Round not in betting phase' };
