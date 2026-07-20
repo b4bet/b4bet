@@ -1,4 +1,4 @@
-// process-bet — Supabase Edge Function v4
+// process-bet — Supabase Edge Function v5
 // Supports GET (query params) + POST (JSON body)
 // Supports both 'action' and 'game_type' fields
 
@@ -16,35 +16,29 @@ function secureRandom(): number {
 }
 
 /**
- * generateBustPoint — fixed formula allowing full 1x–200x range.
- *
- * targetWinProb  : % of rounds that survive past 1.00x  (e.g. 55 → 55%)
- * houseEdge      : house edge %                          (e.g. 5  → 5%)
- *
- * Distribution: p fraction of rounds go above 1x.
- * For surviving rounds, crash point follows 1/(1-v)*(1-edge)
- * → gives correct heavy-tail distribution (2x common, 50x rare, 200x very rare)
+ * generateBustPoint — proper heavy-tail distribution.
+ * targetWinProb 55 means ~55% of rounds go above 1.00x
+ * Crash range: 1.00x to 200x
  */
 function generateBustPoint(targetWinProb: number, houseEdge: number): number {
   const edge = Math.max(0.01, houseEdge / 100);
   const p = Math.min(0.99, Math.max(0.01, targetWinProb / 100));
 
+  // (1-p) fraction instant bust at 1.00x
   const u = secureRandom();
-  // (1-p) fraction of rounds instant-bust at 1.00x
   if (u > p) return 1.00;
 
-  // For surviving rounds use inverse-CDF of Pareto-like distribution
+  // Surviving rounds: inverse-CDF gives 1x–200x heavy tail
   const v = secureRandom();
-  // v must be < 1 − (1/200) ≈ 0.995 to stay within 200x cap after edge scaling
   const vCapped = Math.min(v, 1 - 1 / (200 / (1 - edge) + 1));
   const raw = (1 / (1 - vCapped)) * (1 - edge);
   return Math.min(200, Math.max(1.01, parseFloat(raw.toFixed(2))));
 }
 
-const AV_WAIT_MS       = 6_000;
-const AV_CRASH_HOLD_MS = 3_000;
-// Grace period for cashout: allow cashout up to 800ms after crash phase starts
-const AV_CASHOUT_GRACE_MS = 800;
+// Aviator timing constants
+const AV_WAIT_MS       = 6_000;   // 6 s betting window
+const AV_CRASH_HOLD_MS = 3_000;   // 3 s show crash result
+const AV_CASHOUT_GRACE_MS = 800;  // 0.8 s race-condition grace
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
@@ -54,7 +48,6 @@ Deno.serve(async (req: Request) => {
   const supabase    = createClient(supabaseUrl, serviceKey);
 
   try {
-    // Parse body: GET uses query params, POST uses JSON body
     let body: Record<string, unknown> = {};
     if (req.method === "GET") {
       const url = new URL(req.url);
@@ -63,7 +56,6 @@ Deno.serve(async (req: Request) => {
       try { body = await req.json(); } catch { body = {}; }
     }
 
-    // Support both 'action' and 'game_type' fields
     const action: string = (body.action as string) ?? (body.game_type as string) ?? "";
 
     const json = (data: unknown, status = 200) =>
@@ -86,23 +78,31 @@ Deno.serve(async (req: Request) => {
       };
     }
 
-    // ── AVIATOR: Round lifecycle ───────────────────────────────────────────────
-    if (action === "aviator_game_loop") {
-      const { data: rows } = await supabase
+    // ====================================================================
+    // AVIATOR: Get current round (also advances phase if needed)
+    // This is the main polling endpoint — clients call this every ~300ms.
+    // It both reads AND advances the game state, so no separate game_loop
+    // scheduler is needed.
+    // ====================================================================
+    if (action === "aviator_get_current_round" || action === "aviator_round_status" || action === "aviator_game_loop") {
+      const { data: r } = await supabase
         .from("aviator_current_round").select("*").eq("id", 1).single();
 
-      if (!rows) {
+      // First ever run: create the row
+      if (!r) {
         await supabase.from("aviator_current_round").insert({
           id: 1, phase: "waiting",
           phase_started_at: new Date().toISOString(),
           crash_point: null, elapsed_ms: 0,
+          round_uuid: crypto.randomUUID(),
         });
         return json({ phase: "waiting", elapsed_ms: 0, crash_point: null });
       }
 
-      const r = rows;
-      const elapsed = Date.now() - new Date(r.phase_started_at).getTime();
+      const now = Date.now();
+      const elapsed = now - new Date(r.phase_started_at).getTime();
 
+      // ── WAITING → FLYING (after 6 s)
       if (r.phase === "waiting" && elapsed >= AV_WAIT_MS) {
         const cfg = await getGameAdminConfig("aviator");
         const bustPoint = cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01
@@ -110,52 +110,77 @@ Deno.serve(async (req: Request) => {
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
         const newUuid = crypto.randomUUID();
         await supabase.from("aviator_current_round").update({
-          phase: "flying", phase_started_at: new Date().toISOString(),
-          crash_point: bustPoint, elapsed_ms: 0, round_uuid: newUuid,
+          phase: "flying",
+          phase_started_at: new Date().toISOString(),
+          crash_point: bustPoint,
+          elapsed_ms: 0,
+          round_uuid: newUuid,
         }).eq("id", 1);
-        return json({ phase: "flying", elapsed_ms: 0, crash_point: null, round_uuid: newUuid });
+        return json({ phase: "flying", elapsed_ms: 0, crash_point: null, round_uuid: newUuid, just_transitioned: true });
       }
 
-      if (r.phase === "flying") {
-        const flightDuration = r.crash_point ? Math.log(Number(r.crash_point)) * 6000 : 99999;
+      // ── FLYING → CRASHED (when flight duration reached)
+      if (r.phase === "flying" && r.crash_point) {
+        // Flight duration: plane flies for log(crashPoint)*6000 ms
+        const flightDuration = Math.log(Number(r.crash_point)) * 6000;
         if (elapsed >= flightDuration) {
           await supabase.from("aviator_current_round").update({
-            phase: "crashed", phase_started_at: new Date().toISOString(),
-            last_crash_point: r.crash_point, elapsed_ms: 0,
+            phase: "crashed",
+            phase_started_at: new Date().toISOString(),
+            last_crash_point: r.crash_point,
+            elapsed_ms: 0,
           }).eq("id", 1);
-          return json({ phase: "crashed", elapsed_ms: 0, crash_point: r.crash_point, last_crash_point: r.crash_point, round_uuid: r.round_uuid });
+          // Settle all pending bets for this round as lost
+          if (r.round_uuid) {
+            await supabase.from("bets")
+              .update({ status: "lost", resolved_at: new Date().toISOString() })
+              .eq("status", "pending")
+              .filter("bet_details->>round_uuid", "eq", r.round_uuid);
+            await supabase.from("bets")
+              .update({ status: "lost", resolved_at: new Date().toISOString() })
+              .eq("status", "pending")
+              .eq("round_id", r.round_uuid);
+          }
+          return json({ phase: "crashed", elapsed_ms: 0, crash_point: r.crash_point, last_crash_point: r.crash_point, round_uuid: r.round_uuid, just_transitioned: true });
         }
       }
 
-      if (r.phase === "crashed" && elapsed >= AV_CRASH_HOLD_MS) {
+      // ── FLYING but crash_point null = bad state, fix it
+      if (r.phase === "flying" && !r.crash_point) {
+        const cfg = await getGameAdminConfig("aviator");
+        const bustPoint = generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
         await supabase.from("aviator_current_round").update({
-          phase: "waiting", phase_started_at: new Date().toISOString(),
-          crash_point: null, elapsed_ms: 0, round_uuid: crypto.randomUUID(),
+          crash_point: bustPoint,
+          phase_started_at: new Date().toISOString(),
+          elapsed_ms: 0,
         }).eq("id", 1);
-        return json({ phase: "waiting", elapsed_ms: 0, crash_point: null, last_crash_point: r.crash_point ?? r.last_crash_point, round_uuid: r.round_uuid });
+        return json({ phase: "flying", elapsed_ms: 0, crash_point: null, round_uuid: r.round_uuid });
       }
 
+      // ── CRASHED → WAITING (after 3 s hold)
+      if (r.phase === "crashed" && elapsed >= AV_CRASH_HOLD_MS) {
+        const newUuid = crypto.randomUUID();
+        await supabase.from("aviator_current_round").update({
+          phase: "waiting",
+          phase_started_at: new Date().toISOString(),
+          crash_point: null,
+          elapsed_ms: 0,
+          round_uuid: newUuid,
+        }).eq("id", 1);
+        return json({ phase: "waiting", elapsed_ms: 0, crash_point: null, last_crash_point: r.crash_point ?? r.last_crash_point, round_uuid: newUuid, just_transitioned: true });
+      }
+
+      // ── No transition needed: return current state
       return json({
-        phase: r.phase, elapsed_ms: elapsed, round_uuid: r.round_uuid,
+        phase: r.phase,
+        elapsed_ms: elapsed,
+        round_uuid: r.round_uuid,
         last_crash_point: r.last_crash_point,
         crash_point: r.phase === "crashed" ? r.crash_point : null,
       });
     }
 
-    // ── AVIATOR: Get current round / round status ───────────────────────────
-    if (action === "aviator_get_current_round" || action === "aviator_round_status") {
-      const { data: r } = await supabase
-        .from("aviator_current_round").select("*").eq("id", 1).single();
-      if (!r) return json({ phase: "waiting", elapsed_ms: 0, crash_point: null });
-      const elapsed = Date.now() - new Date(r.phase_started_at).getTime();
-      return json({
-        phase: r.phase, elapsed_ms: elapsed, round_uuid: r.round_uuid,
-        last_crash_point: r.last_crash_point,
-        crash_point: r.phase === "crashed" ? r.crash_point : null,
-      });
-    }
-
-    // ── AVIATOR: Place bet ──────────────────────────────────────────────────
+    // ── AVIATOR: Place bet ──────────────────────────────────────────────
     if (action === "aviator_place_bet") {
       const { user_id, bet_amount, round_uuid } = body;
       if (!user_id || !bet_amount || (bet_amount as number) <= 0)
@@ -165,13 +190,12 @@ Deno.serve(async (req: Request) => {
       if (!profile || profile.balance < (bet_amount as number))
         return json({ error: "Insufficient balance" }, 400);
 
-      await supabase.from("profiles").update({ balance: profile.balance - (bet_amount as number) }).eq("id", user_id);
-
       const { data: round } = await supabase.from("aviator_current_round").select("round_uuid, phase").eq("id", 1).single();
       if (!round || round.phase !== "waiting") {
-        await supabase.from("profiles").update({ balance: profile.balance }).eq("id", user_id);
         return json({ error: "Round not accepting bets" }, 400);
       }
+
+      await supabase.from("profiles").update({ balance: profile.balance - (bet_amount as number) }).eq("id", user_id);
 
       const { data: gameRow } = await supabase.from("games").select("id").eq("slug", "aviator").single();
       const { data: bet } = await supabase.from("bets").insert({
@@ -181,7 +205,7 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, bet_id: bet?.id });
     }
 
-    // ── AVIATOR: Cash out ──────────────────────────────────────────────────
+    // ── AVIATOR: Cash out ───────────────────────────────────────────────
     if (action === "aviator_cashout") {
       const { user_id, bet_id, cashout_multiplier, round_uuid, round_id } = body;
       if (!user_id || !cashout_multiplier)
@@ -192,7 +216,6 @@ Deno.serve(async (req: Request) => {
         .select("phase, crash_point, round_uuid, phase_started_at")
         .eq("id", 1).single();
 
-      // Allow cashout if flying, OR if crashed but within grace window (race-condition safety)
       const phaseElapsed = round ? Date.now() - new Date(round.phase_started_at).getTime() : Infinity;
       const canCashout = round && (
         round.phase === "flying" ||
@@ -205,7 +228,6 @@ Deno.serve(async (req: Request) => {
       if (round.crash_point && (cashout_multiplier as number) > Number(round.crash_point))
         return json({ error: "Crashed before cashout", bustPoint: round.crash_point }, 400);
 
-      // Find bet by bet_id, or by round_uuid match, or by round_id
       let betData: Record<string, unknown> | null = null;
       if (bet_id) {
         const { data } = await supabase.from("bets").select("*").eq("id", bet_id as string).eq("user_id", user_id as string).eq("status", "pending").single();
@@ -220,15 +242,12 @@ Deno.serve(async (req: Request) => {
         const { data } = await supabase.from("bets").select("*").eq("user_id", user_id as string).eq("status", "pending").eq("round_id", String(round_id)).maybeSingle();
         betData = data;
       }
-      // Last resort: find any pending bet for this user in this round by round_uuid
       if (!betData) {
-        const rv = round.round_uuid;
-        const { data } = await supabase.from("bets").select("*").eq("user_id", user_id as string).eq("status", "pending").eq("round_id", rv).maybeSingle();
+        const { data } = await supabase.from("bets").select("*").eq("user_id", user_id as string).eq("status", "pending").eq("round_id", round.round_uuid).maybeSingle();
         betData = data;
       }
 
-      if (!betData)
-        return json({ error: "Bet not found or already settled" }, 400);
+      if (!betData) return json({ error: "Bet not found or already settled" }, 400);
 
       const bet = betData;
       const win_amount = Math.floor((bet.bet_amount as number) * (cashout_multiplier as number));
@@ -245,7 +264,7 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, win_amount, multiplier: cashout_multiplier, bustPoint: round.crash_point });
     }
 
-    // ── AVIATOR: Settle lost bets ───────────────────────────────────────────
+    // ── AVIATOR: Settle lost bets ───────────────────────────────────────
     if (action === "aviator_settle_lost" || action === "aviator_settle") {
       const { round_uuid, user_id } = body;
       let q = supabase.from("bets").update({ status: "lost", resolved_at: new Date().toISOString() }).eq("status", "pending");
@@ -255,14 +274,13 @@ Deno.serve(async (req: Request) => {
       return json({ success: true });
     }
 
-    // ── CRASH: Get bust point for round (called at round start by crashEngine) ──
+    // ── CRASH: Get bust point ───────────────────────────────────────────
     if (action === "crash_get_bust") {
       const { round_id } = body;
       const cfg = await getGameAdminConfig("crash");
       let bustPoint: number;
       if (cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01) {
         bustPoint = parseFloat(cfg.manualCrashPoint.toFixed(2));
-        // Reset to AUTO after use
         const { data: settingsRows } = await supabase.rpc("admin_get_settings");
         const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
         const fullConfig = settings.find((r) => r.key === "admin_config")?.value ?? {};
@@ -276,7 +294,7 @@ Deno.serve(async (req: Request) => {
       return json({ bustPoint, round_id });
     }
 
-    // ── CRASH: Place bet ──────────────────────────────────────────────────────
+    // ── CRASH: Place bet ────────────────────────────────────────────────
     if (action === "crash_place_bet") {
       const { user_id, bet_amount, cashout_at, round_id } = body;
       if (!user_id || !bet_amount || !cashout_at)
@@ -294,13 +312,16 @@ Deno.serve(async (req: Request) => {
       if (!profile || profile.balance < (bet_amount as number))
         return json({ error: "Insufficient balance" }, 400);
 
-      const newBalance = won ? profile.balance - (bet_amount as number) + win_amount : profile.balance - (bet_amount as number);
+      const newBalance = won
+        ? profile.balance - (bet_amount as number) + win_amount
+        : profile.balance - (bet_amount as number);
       await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id as string);
 
       const { data: gameRow } = await supabase.from("games").select("id").eq("slug", "crash").single();
       await supabase.from("bets").insert({
         user_id, game_id: gameRow?.id, bet_amount, win_amount,
-        multiplier: won ? cashout_at : 1, status: won ? "won" : "lost",
+        multiplier: won ? cashout_at : 1,
+        status: won ? "won" : "lost",
         bet_details: { bustPoint, cashOutAt: cashout_at },
         resolved_at: new Date().toISOString(),
       });
@@ -308,7 +329,7 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, won, bustPoint, win_amount });
     }
 
-    // ── ADMIN: Preview next round ───────────────────────────────────────────────
+    // ── ADMIN: Preview next round ───────────────────────────────────────
     if (action === "admin_preview_next_round") {
       const { game } = body;
       const gameKey = (game as string) ?? "aviator";
@@ -320,7 +341,7 @@ Deno.serve(async (req: Request) => {
       return json({ mode: cfg.mode, preview: samples[0], samples, gameKey });
     }
 
-    // ── WINGO / K3 / 5D / SunVsMoon: Place bet ───────────────────────────────
+    // ── WINGO / K3 / 5D / SunVsMoon: Place bet ─────────────────────────
     if (action === "place_bet") {
       const { user_id, game_slug, bet_amount, bet_details, round_id } = body;
       if (!user_id || !game_slug || !bet_amount)
@@ -340,7 +361,7 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, bet_id: bet?.id, config_mode: cfg.mode });
     }
 
-    // ── ADMIN: Set crash point for next round ────────────────────────────────
+    // ── ADMIN: Set crash point ──────────────────────────────────────────
     if (action === "admin_set_next_crash") {
       const { game, crash_point, round_id } = body;
       const gameKey = (game as string) ?? "aviator";
@@ -358,7 +379,7 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, game: gameKey, crash_point });
     }
 
-    // ── Admin: Reset to AUTO mode ────────────────────────────────────────────
+    // ── ADMIN: Reset to AUTO ────────────────────────────────────────────
     if (action === "admin_reset_to_auto") {
       const { game } = body;
       const gameKey = (game as string) ?? "aviator";
