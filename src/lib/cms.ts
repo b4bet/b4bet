@@ -653,10 +653,13 @@ class Cms {
     }
     if (status === 'approved') {
       if (before) bus.emit(Topics.ReferralDepositApproved, { username: before.user, amount: before.amount });
-      // Reads amount/username straight from the transactions row and is
+      // Reads amount/user_id straight from the transactions row and is
       // idempotent server-side, so it works even if the local `before`
       // cache is stale or missing (see admin_approve_deposit_credit).
-      try { await supabase.rpc('admin_approve_deposit_credit', { p_txn_id: id }); } catch { /* ignore */ }
+      const { error: creditErr } = await supabase.rpc('admin_approve_deposit_credit', { p_txn_id: id });
+      if (creditErr) {
+        this.toast({ title: 'Balance credit failed', body: creditErr.message, kind: 'alert' });
+      }
     }
     this.emitFinance();
     await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null }).catch(() => {});
