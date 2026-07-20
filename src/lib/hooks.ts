@@ -16,8 +16,19 @@ export function useBus<T>(topic: string, initial: T): T {
   return value;
 }
 
+/**
+ * Returns the current balance.
+ * -1 means "still loading from Supabase" — show a loading skeleton, not "₹-1" or "₹4".
+ * 0+ is the real balance.
+ */
 export function useBalance(): number {
   return useBus<number>(Topics.Balance, store.balance);
+}
+
+/** Returns true while balance is loading (before Supabase profile arrives). */
+export function useBalanceLoading(): boolean {
+  const bal = useBalance();
+  return bal < 0;
 }
 
 export function useNotifications(): NotificationItem[] {
@@ -66,7 +77,6 @@ export function useAuth(): AuthSession | null {
   }, []);
   return session;
 }
-
 
 /** Subscribe to a per-game round counter. Re-renders when that game advances. */
 export function useGameRound(gameKey: string): number {
