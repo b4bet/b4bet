@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { supabase } from '../../integrations/supabase/client';
 import { Search, History, Filter, Calendar, RefreshCw, Wifi } from 'lucide-react';
 import SelectModal from '../../components/SelectModal';
+import { supabaseGetUsers, type SupabaseProfile } from '../../lib/supabaseIntegration';
 
 const GAMES = [
   { key: 'all', label: 'All Games' },
@@ -46,20 +47,32 @@ export default function HistoryTab() {
   const [search, setSearch] = useState('');
   const [period, setPeriod] = useState<PeriodKey>('all');
   const [rows, setRows] = useState<BetRecord[]>([]);
+  const [profiles, setProfiles] = useState<SupabaseProfile[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.rpc('admin_get_bet_history', { p_limit: 500 });
+      const [{ data, error }, users] = await Promise.all([
+        supabase.rpc('admin_get_bet_history', { p_limit: 500 }),
+        supabaseGetUsers(),
+      ]);
       if (error) throw error;
       setRows((data ?? []) as BetRecord[]);
+      setProfiles(users);
     } catch (e) {
       console.error('[HistoryTab] load error:', e);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  // user_id (uuid) -> 6-digit account_id lookup
+  const accountIdMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of profiles) if (p.id && p.account_id) map[p.id] = p.account_id;
+    return map;
+  }, [profiles]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -79,7 +92,7 @@ export default function HistoryTab() {
     if (game !== 'all') data = data.filter(r => r.game_name === game);
     if (search) {
       const s = search.toLowerCase();
-      data = data.filter(r => r.username.toLowerCase().includes(s) || r.user_id.includes(s));
+      data = data.filter(r => r.username.toLowerCase().includes(s) || r.user_id.includes(s) || (accountIdMap[r.user_id] ?? '').toLowerCase().includes(s));
     }
     if (period !== 'all') {
       const now = Date.now();
@@ -92,7 +105,7 @@ export default function HistoryTab() {
       }
     }
     return data;
-  }, [rows, game, search, period]);
+  }, [rows, game, search, period, accountIdMap]);
 
   const totals = useMemo(() => ({
     totalBet: filtered.reduce((s, r) => s + r.bet_amount, 0),
@@ -152,7 +165,7 @@ export default function HistoryTab() {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by username or User ID…"
+            placeholder="Search by username or 6-digit ID…"
             className="input pl-10 w-full"
           />
         </div>
@@ -204,7 +217,10 @@ export default function HistoryTab() {
                 filtered.map((r) => (
                   <tr key={r.id} className="hover:bg-slatepanel-800/50">
                     <td className="p-3 text-slate-400 text-xs whitespace-nowrap">{fmtDate(r.placed_at)}</td>
-                    <td className="p-3 font-semibold text-white">{r.username}</td>
+                    <td className="p-3 font-semibold text-white">
+                      {r.username}
+                      <span className="block text-[10px] font-mono font-normal text-slate-500">ID: {accountIdMap[r.user_id] ?? '—'}</span>
+                    </td>
                     <td className="p-3"><span className="chip bg-slatepanel-800 text-slate-300 text-[10px]">{gameLabel(r.game_name)}</span></td>
                     <td className="p-3 text-slate-300 text-xs">{r.status} {r.multiplier > 1 ? `· ${r.multiplier.toFixed(2)}x` : ''}</td>
                     <td className="p-3 text-right tabular font-semibold text-slate-300">₹{r.bet_amount.toLocaleString('en-IN')}</td>
