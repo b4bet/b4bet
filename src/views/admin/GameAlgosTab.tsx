@@ -34,7 +34,6 @@ export function CrashHandlingPanel() {
   const cfg = useAdminConfig();
   const crashState = useCrashState();
   const [manual, setManual] = useState(String(cfg.manualCrashPoint));
-  const [targetRound, setTargetRound] = useState<string>(String(crashState.roundId + 1));
   const [crashStake1, setCrashStake1] = useState(String(cfg.crashQuickStakes[0] ?? '200'));
   const [crashStake2, setCrashStake2] = useState(String(cfg.crashQuickStakes[1] ?? '500'));
   const [crashStake3, setCrashStake3] = useState(String(cfg.crashQuickStakes[2] ?? '1000'));
@@ -44,10 +43,8 @@ export function CrashHandlingPanel() {
   const setProb = (v: number) => store.setAdmin({ targetWinProbability: v });
   const setEdge = (v: number) => store.setAdmin({ houseEdge: v });
   const applyManual = () => {
-    const target = parseInt(targetRound, 10);
     store.setAdmin({
       manualCrashPoint: Math.max(1.01, parseFloat(manual) || 1.01),
-      manualTargetRoundId: Number.isFinite(target) && target > crashState.roundId ? target : crashState.roundId + 1,
       mode: 'MANUAL',
     });
   };
@@ -56,9 +53,6 @@ export function CrashHandlingPanel() {
       .filter((n) => Number.isFinite(n) && n > 0).slice(0, 4);
     if (vals.length) store.setAdmin({ crashQuickStakes: vals });
   };
-
-  // upcomingRound kept for use in manual override input validation — not displayed
-  const upcomingRound = crashState.phase === 'countdown' ? crashState.roundId : crashState.roundId + 1;
 
   return (
     <div className="panel p-4 space-y-4 border-neon-500/30">
@@ -69,7 +63,10 @@ export function CrashHandlingPanel() {
           </h2>
           <p className="text-xs text-slate-500">Live round control · pinned to top of admin dashboard.</p>
         </div>
-        {/* Round number display removed — local counter is not synced across tabs/sessions */}
+        <div className="text-right">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Status</p>
+          <p className={`tabular font-display font-extrabold text-lg ${cfg.mode === 'MANUAL' ? 'text-coral-400' : 'text-neon-300'}`}>{cfg.mode}</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-2">
@@ -85,7 +82,7 @@ export function CrashHandlingPanel() {
             <Cpu className={`w-4 h-4 ${cfg.mode === 'MANUAL' ? 'text-coral-400' : 'text-slate-500'}`} />
             <span className="font-display font-bold text-white text-sm">Manual Override</span>
           </div>
-          <p className="text-[11px] text-slate-400">Hardcode crash multiplier for one round.</p>
+          <p className="text-[11px] text-slate-400">Hardcode crash multiplier for next round.</p>
         </button>
       </div>
 
@@ -111,20 +108,14 @@ export function CrashHandlingPanel() {
       {cfg.mode === 'MANUAL' && (
         <div className="space-y-2 animate-fade-in">
           <label className="text-sm font-semibold text-white flex items-center gap-2"><Target className="w-4 h-4 text-coral-400" /> Termination Crash Multiplier</label>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Bust @ (x)</p>
-              <input type="number" value={manual} onChange={(e) => setManual(e.target.value)} min={1.01} step={0.1} className="input tabular" />
-            </div>
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Apply to Round #</p>
-              <input type="number" value={targetRound} onChange={(e) => setTargetRound(e.target.value)} min={crashState.roundId + 1} step={1} className="input tabular" />
-            </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Bust @ (x)</p>
+            <input type="number" value={manual} onChange={(e) => setManual(e.target.value)} min={1.01} step={0.1} className="input tabular" />
           </div>
           <button onClick={applyManual} className="btn-coral w-full py-2">Apply Manual Override</button>
           <p className="text-[11px] text-slate-500">
-            Queued: bust at <span className="text-coral-300 font-semibold">{cfg.manualCrashPoint.toFixed(2)}x</span>.
-            <br /><span className="text-emeraldwin-300 font-semibold">✓ Auto-reverts to AUTO after the manual round.</span>
+            Queued for next round: bust at <span className="text-coral-300 font-semibold">{cfg.manualCrashPoint.toFixed(2)}x</span>.
+            <br /><span className="text-emeraldwin-300 font-semibold">Switch back to Automated when done.</span>
           </p>
         </div>
       )}
@@ -136,18 +127,19 @@ export function CrashHandlingPanel() {
             <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             Next Round Preview
           </label>
-          {/* Round number badge removed — local counter not shared across sessions */}
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-slate-400 uppercase tracking-wider w-16">Outcome</span>
             <span className={`font-display font-extrabold text-xl tabular ${cfg.mode === 'MANUAL' ? 'text-coral-400' : 'text-white'}`}>
-              {cfg.mode === 'MANUAL' ? cfg.manualCrashPoint.toFixed(2) + 'x' : (
-                (() => { const p = Math.min(99, Math.max(1, cfg.targetWinProbability)) / 100; const r = Math.random(); if (r < (1 - p) * 0.12) return (1 + Math.random() * 0.05).toFixed(2) + 'x ⚠️'; const u = Math.max(0.0001, 1 - Math.random()); const raw = (1 / (u * (1 - cfg.houseEdge / 100))) * (0.5 + p); return Math.max(1.01, Math.min(1000, Math.round(raw * 100) / 100)).toFixed(2) + 'x'; })()
-              )}
+              {cfg.mode === 'MANUAL' ? cfg.manualCrashPoint.toFixed(2) + 'x' : (() => { const p = Math.min(99, Math.max(1, cfg.targetWinProbability)) / 100; const edge = cfg.houseEdge / 100; const u = Math.max(0.0001, 1 - Math.random()); const raw = (1 / u) * (1 - edge); return Math.max(1.01, Math.min(200, Math.round(raw * 100) / 100)).toFixed(2) + 'x'; })()}
             </span>
           </div>
-          <p className="text-xs text-slate-400">{cfg.mode === 'MANUAL' ? 'Manual override · auto-reverts after round' : `Win-prob ${cfg.targetWinProbability}% · Edge ${cfg.houseEdge}%`}</p>
+          <p className="text-xs text-slate-400">
+            {cfg.mode === 'MANUAL'
+              ? `Manual override active · next round will bust at ${cfg.manualCrashPoint.toFixed(2)}x`
+              : `Win-prob ${cfg.targetWinProbability}% · Edge ${cfg.houseEdge}%`}
+          </p>
         </div>
       </div>
 
@@ -282,7 +274,6 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
             <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             Next Round Preview
           </label>
-          {/* Round number badge removed — local counter not shared across sessions */}
         </div>
         {preview ? (
           <div className="space-y-1.5">
