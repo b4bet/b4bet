@@ -308,9 +308,25 @@ class Store {
       if (session) {
         this.balancesByUser[session.username.toLowerCase()] = this.balance;
         this.persistBalances();
-        supabase.from('profiles').update({ balance: this.balance }).eq('username', session.username).then(() => {}).catch(() => {});
+        if (session.userId) {
+          supabase.from('profiles')
+            .update({ balance: this.balance })
+            .eq('id', session.userId)
+            .then(({ error }) => {
+              if (error) console.warn('[store] setBalance Supabase update failed:', error.message);
+            })
+            .catch((err) => { console.warn('[store] setBalance Supabase update error:', err); });
+        } else {
+          supabase.from('profiles')
+            .update({ balance: this.balance })
+            .eq('username', session.username)
+            .then(({ error }) => {
+              if (error) console.warn('[store] setBalance Supabase update (username) failed:', error.message);
+            })
+            .catch((err) => { console.warn('[store] setBalance Supabase update error:', err); });
+        }
       }
-    } catch { /* ignore */ }
+    } catch (err) { console.warn('[store] setBalance error:', err); }
     bus.emit(Topics.Balance, this.balance);
   }
 
