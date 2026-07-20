@@ -13,6 +13,9 @@ import {
   TicketPercent, Plus, X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal,
 } from 'lucide-react';
 
+// Import the fixed CrashHandlingPanel (uses store.setGameHandler('crash') — nested DB path)
+export { CrashHandlingPanel } from './CrashHandlingPanel';
+
 // ─── 8-game registry: crash, mines, aviator, wingo, k3, fived, sunvsmoon, trading
 const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
   { key: 'crash',     label: 'Crash',      icon: Rocket    },
@@ -26,157 +29,7 @@ const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Crash Handling Panel
-// ─────────────────────────────────────────────────────────────────────────────
-export function CrashHandlingPanel() {
-  const cfg = useAdminConfig();
-  const [manual, setManual] = useState(String(cfg.manualCrashPoint));
-  const [crashStake1, setCrashStake1] = useState(String(cfg.crashQuickStakes[0] ?? '200'));
-  const [crashStake2, setCrashStake2] = useState(String(cfg.crashQuickStakes[1] ?? '500'));
-  const [crashStake3, setCrashStake3] = useState(String(cfg.crashQuickStakes[2] ?? '1000'));
-  const [crashStake4, setCrashStake4] = useState(String(cfg.crashQuickStakes[3] ?? '2000'));
-
-  // ── Stable next-round preview — recomputes only when mode/settings change,
-  // never on every render (no Math.random() in JSX).
-  const [preview, setPreview] = useState<string>('');
-  useEffect(() => {
-    if (cfg.mode === 'MANUAL') {
-      setPreview(cfg.manualCrashPoint.toFixed(2) + 'x');
-    } else {
-      const p = Math.min(99, Math.max(1, cfg.targetWinProbability)) / 100;
-      const edge = cfg.houseEdge / 100;
-      const u = Math.max(0.0001, 1 - Math.random());
-      const raw = (1 / u) * (1 - edge);
-      const point = Math.max(1.01, Math.min(200, Math.round(raw * 100) / 100));
-      setPreview(point.toFixed(2) + 'x');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cfg.mode, cfg.manualCrashPoint, cfg.targetWinProbability, cfg.houseEdge]);
-
-  const setMode = (mode: 'AUTO' | 'MANUAL') => store.setAdmin({ mode });
-  const setProb = (v: number) => store.setAdmin({ targetWinProbability: v });
-  const setEdge = (v: number) => store.setAdmin({ houseEdge: v });
-  const applyManual = () => {
-    store.setAdmin({
-      manualCrashPoint: Math.max(1.01, parseFloat(manual) || 1.01),
-      mode: 'MANUAL',
-    });
-  };
-  const saveCrashStakes = () => {
-    const vals = [parseFloat(crashStake1), parseFloat(crashStake2), parseFloat(crashStake3), parseFloat(crashStake4)]
-      .filter((n) => Number.isFinite(n) && n > 0).slice(0, 4);
-    if (vals.length) store.setAdmin({ crashQuickStakes: vals });
-  };
-
-  return (
-    <div className="panel p-4 space-y-4 border-neon-500/30">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
-            <Rocket className="w-5 h-5 text-neon-300" /> Crash Handling
-          </h2>
-          <p className="text-xs text-slate-500">Live round control · pinned to top of admin dashboard.</p>
-        </div>
-        <div className="text-right">
-          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Status</p>
-          <p className={`tabular font-display font-extrabold text-lg ${cfg.mode === 'MANUAL' ? 'text-coral-400' : 'text-neon-300'}`}>{cfg.mode}</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <button onClick={() => setMode('AUTO')} className={`panel p-3 text-left transition-all ${cfg.mode === 'AUTO' ? 'border-neon-400 ring-1 ring-neon-400/40' : 'opacity-70 hover:opacity-100'}`}>
-          <div className="flex items-center gap-2 mb-1">
-            <Shield className={`w-4 h-4 ${cfg.mode === 'AUTO' ? 'text-neon-300' : 'text-slate-500'}`} />
-            <span className="font-display font-bold text-white text-sm">Automated</span>
-          </div>
-          <p className="text-[11px] text-slate-400">Win-probability safeguards revenue.</p>
-        </button>
-        <button onClick={() => setMode('MANUAL')} className={`panel p-3 text-left transition-all ${cfg.mode === 'MANUAL' ? 'border-coral-400 ring-1 ring-coral-400/40' : 'opacity-70 hover:opacity-100'}`}>
-          <div className="flex items-center gap-2 mb-1">
-            <Cpu className={`w-4 h-4 ${cfg.mode === 'MANUAL' ? 'text-coral-400' : 'text-slate-500'}`} />
-            <span className="font-display font-bold text-white text-sm">Manual Override</span>
-          </div>
-          <p className="text-[11px] text-slate-400">Hardcode crash multiplier for next round.</p>
-        </button>
-      </div>
-
-      {cfg.mode === 'AUTO' && (
-        <div className="space-y-4 animate-fade-in">
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-semibold text-white flex items-center gap-2"><Sliders className="w-4 h-4 text-neon-300" /> Target Win Probability</label>
-              <span className="tabular font-display font-extrabold text-lg text-neon-300">{cfg.targetWinProbability}%</span>
-            </div>
-            <input type="range" min={0} max={100} value={cfg.targetWinProbability} onChange={(e) => setProb(parseInt(e.target.value))} className="w-full accent-neon-400 h-2" />
-          </div>
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-sm font-semibold text-white flex items-center gap-2"><Zap className="w-4 h-4 text-amberx-400" /> House Edge</label>
-              <span className="tabular font-bold text-amberx-400">{cfg.houseEdge}%</span>
-            </div>
-            <input type="range" min={0} max={15} value={cfg.houseEdge} onChange={(e) => setEdge(parseInt(e.target.value))} className="w-full accent-amberx-400 h-2" />
-          </div>
-        </div>
-      )}
-
-      {cfg.mode === 'MANUAL' && (
-        <div className="space-y-2 animate-fade-in">
-          <label className="text-sm font-semibold text-white flex items-center gap-2"><Target className="w-4 h-4 text-coral-400" /> Termination Crash Multiplier</label>
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Bust @ (x)</p>
-            <input type="number" value={manual} onChange={(e) => setManual(e.target.value)} min={1.01} step={0.1} className="input tabular" />
-          </div>
-          <button onClick={applyManual} className="btn-coral w-full py-2">Apply Manual Override</button>
-          <p className="text-[11px] text-slate-500">
-            Queued for next round: bust at <span className="text-coral-300 font-semibold">{cfg.manualCrashPoint.toFixed(2)}x</span>.
-            <br /><span className="text-emeraldwin-300 font-semibold">Switch back to Automated when done.</span>
-          </p>
-        </div>
-      )}
-
-      {/* Next Round Preview — stable, only updates when settings change */}
-      <div className="bg-slatepanel-800 rounded-xl p-3 border border-neon-400/30">
-        <div className="flex items-center mb-2">
-          <label className="text-xs font-semibold text-neon-300 uppercase tracking-wider flex items-center gap-2">
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            Next Round Preview
-          </label>
-        </div>
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-slate-400 uppercase tracking-wider w-16">Outcome</span>
-            <span className={`font-display font-extrabold text-xl tabular ${cfg.mode === 'MANUAL' ? 'text-coral-400' : 'text-white'}`}>
-              {preview}
-            </span>
-          </div>
-          <p className="text-xs text-slate-400">
-            {cfg.mode === 'MANUAL'
-              ? `Manual override active · next round will bust at ${cfg.manualCrashPoint.toFixed(2)}x`
-              : `Win-prob ${cfg.targetWinProbability}% · Edge ${cfg.houseEdge}%`}
-          </p>
-        </div>
-      </div>
-
-      <div>
-        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 block">Quick Stake Chips (4 presets)</label>
-        <div className="grid grid-cols-4 gap-2 mb-2">
-          <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 1</p><input type="number" value={crashStake1} onChange={(e) => setCrashStake1(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
-          <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 2</p><input type="number" value={crashStake2} onChange={(e) => setCrashStake2(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
-          <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 3</p><input type="number" value={crashStake3} onChange={(e) => setCrashStake3(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
-          <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 4</p><input type="number" value={crashStake4} onChange={(e) => setCrashStake4(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={saveCrashStakes} className="btn-primary px-4 py-1.5 text-xs">Save Stakes</button>
-          <span className="text-[11px] text-slate-500">Current: <span className="text-white tabular">{cfg.crashQuickStakes.join(' · ')}</span></span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Generic Game Handler Panel (shared by all 5 auto games)
+// Generic Game Handler Panel (shared by all auto games except crash)
 // ─────────────────────────────────────────────────────────────────────────────
 function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlaceholder, manualHint }: {
   gameKey: string; label: string; icon: typeof Rocket; manualLabel: string;
@@ -189,9 +42,6 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   const [manual, setManual] = useState(handler.manualResult);
   const [targetRound, setTargetRound] = useState<string>(String(handler.manualTargetRoundId ?? upcomingRound));
   const userEditedRoundRef = useRef(false);
-  // Keep the "Apply to Round #" input auto-synced to the actual next round
-  // whenever the game advances — unless the admin has manually queued a round
-  // or typed a custom value into the field.
   useEffect(() => {
     if (userEditedRoundRef.current) return;
     if (handler.manualTargetRoundId && handler.manualTargetRoundId > currentRound) return;
@@ -281,7 +131,6 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
           </p>
         </div>
       )}
-      {/* Next Round Preview — auto-updates when handler settings change */}
       <div className="bg-slatepanel-800 rounded-xl p-3 border border-neon-400/30">
         <div className="flex items-center mb-2">
           <label className="text-xs font-semibold text-neon-300 uppercase tracking-wider flex items-center gap-2">
@@ -320,7 +169,6 @@ export function K3HandlingPanel() { return <GameHandlerPanel gameKey="k3" label=
 export function FiveDHandlingPanel() { return <GameHandlerPanel gameKey="fived" label="5D" icon={Dices} manualLabel="Result Digits (5)" manualPlaceholder="12345" manualHint="Five-digit outcome, one digit per column." />; }
 export function SunMoonHandlingPanel() { return <GameHandlerPanel gameKey="sunvsmoon" label="Sun vs Moon" icon={Sun} manualLabel="Winning Side" manualPlaceholder="sun / moon / eclipse" manualHint="Forces the round outcome to Sun, Eclipse, or Moon." />; }
 
-/** All auto-game handlers rendered together (used in the Handlers tab) */
 export function AllGameHandlersSection() {
   return (
     <div className="space-y-4">
@@ -379,7 +227,7 @@ export function GlobalBetLimitsPanel() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Per-Game Bet Limits (spec §4)
+// Per-Game Bet Limits
 // ─────────────────────────────────────────────────────────────────────────────
 export function PerGameBetLimitsPanel() {
   const cfg = useAdminConfig();
@@ -388,10 +236,7 @@ export function PerGameBetLimitsPanel() {
     const result: Record<string, { min: string; max: string }> = {};
     gameMeta.forEach((g) => {
       const override = cfg.perGameLimits[g.key];
-      result[g.key] = {
-        min: override ? String(override.min) : '',
-        max: override ? String(override.max) : '',
-      };
+      result[g.key] = { min: override ? String(override.min) : '', max: override ? String(override.max) : '' };
     });
     return result;
   });
@@ -402,7 +247,6 @@ export function PerGameBetLimitsPanel() {
     const mn = parseFloat(d.min);
     const mx = parseFloat(d.max);
     if (d.min === '' && d.max === '') {
-      // Clear override — fall back to global
       store.setGameLimit(key, null);
       setMsg(`${key} cleared — using global limits.`);
     } else if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn <= 0 || mx <= mn) {
@@ -416,10 +260,7 @@ export function PerGameBetLimitsPanel() {
 
   return (
     <div className="panel p-4 space-y-3">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between"
-      >
+      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center justify-between">
         <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
           <DollarSign className="w-5 h-5 text-neon-300" /> Per-Game Bet Limits
         </h2>
@@ -436,26 +277,16 @@ export function PerGameBetLimitsPanel() {
                 <div key={g.key} className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs font-bold text-white">{g.label}</span>
-                    {override && (
-                      <span className="text-[9px] bg-neon-500/20 text-neon-300 px-2 py-0.5 rounded-full border border-neon-400/30">Override active</span>
-                    )}
+                    {override && <span className="text-[9px] bg-neon-500/20 text-neon-300 px-2 py-0.5 rounded-full border border-neon-400/30">Override active</span>}
                   </div>
                   <div className="flex gap-2 items-center">
                     <div className="flex-1">
                       <p className="text-[9px] text-slate-500 mb-0.5">Min ({store.currency})</p>
-                      <input
-                        type="number" value={draft.min} placeholder={String(cfg.minBet)}
-                        onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], min: e.target.value } }))}
-                        className="input tabular text-sm py-1.5 w-full"
-                      />
+                      <input type="number" value={draft.min} placeholder={String(cfg.minBet)} onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], min: e.target.value } }))} className="input tabular text-sm py-1.5 w-full" />
                     </div>
                     <div className="flex-1">
                       <p className="text-[9px] text-slate-500 mb-0.5">Max ({store.currency})</p>
-                      <input
-                        type="number" value={draft.max} placeholder={String(cfg.maxBet)}
-                        onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], max: e.target.value } }))}
-                        className="input tabular text-sm py-1.5 w-full"
-                      />
+                      <input type="number" value={draft.max} placeholder={String(cfg.maxBet)} onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], max: e.target.value } }))} className="input tabular text-sm py-1.5 w-full" />
                     </div>
                     <button onClick={() => save(g.key)} className="btn-primary px-3 py-1.5 text-xs mt-4">Save</button>
                     {override && (
@@ -476,7 +307,7 @@ export function PerGameBetLimitsPanel() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Redeem Code Generator (spec §7 — admin panel)
+// Redeem Code Generator
 // ─────────────────────────────────────────────────────────────────────────────
 export function RedeemCodeAdminPanel() {
   const [expanded, setExpanded] = useState(true);
@@ -484,7 +315,6 @@ export function RedeemCodeAdminPanel() {
   const [newBonus, setNewBonus] = useState('100');
   const [newMaxUses, setNewMaxUses] = useState('1');
   const [msg, setMsg] = useState<string | null>(null);
-  // Trigger re-render by tracking codes locally
   const [codes, setCodes] = useState<RedeemCode[]>(() => store.listRedeemCodes());
 
   const refresh = () => setCodes(store.listRedeemCodes());
@@ -498,44 +328,28 @@ export function RedeemCodeAdminPanel() {
     if (!Number.isFinite(maxUses) || maxUses < 1) { setMsg('Max uses must be at least 1.'); return; }
     store.addRedeemCode(code, bonus, maxUses);
     refresh();
-    setNewCode('');
-    setNewBonus('100');
-    setNewMaxUses('1');
+    setNewCode(''); setNewBonus('100'); setNewMaxUses('1');
     setMsg(`Code ${code} created.`);
     setTimeout(() => setMsg(null), 2000);
   };
 
-  const deleteCode = (code: string) => {
-    store.deleteRedeemCode(code);
-    refresh();
-  };
-
   return (
     <div className="panel p-4 space-y-3">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between"
-      >
+      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center justify-between">
         <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
           <TicketPercent className="w-5 h-5 text-amberx-300" /> Redeem Code Generator
         </h2>
         {expanded ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
       </button>
-
       {expanded && (
         <>
-          <p className="text-xs text-slate-500">Create bonus codes. Each code tracks per-user usage — a user can only redeem each code up to the max-uses-per-user limit.</p>
-
-          {/* Create new code form */}
+          <p className="text-xs text-slate-500">Create bonus codes. Each code tracks per-user usage.</p>
           <div className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800 space-y-2">
             <p className="text-xs font-bold text-white mb-1">New Redeem Code</p>
             <div className="grid grid-cols-3 gap-2">
               <div className="col-span-3 sm:col-span-1">
                 <p className="text-[9px] text-slate-500 mb-0.5">Code</p>
-                <input
-                  type="text" value={newCode} onChange={(e) => setNewCode(e.target.value.toUpperCase())}
-                  placeholder="e.g. PROMO50" className="input text-sm py-1.5 w-full uppercase" maxLength={20}
-                />
+                <input type="text" value={newCode} onChange={(e) => setNewCode(e.target.value.toUpperCase())} placeholder="e.g. PROMO50" className="input text-sm py-1.5 w-full uppercase" maxLength={20} />
               </div>
               <div>
                 <p className="text-[9px] text-slate-500 mb-0.5">Bonus ({store.currency})</p>
@@ -550,14 +364,9 @@ export function RedeemCodeAdminPanel() {
               <Plus className="w-4 h-4" /> Create Code
             </button>
           </div>
-
           {msg && <p className="text-[11px] text-emeraldwin-300 font-semibold">{msg}</p>}
-
-          {/* Existing codes list */}
           <div className="space-y-2 max-h-72 overflow-y-auto">
-            {codes.length === 0 && (
-              <p className="text-xs text-slate-500 text-center py-4">No redeem codes yet</p>
-            )}
+            {codes.length === 0 && <p className="text-xs text-slate-500 text-center py-4">No redeem codes yet</p>}
             {codes.map((rc) => {
               const totalUses = Object.keys(rc.usageByUser).length;
               return (
@@ -571,10 +380,7 @@ export function RedeemCodeAdminPanel() {
                       {totalUses} user{totalUses !== 1 ? 's' : ''} redeemed · max {rc.maxUsesPerUser}/user · created {new Date(rc.createdAt).toLocaleDateString()}
                     </p>
                   </div>
-                  <button
-                    onClick={() => deleteCode(rc.code)}
-                    className="flex-shrink-0 w-8 h-8 rounded-lg bg-coral-500/15 border border-coral-500/30 grid place-items-center hover:bg-coral-500/25 transition-colors"
-                  >
+                  <button onClick={() => { store.deleteRedeemCode(rc.code); refresh(); }} className="flex-shrink-0 w-8 h-8 rounded-lg bg-coral-500/15 border border-coral-500/30 grid place-items-center hover:bg-coral-500/25 transition-colors">
                     <Trash2 className="w-3.5 h-3.5 text-coral-400" />
                   </button>
                 </div>
@@ -591,12 +397,7 @@ export function RedeemCodeAdminPanel() {
 // Top Rankings
 // ─────────────────────────────────────────────────────────────────────────────
 type Range = 'day' | 'week' | 'month' | 'year';
-const RANGE_MS: Record<Range, number> = {
-  day: 86400_000,
-  week: 7 * 86400_000,
-  month: 30 * 86400_000,
-  year: 365 * 86400_000,
-};
+const RANGE_MS: Record<Range, number> = { day: 86400_000, week: 7 * 86400_000, month: 30 * 86400_000, year: 365 * 86400_000 };
 
 export function TopRankingsAdminPanel() {
   const [range, setRange] = useState<Range>('day');
@@ -605,10 +406,7 @@ export function TopRankingsAdminPanel() {
 
   const rows = useMemo(() => {
     const cutoff = Date.now() - RANGE_MS[range];
-    let src;
-    if (game === 'crash') src = store.crashLeaderboard;
-    else if (game === 'mines') src = store.minesLeaderboard;
-    else src = store.crashLeaderboard; // Default to crash for other games for now
+    const src = game === 'mines' ? store.minesLeaderboard : store.crashLeaderboard;
     const filtered = src.filter((r) => r.ts >= cutoff);
     filtered.sort((a, b) => (sort === 'earnings' ? b.earnings - a.earnings : b.ts - a.ts));
     return filtered.slice(0, 25);
@@ -621,32 +419,11 @@ export function TopRankingsAdminPanel() {
         <p className="text-xs text-slate-500">Global player metrics · mirrors the in-game leaderboard.</p>
       </div>
       <div className="flex flex-wrap gap-2">
-        <SelectModal
-          value={game}
-          options={[
-            { value: 'crash', label: 'Crash' },
-            { value: 'mines', label: 'Mines' },
-            { value: 'aviator', label: 'Aviator' },
-            { value: 'wingo', label: 'Win Go' },
-            { value: 'k3', label: 'K3' },
-            { value: 'fived', label: '5D' },
-          ]}
-          onChange={(v) => setGame(v as 'crash' | 'mines' | 'aviator' | 'wingo' | 'k3' | 'fived')}
-        />
-        <SelectModal
-          value={sort}
-          options={[
-            { value: 'earnings', label: 'Sort by Earnings' },
-            { value: 'recent', label: 'Sort by Recency' },
-          ]}
-          onChange={(v) => setSort(v as 'earnings' | 'recent')}
-        />
+        <SelectModal value={game} options={[{value:'crash',label:'Crash'},{value:'mines',label:'Mines'},{value:'aviator',label:'Aviator'},{value:'wingo',label:'Win Go'},{value:'k3',label:'K3'},{value:'fived',label:'5D'}]} onChange={(v) => setGame(v as 'crash' | 'mines' | 'aviator' | 'wingo' | 'k3' | 'fived')} />
+        <SelectModal value={sort} options={[{value:'earnings',label:'Sort by Earnings'},{value:'recent',label:'Sort by Recency'}]} onChange={(v) => setSort(v as 'earnings' | 'recent')} />
         <div className="flex gap-1 ml-auto">
           {(['day', 'week', 'month', 'year'] as Range[]).map((r) => (
-            <button key={r} onClick={() => setRange(r)}
-              className={`px-2.5 py-1 rounded-md text-[11px] font-bold uppercase ${range === r ? 'bg-neon-500/20 border border-neon-400/50 text-neon-300' : 'bg-slatepanel-800 border border-borderline-900 text-slate-400'}`}>
-              {r}
-            </button>
+            <button key={r} onClick={() => setRange(r)} className={`px-2.5 py-1 rounded-md text-[11px] font-bold uppercase ${range === r ? 'bg-neon-500/20 border border-neon-400/50 text-neon-300' : 'bg-slatepanel-800 border border-borderline-900 text-slate-400'}`}>{r}</button>
           ))}
         </div>
       </div>
@@ -656,9 +433,7 @@ export function TopRankingsAdminPanel() {
             <tr><th className="text-left py-1.5">#</th><th className="text-left">Player</th><th className="text-right">Earnings</th><th className="text-right">Last Seen</th></tr>
           </thead>
           <tbody className="tabular">
-            {rows.length === 0 && (
-              <tr><td colSpan={4} className="py-4 text-center text-slate-500">No data in selected range.</td></tr>
-            )}
+            {rows.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-slate-500">No data in selected range.</td></tr>}
             {rows.map((r, i) => (
               <tr key={i} className="border-t border-borderline-900/60">
                 <td className="py-1.5 text-slate-500">{i + 1}</td>
@@ -675,8 +450,7 @@ export function TopRankingsAdminPanel() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Online Users Count Panel — admin can control the displayed online count
-// with auto-fluctuation (realistic up/down movement every 2–3 s) or fixed mode.
+// Online Users Count Panel
 // ─────────────────────────────────────────────────────────────────────────────
 export function OnlineCountPanel() {
   const [baseCount, setBaseCount] = useState(150);
@@ -684,25 +458,17 @@ export function OnlineCountPanel() {
   const [displayCount, setDisplayCount] = useState(150);
 
   useEffect(() => {
-    if (!autoMode) {
-      setDisplayCount(baseCount);
-      return;
-    }
+    if (!autoMode) { setDisplayCount(baseCount); return; }
     const tick = () => {
-      const delta = Math.round((Math.random() - 0.5) * 14); // ±7 per tick
+      const delta = Math.round((Math.random() - 0.5) * 14);
       setDisplayCount((prev) => {
         const next = prev + delta;
-        const lo = Math.max(0, baseCount - 30);
-        const hi = baseCount + 30;
-        return Math.max(lo, Math.min(hi, next));
+        return Math.max(Math.max(0, baseCount - 30), Math.min(baseCount + 30, next));
       });
     };
     tick();
     let timeoutId: ReturnType<typeof setTimeout>;
-    const schedule = () => {
-      const delay = 2000 + Math.random() * 1000; // 2–3 s
-      timeoutId = setTimeout(() => { tick(); schedule(); }, delay);
-    };
+    const schedule = () => { timeoutId = setTimeout(() => { tick(); schedule(); }, 2000 + Math.random() * 1000); };
     schedule();
     return () => clearTimeout(timeoutId);
   }, [autoMode, baseCount]);
@@ -711,94 +477,54 @@ export function OnlineCountPanel() {
     <div className="panel p-4 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
-            <Users className="w-5 h-5 text-emeraldwin-300" /> Online Users
-          </h2>
-          <p className="text-xs text-slate-500">Controls the online count shown to users. Auto mode fluctuates realistically.</p>
+          <h2 className="font-display font-bold text-lg text-white flex items-center gap-2"><Users className="w-5 h-5 text-emeraldwin-300" /> Online Users</h2>
+          <p className="text-xs text-slate-500">Controls the online count shown to users.</p>
         </div>
         <div className="text-center flex-shrink-0">
           <p className="font-display font-extrabold text-3xl text-emeraldwin-300 tabular">{displayCount.toLocaleString()}</p>
           <p className="text-[10px] text-slate-500">currently online</p>
         </div>
       </div>
-
-      {/* Auto / Fixed mode toggle */}
       <div className="grid grid-cols-2 gap-2">
-        <button
-          onClick={() => setAutoMode(true)}
-          className={`panel p-3 text-left transition-all ${autoMode ? 'border-emeraldwin-400 ring-1 ring-emeraldwin-400/40' : 'opacity-70 hover:opacity-100'}`}
-        >
-          <div className="flex items-center gap-2 mb-1">
-            <RefreshCw className={`w-4 h-4 ${autoMode ? 'text-emeraldwin-300' : 'text-slate-500'}`} />
-            <span className="font-display font-bold text-white text-sm">Auto</span>
-          </div>
+        <button onClick={() => setAutoMode(true)} className={`panel p-3 text-left transition-all ${autoMode ? 'border-emeraldwin-400 ring-1 ring-emeraldwin-400/40' : 'opacity-70 hover:opacity-100'}`}>
+          <div className="flex items-center gap-2 mb-1"><RefreshCw className={`w-4 h-4 ${autoMode ? 'text-emeraldwin-300' : 'text-slate-500'}`} /><span className="font-display font-bold text-white text-sm">Auto</span></div>
           <p className="text-[11px] text-slate-400">Realistic ±fluctuation every 2–3 s</p>
         </button>
-        <button
-          onClick={() => setAutoMode(false)}
-          className={`panel p-3 text-left transition-all ${!autoMode ? 'border-neon-400 ring-1 ring-neon-400/40' : 'opacity-70 hover:opacity-100'}`}
-        >
-          <div className="flex items-center gap-2 mb-1">
-            <SlidersHorizontal className={`w-4 h-4 ${!autoMode ? 'text-neon-300' : 'text-slate-500'}`} />
-            <span className="font-display font-bold text-white text-sm">Fixed</span>
-          </div>
+        <button onClick={() => setAutoMode(false)} className={`panel p-3 text-left transition-all ${!autoMode ? 'border-neon-400 ring-1 ring-neon-400/40' : 'opacity-70 hover:opacity-100'}`}>
+          <div className="flex items-center gap-2 mb-1"><SlidersHorizontal className={`w-4 h-4 ${!autoMode ? 'text-neon-300' : 'text-slate-500'}`} /><span className="font-display font-bold text-white text-sm">Fixed</span></div>
           <p className="text-[11px] text-slate-400">Locked to slider value</p>
         </button>
       </div>
-
-      {/* Slider — up/down (vertical feel via range input label) */}
       <div>
         <div className="flex items-center justify-between mb-1">
-          <label className="text-sm font-semibold text-white flex items-center gap-2">
-            <ChevronUp className="w-4 h-4 text-neon-300" /> Base Count
-          </label>
+          <label className="text-sm font-semibold text-white flex items-center gap-2"><ChevronUp className="w-4 h-4 text-neon-300" /> Base Count</label>
           <span className="tabular font-display font-extrabold text-lg text-neon-300">{baseCount}</span>
         </div>
-        <input
-          type="range"
-          min={0} max={5000} step={10}
-          value={baseCount}
-          onChange={(e) => setBaseCount(parseInt(e.target.value))}
-          className="w-full accent-neon-400 h-2"
-        />
-        <div className="flex justify-between text-[10px] text-slate-500 mt-1">
-          <span>0</span>
-          <span>1000</span>
-          <span>2500</span>
-          <span>5000</span>
-        </div>
+        <input type="range" min={0} max={5000} step={10} value={baseCount} onChange={(e) => setBaseCount(parseInt(e.target.value))} className="w-full accent-neon-400 h-2" />
+        <div className="flex justify-between text-[10px] text-slate-500 mt-1"><span>0</span><span>1000</span><span>2500</span><span>5000</span></div>
       </div>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Top Win Paid Out Panel — shows highest player wins (auto-refreshes every 3 s)
+// Top Win Paid Out Panel
 // ─────────────────────────────────────────────────────────────────────────────
 export function TopWinPaidOutPanel() {
   const [topWins, setTopWins] = useState<{ username: string; game: string; amount: number; ts: number }[]>([]);
 
   const loadWins = () => {
-    const wins = store.adminHistory
-      .filter((r) => r.win > 0)
-      .sort((a, b) => b.win - a.win)
-      .slice(0, 10)
+    const wins = store.adminHistory.filter((r) => r.win > 0).sort((a, b) => b.win - a.win).slice(0, 10)
       .map((r) => ({ username: r.username, game: r.game, amount: r.win, ts: r.ts }));
     setTopWins(wins);
   };
 
-  useEffect(() => {
-    loadWins();
-    const id = setInterval(loadWins, 3000);
-    return () => clearInterval(id);
-  }, []);
+  useEffect(() => { loadWins(); const id = setInterval(loadWins, 3000); return () => clearInterval(id); }, []);
 
   return (
     <div className="panel p-4 space-y-3">
       <div>
-        <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
-          <Trophy className="w-5 h-5 text-amberx-400" /> Top Win Paid Out
-        </h2>
+        <h2 className="font-display font-bold text-lg text-white flex items-center gap-2"><Trophy className="w-5 h-5 text-amberx-400" /> Top Win Paid Out</h2>
         <p className="text-xs text-slate-500">Highest winnings paid to players · auto-updates every 3 s.</p>
       </div>
       {topWins.length === 0 ? (
@@ -852,8 +578,6 @@ export default function GameAlgosTab() {
         <h2 className="font-display font-bold text-lg text-white">Game Algorithms & Assets</h2>
         <p className="text-xs text-slate-500">Crash handling is pinned to the top of the dashboard. Manage game logos and redeem codes here.</p>
       </div>
-
-      {/* ── 8 game logos (no ludo) ── */}
       <div className="panel p-4">
         <h3 className="font-display font-bold text-sm text-white mb-1 flex items-center gap-2">
           <ImageIcon className="w-4 h-4 text-neon-300" /> Game Logo Upload
@@ -866,11 +590,7 @@ export default function GameAlgosTab() {
             return (
               <div key={g.key} className="panel-tight p-3 text-center">
                 <div className="w-14 h-14 mx-auto rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center overflow-hidden mb-2">
-                  {logo ? (
-                    <img src={logo} alt={g.label} className="w-full h-full object-contain" />
-                  ) : (
-                    <Icon className="w-7 h-7 text-slate-500" strokeWidth={1.5} />
-                  )}
+                  {logo ? <img src={logo} alt={g.label} className="w-full h-full object-contain" /> : <Icon className="w-7 h-7 text-slate-500" strokeWidth={1.5} />}
                 </div>
                 <p className="text-[10px] font-semibold text-white mb-2 truncate">{g.label}</p>
                 <div className="flex gap-1 justify-center">
@@ -883,18 +603,12 @@ export default function GameAlgosTab() {
                     </button>
                   )}
                 </div>
-                <input
-                  ref={(el) => { fileRefs.current[g.key] = el; }}
-                  type="file" accept="image/*" className="hidden"
-                  onChange={(e) => e.target.files?.[0] && onUpload(g.key, e.target.files[0])}
-                />
+                <input ref={(el) => { fileRefs.current[g.key] = el; }} type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && onUpload(g.key, e.target.files[0])} />
               </div>
             );
           })}
         </div>
       </div>
-
-      {/* spec §7: Redeem code generator */}
       <RedeemCodeAdminPanel />
     </div>
   );
