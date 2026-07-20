@@ -1,10 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Users, TrendingUp, TrendingDown, Clock, CheckCircle2, DollarSign,
-  Activity, RefreshCw, Gamepad2, BarChart3, Wifi, Gift, ShieldAlert,
-  Plus, Minus,
+  Users, TrendingUp, TrendingDown, Clock, CheckCircle2,
+  Activity, RefreshCw, Gamepad2, BarChart3, Wifi, ShieldAlert,
+  Bell, ArrowRight, Banknote,
 } from 'lucide-react';
 import { supabase } from '../../integrations/supabase/client';
+import { cms } from '../../lib/cms';
+import { supabaseGetTransactions, supabaseGetUsers, type SupabaseTransaction, type SupabaseProfile } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
   return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -30,20 +32,34 @@ export default function DashboardOverviewTab() {
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [realtimeConnected, setRealtimeConnected] = useState(false);
+  const [transactions, setTransactions] = useState<SupabaseTransaction[]>([]);
+  const [profiles, setProfiles] = useState<SupabaseProfile[]>([]);
+
+  const canSeeRequests = cms.hasPermission('requests');
+  const canSeeFinance  = cms.hasPermission('finance');
+  const canSeeUsers    = cms.hasPermission('users');
+  const canSeeTickets  = cms.hasPermission('tickets');
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.rpc('admin_get_dashboard_stats');
+      const tasks: Promise<unknown>[] = [supabase.rpc('admin_get_dashboard_stats')];
+      if (canSeeRequests) tasks.push(supabaseGetTransactions(), supabaseGetUsers());
+      const results = await Promise.all(tasks);
+      const { data, error } = results[0] as { data: DashStats; error: Error | null };
       if (error) throw error;
-      setStats(data as DashStats);
+      setStats(data);
+      if (canSeeRequests) {
+        setTransactions((results[1] as SupabaseTransaction[]) ?? []);
+        setProfiles((results[2] as SupabaseProfile[]) ?? []);
+      }
       setLastRefresh(new Date());
     } catch (e) {
       console.error('DashboardOverviewTab load error:', e);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canSeeRequests]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -57,7 +73,18 @@ export default function DashboardOverviewTab() {
     return () => { void supabase.removeChannel(channel); };
   }, [load]);
 
-  const netProfit = stats ? stats.total_deposits - stats.total_withdrawals + stats.game_profit - stats.total_bonus_credited : 0;
+  const accountIdMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of profiles) if (p.id && p.account_id) map[p.id] = p.account_id;
+    return map;
+  }, [profiles]);
+
+  const recentPending = useMemo(() => {
+    return transactions
+      .filter((t) => (t.type === 'deposit' || t.type === 'withdrawal') && (t.status === 'pending' || t.status === 'processing'))
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, 6);
+  }, [transactions]);
 
   return (
     <div className="space-y-6">
@@ -107,46 +134,47 @@ export default function DashboardOverviewTab() {
             </div>
           </div>
 
-          {/* Finance row */}
-          <div>
-            <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Finance</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <StatCard label="Total Deposits"     value={fmt(stats.total_deposits)}     icon={TrendingUp}   color="text-emeraldwin-300" sub="Completed only" />
-              <StatCard label="Total Withdrawals"  value={fmt(stats.total_withdrawals)}  icon={TrendingDown} color="text-coral-300"       sub="Completed only" />
-              <StatCard label="Pending Deposits"   value={stats.pending_deposits.toString()} icon={Clock}   color="text-amber-300"      sub="Awaiting approval" highlight={stats.pending_deposits > 0} />
-              <StatCard label="Pending Withdrawals" value={stats.pending_withdrawals.toString()} icon={Clock} color="text-amber-300"  sub="Awaiting approval" highlight={stats.pending_withdrawals > 0} />
+          {/* New Requests — notification only; visible only to staff with Requests access */}
+          {canSeeRequests && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold flex items-center gap-1.5">
+                  <Bell className="w-3.5 h-3.5 text-amber-400" /> New Requests
+                  {(stats.pending_deposits + stats.pending_withdrawals) > 0 && (
+                    <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center">
+                      {stats.pending_deposits + stats.pending_withdrawals}
+                    </span>
+                  )}
+                </h3>
+                <button onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'requests' }))}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-violet-300 hover:text-violet-200">
+                  Go to Requests tab <ArrowRight className="w-3 h-3" />
+                </button>
+              </div>
+              {recentPending.length === 0 ? (
+                <div className="panel p-4 text-xs text-slate-500 text-center">No pending deposit/withdrawal requests right now.</div>
+              ) : (
+                <div className="space-y-2">
+                  {recentPending.map((t) => (
+                    <div key={t.id} className="panel p-3 flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {t.type === 'deposit'
+                          ? <Banknote className="w-4 h-4 text-emeraldwin-400 flex-shrink-0" />
+                          : <TrendingDown className="w-4 h-4 text-coral-400 flex-shrink-0" />}
+                        <div className="min-w-0">
+                          <div className="text-xs text-white font-semibold truncate">
+                            {t.type === 'deposit' ? 'Deposit' : 'Withdrawal'} · ID: {t.user_id ? (accountIdMap[t.user_id] ?? '—') : '—'}
+                          </div>
+                          <div className="text-[10px] text-slate-500">{new Date(t.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+                        </div>
+                      </div>
+                      <span className="text-sm font-bold text-white tabular flex-shrink-0">{fmt(t.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-          </div>
-
-          {/* Profit breakdown */}
-          <div>
-            <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Profit Breakdown</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <StatCard label="Game Profit"     value={fmt(stats.game_profit)}           icon={Gamepad2}     color={stats.game_profit >= 0 ? 'text-neon-300' : 'text-coral-300'}     sub="Bets − Wins" />
-              <StatCard label="Bonus Credited"  value={fmt(stats.total_bonus_credited)}  icon={Gift}         color="text-amber-300"    sub="Signup + Manual" />
-              <StatCard label="Bet Volume"      value={fmt(stats.total_bet_volume)}      icon={Plus}         color="text-blue-300"     sub="Total wagered" />
-              <StatCard label="Net Platform Profit" value={fmt(netProfit)}               icon={DollarSign}   color={netProfit >= 0 ? 'text-emeraldwin-300' : 'text-coral-300'} sub="Deposits − Withdrawals + Game − Bonus" />
-            </div>
-          </div>
-
-          {/* Profit formula */}
-          <div className="panel p-4 border border-borderline-900">
-            <h3 className="text-xs font-display font-bold text-white mb-3 flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-neon-300" /> Net Profit Formula
-            </h3>
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <span className="px-2 py-1 rounded-lg bg-emeraldwin-500/10 border border-emeraldwin-500/20 text-emeraldwin-300 font-mono font-bold">{fmt(stats.total_deposits)}</span>
-              <Minus className="w-3 h-3 text-slate-500" />
-              <span className="px-2 py-1 rounded-lg bg-coral-500/10 border border-coral-500/20 text-coral-300 font-mono font-bold">{fmt(stats.total_withdrawals)}</span>
-              <Plus className="w-3 h-3 text-slate-500" />
-              <span className="px-2 py-1 rounded-lg bg-neon-500/10 border border-neon-500/20 text-neon-300 font-mono font-bold">{fmt(stats.game_profit)}</span>
-              <Minus className="w-3 h-3 text-slate-500" />
-              <span className="px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-300 font-mono font-bold">{fmt(stats.total_bonus_credited)}</span>
-              <span className="text-slate-500 text-xs">=</span>
-              <span className={`px-3 py-1 rounded-lg border font-display font-extrabold text-base ${netProfit >= 0 ? 'bg-emeraldwin-500/10 border-emeraldwin-500/30 text-emeraldwin-300' : 'bg-coral-500/10 border-coral-500/30 text-coral-300'}`}>{fmt(netProfit)}</span>
-            </div>
-            <p className="text-[10px] text-slate-600 mt-2">Deposits − Withdrawals + Game Profit − Bonuses = Net Profit</p>
-          </div>
+          )}
 
           {/* Quick links */}
           <div className="panel p-4">
@@ -154,10 +182,18 @@ export default function DashboardOverviewTab() {
               <Gamepad2 className="w-4 h-4 text-neon-300" /> Quick Actions
             </h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              <QuickAction label="Finance Overview"  icon={TrendingUp}   onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'finance' }))} />
-              <QuickAction label="Pending Requests"  icon={Clock}        badge={stats.pending_deposits + stats.pending_withdrawals} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'requests' }))} />
-              <QuickAction label="All Users"         icon={Users}        onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'users' }))} />
-              <QuickAction label="Support Tickets"   icon={CheckCircle2} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'tickets' }))} />
+              {canSeeFinance && (
+                <QuickAction label="Finance Overview"  icon={TrendingUp}   onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'finance' }))} />
+              )}
+              {canSeeRequests && (
+                <QuickAction label="Pending Requests"  icon={Clock}        badge={stats.pending_deposits + stats.pending_withdrawals} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'requests' }))} />
+              )}
+              {canSeeUsers && (
+                <QuickAction label="All Users"         icon={Users}        onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'users' }))} />
+              )}
+              {canSeeTickets && (
+                <QuickAction label="Support Tickets"   icon={CheckCircle2} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'tickets' }))} />
+              )}
             </div>
           </div>
         </>
