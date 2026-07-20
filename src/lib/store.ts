@@ -16,6 +16,7 @@ export interface GameHandlerConfig {
   targetWinProbability: number;
   houseEdge: number;
   manualResult: string;
+  manualCrashPoint?: number;
   manualTargetRoundId: number | null;
   quickStakes: number[];
 }
@@ -150,11 +151,22 @@ function seedLeaderboard(prefix: string): { user: string; earnings: number; ts: 
   return rows.map(r => ({ ...r, user: r.user + (prefix === 'mines' ? '\u00B7M' : '') }));
 }
 
+// All game keys whose configs live at root level in admin_config in Supabase.
+// DB structure: admin_config = { crash: {...}, aviator: {...}, wingo: {...}, ... }
+const GAME_HANDLER_KEYS = ['crash', 'aviator', 'wingo', 'k3', 'fived', 'sunvsmoon', 'trading'] as const;
+
+const DEFAULT_CRASH_HANDLER: GameHandlerConfig = {
+  mode: 'AUTO', targetWinProbability: 55, houseEdge: 4,
+  manualResult: '2.00', manualCrashPoint: 2.0,
+  manualTargetRoundId: null, quickStakes: [200, 500, 1000, 2000],
+};
+
 const DEFAULT_ADMIN_CONFIG: AdminConfig = {
   mode: 'AUTO', targetWinProbability: 55, manualCrashPoint: 2.0, houseEdge: 4,
   crashQuickStakes: [200, 500, 1000, 2000], manualTargetRoundId: null, minBet: 10, maxBet: 100000,
   perGameLimits: {},
   gameHandlers: {
+    crash: DEFAULT_CRASH_HANDLER,
     aviator: { mode: 'AUTO', targetWinProbability: 55, houseEdge: 4, manualResult: '2.00', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
     wingo: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '5', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
     k3: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '3,3,3', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
@@ -174,7 +186,7 @@ class Store {
 
   notifications: NotificationItem[] = [];
 
-  admin: AdminConfig = { ...DEFAULT_ADMIN_CONFIG };
+  admin: AdminConfig = { ...DEFAULT_ADMIN_CONFIG, gameHandlers: { ...DEFAULT_ADMIN_CONFIG.gameHandlers } };
 
   // Per-user history
   crashMyBets: CrashBetRecord[] = [];
@@ -198,8 +210,6 @@ class Store {
   signupBonusHistory: SignupBonusRecord[] = [];
   private static SIGNUP_BONUS_KEY = 'b4bet.signupBonus';
   private static SIGNUP_BONUS_HISTORY_KEY = 'b4bet.signupBonusHistory';
-  // granted tracking is now Supabase-backed via signup_bonus_granted column
-  // Keep a local cache to avoid extra DB calls within the same session
   private signupBonusGrantedCache: Set<string> = new Set();
 
   redeemCodes: Record<string, RedeemCode> = { ...DEFAULT_REDEEM_CODES };
@@ -225,9 +235,6 @@ class Store {
         if (profile) {
           this.balance = (profile as { balance: number }).balance || 0;
         } else if (profileErr) {
-          // Don't silently zero out the balance on a lookup failure — keep
-          // whatever was last known (e.g. from persisted local cache) and
-          // log so this is diagnosable.
           console.warn('[store] failed to load profile balance:', profileErr.message);
         }
         bus.emit(Topics.Balance, this.balance);
@@ -358,6 +365,18 @@ class Store {
   }
 
   // ---- Admin Config (Supabase-persisted) ----
+  //
+  // DB structure for admin_config:
+  //   { crash: { mode, houseEdge, manualCrashPoint, ... },
+  //     aviator: { ... }, wingo: { ... }, ... ,
+  //     minBet, maxBet, perGameLimits, gameHandlers, ... }
+  //
+  // Game handler configs are stored BOTH at root level (e.g. admin_config.crash)
+  // AND inside gameHandlers (e.g. admin_config.gameHandlers.crash).
+  // Root-level game keys are what the Edge Function reads.
+  // gameHandlers is what the frontend reads via useAdminConfig().
+  // Both are kept in sync on every save.
+  //
   async loadAdminConfigFromSupabase() {
     try {
       const { data } = await supabase.rpc('admin_get_settings');
@@ -365,11 +384,41 @@ class Store {
         const rows = data as { key: string; value: unknown }[];
         const row = rows.find(r => r.key === 'admin_config');
         if (row?.value && typeof row.value === 'object') {
-          this.admin = { ...DEFAULT_ADMIN_CONFIG, ...(row.value as Partial<AdminConfig>) };
-          this.admin.gameHandlers = {
-            ...DEFAULT_ADMIN_CONFIG.gameHandlers,
-            ...(this.admin.gameHandlers ?? {}),
-          };
+          const loaded = row.value as Record<string, unknown>;
+
+          // Start from defaults
+          this.admin = { ...DEFAULT_ADMIN_CONFIG, gameHandlers: { ...DEFAULT_ADMIN_CONFIG.gameHandlers } };
+
+          // Apply top-level non-game fields
+          const { gameHandlers: _gh, ...topLevel } = loaded;
+          Object.assign(this.admin, topLevel);
+
+          // Apply gameHandlers from the gameHandlers key (if present)
+          if (_gh && typeof _gh === 'object') {
+            const gh = _gh as Record<string, unknown>;
+            for (const key of Object.keys(gh)) {
+              if (gh[key] && typeof gh[key] === 'object') {
+                this.admin.gameHandlers[key] = {
+                  ...this.getGameHandler(key),
+                  ...(gh[key] as Partial<GameHandlerConfig>),
+                };
+              }
+            }
+          }
+
+          // Also check root-level game keys — DB stores them there (Edge Function reads from here).
+          // Root-level values WIN over gameHandlers if both present, since root is what gets
+          // written by setGameHandler and read by the Edge Function.
+          for (const key of GAME_HANDLER_KEYS) {
+            const rootVal = loaded[key];
+            if (rootVal && typeof rootVal === 'object') {
+              this.admin.gameHandlers[key] = {
+                ...this.getGameHandler(key),
+                ...(rootVal as Partial<GameHandlerConfig>),
+              };
+            }
+          }
+
           bus.emit(Topics.AdminConfig, this.admin);
         }
       }
@@ -379,9 +428,36 @@ class Store {
   setAdmin(patch: Partial<AdminConfig>) {
     this.admin = { ...this.admin, ...patch };
     bus.emit(Topics.AdminConfig, this.admin);
-    void supabase.rpc('admin_update_setting', {
+    void this._persistAdminConfig();
+  }
+
+  // Build the DB payload: all standard fields + game handler configs hoisted to root level
+  // (so the Edge Function can read adminConfig['crash'] directly) + gameHandlers key.
+  private _buildDbPayload(): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      mode: this.admin.mode,
+      targetWinProbability: this.admin.targetWinProbability,
+      manualCrashPoint: this.admin.manualCrashPoint,
+      houseEdge: this.admin.houseEdge,
+      crashQuickStakes: this.admin.crashQuickStakes,
+      manualTargetRoundId: this.admin.manualTargetRoundId,
+      minBet: this.admin.minBet,
+      maxBet: this.admin.maxBet,
+      perGameLimits: this.admin.perGameLimits,
+      gameHandlers: this.admin.gameHandlers,
+    };
+    // Hoist each game handler to root level so Edge Function reads it correctly
+    for (const key of GAME_HANDLER_KEYS) {
+      const handler = this.admin.gameHandlers[key];
+      if (handler) payload[key] = handler;
+    }
+    return payload;
+  }
+
+  private _persistAdminConfig() {
+    return supabase.rpc('admin_update_setting', {
       p_key: 'admin_config',
-      p_value: this.admin as unknown as string,
+      p_value: this._buildDbPayload() as unknown as string,
     }).catch(() => {});
   }
 
@@ -401,13 +477,26 @@ class Store {
   getGameHandler(gameKey: string): GameHandlerConfig {
     const existing = this.admin.gameHandlers[gameKey];
     if (existing) return existing;
+    if (gameKey === 'crash') return { ...DEFAULT_CRASH_HANDLER };
     return { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] };
   }
 
   setGameHandler(gameKey: string, patch: Partial<GameHandlerConfig>) {
     const current = this.getGameHandler(gameKey);
-    const next = { ...this.admin.gameHandlers, [gameKey]: { ...current, ...patch } };
-    this.setAdmin({ gameHandlers: next });
+    const updated = { ...current, ...patch };
+    const nextHandlers = { ...this.admin.gameHandlers, [gameKey]: updated };
+    // Update in-memory state (includes gameHandlers + root-level fields for crash)
+    this.admin = { ...this.admin, gameHandlers: nextHandlers };
+    // Keep legacy root-level crash fields in sync for any code still reading them
+    if (gameKey === 'crash') {
+      if (patch.mode !== undefined) this.admin.mode = patch.mode;
+      if (patch.manualCrashPoint !== undefined) this.admin.manualCrashPoint = patch.manualCrashPoint;
+      if (patch.houseEdge !== undefined) this.admin.houseEdge = patch.houseEdge;
+      if (patch.targetWinProbability !== undefined) this.admin.targetWinProbability = patch.targetWinProbability;
+    }
+    bus.emit(Topics.AdminConfig, this.admin);
+    // Persist — game handler is hoisted to root level in the DB payload
+    void this._persistAdminConfig();
   }
 
   getGameRound(gameKey: string): number { return globalRounds[gameKey] ?? 1; }
@@ -629,13 +718,9 @@ class Store {
       .catch(() => {});
   }
 
-  // Grant signup bonus — checks Supabase profiles.signup_bonus_granted
-  // and (if an ip is supplied) checks whether that IP already received a bonus before.
   async grantSignupBonusAsync(userId: string, username: string, ip?: string): Promise<number> {
     if (!userId || !username) return 0;
-    // Check local cache first
     if (this.signupBonusGrantedCache.has(userId)) return 0;
-    // Check Supabase
     try {
       const { data } = await supabase.from('profiles')
         .select('signup_bonus_granted').eq('id', userId).single();
@@ -645,7 +730,6 @@ class Store {
         return 0;
       }
     } catch { /* ignore */ }
-    // IP abuse check — same IP already used for a signup bonus? Skip granting again.
     if (ip) {
       try {
         const { data: alreadyUsed, error } = await supabase.rpc('check_ip_signup_bonus', { p_ip: ip });
@@ -654,7 +738,7 @@ class Store {
           void supabase.rpc('mark_signup_bonus_granted', { p_user_id: userId }).catch(() => {});
           return 0;
         }
-      } catch { /* ignore — if the check fails, fall through rather than block a real signup */ }
+      } catch { /* ignore */ }
     }
     const amount = this.signupBonus;
     if (amount > 0) {
@@ -663,7 +747,6 @@ class Store {
       this.signupBonusHistory = [rec, ...this.signupBonusHistory].slice(0, 1000);
       this.pushBalanceHistory({ userId, username, type: 'credit', amount, reason: 'Signup bonus (auto)' });
     }
-    // Mark granted in Supabase
     void supabase.rpc('mark_signup_bonus_granted', { p_user_id: userId }).catch(() => {});
     this.signupBonusGrantedCache.add(userId);
     this.persistSignupBonus();
@@ -671,10 +754,9 @@ class Store {
     return amount;
   }
 
-  // Sync wrapper — called from register() which is async anyway
   grantSignupBonus(userId: string, username: string, ip?: string): number {
     void this.grantSignupBonusAsync(userId, username, ip);
-    return this.signupBonus; // optimistic return
+    return this.signupBonus;
   }
 
   getSignupBonusHistory(opts: { search?: string; period?: 'all' | 'today' | 'day' | 'week' | 'month' | 'year' } = {}): SignupBonusRecord[] {
