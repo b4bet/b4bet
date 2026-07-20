@@ -34,6 +34,7 @@ export const Topics = {
   Balance: 'balance',
   CrashState: 'crash:state',
   CrashTick: 'crash:tick',
+  CrashBets: 'crash:bets',
   CrashHistory: 'crash:history',
   CrashMyBets: 'crash:mybets',
   CrashCashout: 'crash:cashout',

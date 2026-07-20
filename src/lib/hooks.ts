@@ -33,7 +33,7 @@ export function useCrashState(): CrashState {
 }
 
 export function useCrashBets(): Record<'A' | 'B', BetSlot> {
-  return useBus<Record<'A' | 'B', BetSlot>>(Topics.CrashTick, crashEngine.getBets());
+  return useBus<Record<'A' | 'B', BetSlot>>(Topics.CrashBets, crashEngine.getBets());
 }
 
 export function useCrashHistory(): number[] {

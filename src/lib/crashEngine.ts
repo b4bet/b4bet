@@ -17,7 +17,16 @@ function playCashoutSound() { sfx.cashout(); }
 export type CrashPhase = 'countdown' | 'flying' | 'busted';
 
 export interface CashoutEvent { id: string; amount: number; multiplier: number; ts: number; }
-export interface BetSlot { id: 'A' | 'B'; amount: number; placed: boolean; autoCashAt: number | null; cashedOutAt: number | null; win: number | null; }
+export interface BetSlot {
+  id: 'A' | 'B';
+  amount: number;
+  placed: boolean;
+  autoCashAt: number | null;
+  cashedOutAt: number | null;
+  /** Alias for cashedOutAt — true when player has cashed out this round */
+  cashedOut: boolean;
+  win: number | null;
+}
 export interface CrashState { phase: CrashPhase; multiplier: number; countdown: number; roundId: number; bustPoint: number; history: number[]; bets: { A: BetSlot; B: BetSlot }; startedAt: number; }
 
 interface EngineState { phase: CrashPhase; multiplier: number; countdown: number; roundId: number; bustPoint: number; history: number[]; bets: { A: BetSlot; B: BetSlot }; startedAt: number; win: number | null; }
@@ -25,7 +34,7 @@ interface EngineState { phase: CrashPhase; multiplier: number; countdown: number
 const COUNTDOWN_SECS = 6;
 const FETCH_TIMEOUT_MS = 4000;
 
-function freshBet(id: 'A' | 'B'): BetSlot { return { id, amount: 100, placed: false, autoCashAt: null, cashedOutAt: null, win: null }; }
+function freshBet(id: 'A' | 'B'): BetSlot { return { id, amount: 100, placed: false, autoCashAt: null, cashedOutAt: null, cashedOut: false, win: null }; }
 
 class CrashEngine {
   private state: EngineState = {
@@ -49,7 +58,12 @@ class CrashEngine {
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
   private publish() { bus.emit(Topics.CrashState, this.getState()); }
-  private broadcastBets() { bus.emit(Topics.CrashBets, { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } }); }
+  private broadcastBets() {
+    const bets = { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
+    bus.emit(Topics.CrashBets, bets);
+    // Also emit on legacy CrashTick topic for backward compat
+    bus.emit(Topics.CrashTick, bets);
+  }
 
   private tick() {
     const now = Date.now(); const dt = (now - this.lastTick) / 1000; this.lastTick = now;
@@ -116,8 +130,10 @@ class CrashEngine {
 
   private performCashOut(id: 'A' | 'B', cashOutAt: number) {
     const slot = this.state.bets[id]; if (!slot.placed || slot.cashedOutAt !== null) return;
-    slot.cashedOutAt = cashOutAt; slot.win = Math.floor(slot.amount * cashOutAt); playCashoutSound();
-    bus.emit(Topics.CashoutEvent, { id, amount: slot.win, multiplier: cashOutAt, ts: Date.now() } satisfies CashoutEvent);
+    slot.cashedOutAt = cashOutAt;
+    slot.cashedOut = true;
+    slot.win = Math.floor(slot.amount * cashOutAt); playCashoutSound();
+    bus.emit(Topics.CashoutEvent as string, { id, amount: slot.win, multiplier: cashOutAt, ts: Date.now() } satisfies CashoutEvent);
     this.broadcastBets();
     store.credit(slot.win);
     store.recordCrashBet({ roundId: this.state.roundId, amount: slot.amount, cashOutAt, bustPoint: this.state.bustPoint, win: slot.win ?? 0 });
@@ -126,8 +142,37 @@ class CrashEngine {
   private settleBustedBets() { for (const slot of Object.values(this.state.bets)) { if (!slot.placed || slot.cashedOutAt !== null) continue; slot.win = 0; store.recordCrashBet({ roundId: this.state.roundId, amount: slot.amount, cashOutAt: null, bustPoint: this.state.bustPoint, win: 0 }); } this.broadcastBets(); }
 
   placeBet(id: 'A' | 'B', amount: number): { ok: boolean; reason?: string } { const slot = this.state.bets[id]; if (this.state.phase !== 'countdown') return { ok: false, reason: 'Round not in betting phase' }; if (slot.placed) return { ok: false, reason: 'Already placed' }; if (amount <= 0) return { ok: false, reason: 'Invalid amount' }; if (amount > store.balance) return { ok: false, reason: 'Insufficient balance' }; slot.amount = amount; slot.placed = true; store.debitBalance(amount); this.broadcastBets(); return { ok: true }; }
+
+  cancelBet(id: 'A' | 'B'): { ok: boolean; reason?: string } {
+    const slot = this.state.bets[id];
+    if (this.state.phase !== 'countdown') return { ok: false, reason: 'Cannot cancel after round starts' };
+    if (!slot.placed) return { ok: false, reason: 'No bet to cancel' };
+    store.credit(slot.amount);
+    this.state.bets[id] = freshBet(id);
+    this.broadcastBets();
+    return { ok: true };
+  }
+
   setAutoCashAt(id: 'A' | 'B', at: number | null) { this.state.bets[id].autoCashAt = at; this.broadcastBets(); }
-  cashOut(id: 'A' | 'B'): boolean { const slot = this.state.bets[id]; if (this.state.phase !== 'flying') return false; if (!slot.placed || slot.cashedOutAt !== null) return false; this.performCashOut(id, this.state.multiplier); return true; }
+
+  /** setAuto — enable/disable auto-cashout and set target multiplier */
+  setAuto(id: 'A' | 'B', enabled: boolean, target: number) {
+    this.state.bets[id].autoCashAt = enabled ? Math.max(1.01, target) : null;
+    this.broadcastBets();
+  }
+
+  cashOut(id: 'A' | 'B'): { ok: boolean; reason?: string } {
+    const slot = this.state.bets[id];
+    if (this.state.phase !== 'flying') return { ok: false, reason: 'Round not in flight' };
+    if (!slot.placed || slot.cashedOutAt !== null) return { ok: false, reason: 'Cannot cash out' };
+    this.performCashOut(id, this.state.multiplier);
+    return { ok: true };
+  }
+
+  getBets(): Record<'A' | 'B', BetSlot> {
+    return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
+  }
+
   getState(): CrashState { const { phase, multiplier, countdown, roundId, bustPoint, history } = this.state; return { phase, multiplier, countdown, roundId, bustPoint, history, bets: { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } }, startedAt: this.state.startedAt }; }
 }
 
