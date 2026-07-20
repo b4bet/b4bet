@@ -10,6 +10,14 @@ const SUPABASE_KEY: string =
   '';
 
 export interface CrashHistoryResult { history: number[]; }
+export interface CrashRoundDetail {
+  bust_point: number;
+  round_uuid: string;
+  server_seed?: string;       // revealed after crash
+  server_seed_hash: string;   // shown before round starts
+  created_at: string;
+}
+export interface CrashHistoryDetailResult { history: CrashRoundDetail[]; }
 export interface CrashBustResult { bust_point: number; }
 export interface CrashCurrentRoundResult {
   phase: 'waiting' | 'flying' | 'crashed';
@@ -17,6 +25,7 @@ export interface CrashCurrentRoundResult {
   round_uuid: string;
   crash_point: number | null;
   last_crash_point?: number | null;
+  server_seed_hash?: string;
 }
 export interface CrashSettleResult { success: boolean; win: number; verified_bust: number | null; balance_after: number; }
 export interface MinesStartResult { success: boolean; session_id: string; balance_after: number; grid_size: number; mine_count: number; }
@@ -63,6 +72,9 @@ export const GameService = {
   // Crash
   crashGetHistory(): Promise<CrashHistoryResult> {
     return get<CrashHistoryResult>({ action: "crash_get_history" });
+  },
+  crashGetHistoryDetail(): Promise<CrashHistoryDetailResult> {
+    return get<CrashHistoryDetailResult>({ action: "crash_get_history_detail" });
   },
   crashGetCurrentRound(): Promise<CrashCurrentRoundResult> {
     return get<CrashCurrentRoundResult>({ action: "crash_get_current_round" });
