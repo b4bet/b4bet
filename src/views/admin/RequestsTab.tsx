@@ -76,12 +76,14 @@ export default function RequestsTab() {
   // ── Actions: go through cms so user gets notification + realtime bell update ──
   const handleAccept = async (id: string) => {
     const txn = transactions.find((t) => t.id === id);
-    if (!txn) return;
+    if (!txn) { alert('Could not find this request in the loaded list. Try Refresh.'); return; }
     setUpdatingId(id);
     try {
       if (txn.type === 'deposit') await cms.setDepositStatus(id, 'processing');
       else await cms.setWithdrawalStatus(id, 'processing');
       setTransactions((prev) => prev.map((t) => t.id === id ? { ...t, status: 'processing' } : t));
+    } catch (e) {
+      alert('Accept failed: ' + (e instanceof Error ? e.message : String(e)));
     } finally { setUpdatingId(null); }
   };
 
@@ -102,6 +104,9 @@ export default function RequestsTab() {
         else           await cms.setWithdrawalStatus(id, 'approved', utr);
         setTransactions((prev) => prev.map((t) => t.id === id ? { ...t, status: 'completed' } : t));
         setLocalMeta((prev) => ({ ...prev, [id]: { ...prev[id], utr } }));
+      } catch (e) {
+        alert('Approve failed: ' + (e instanceof Error ? e.message : String(e)));
+        return;
       } finally { setUpdatingId(null); }
     } else {
       const reason = inputVal.trim() || undefined;
@@ -111,6 +116,9 @@ export default function RequestsTab() {
         else           await cms.setWithdrawalStatus(id, 'rejected', undefined, reason);
         setTransactions((prev) => prev.map((t) => t.id === id ? { ...t, status: 'failed' } : t));
         if (reason) setLocalMeta((prev) => ({ ...prev, [id]: { ...prev[id], reason } }));
+      } catch (e) {
+        alert('Reject failed: ' + (e instanceof Error ? e.message : String(e)));
+        return;
       } finally { setUpdatingId(null); }
     }
     setActing(null);
