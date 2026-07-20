@@ -25,19 +25,33 @@ const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
   { key: 'trading',   label: 'Trading',    icon: BarChart2 },
 ];
 
-const CRASH_GAMES = gameMeta.filter((g) => g.key === 'crash');
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Crash Handling Panel
 // ─────────────────────────────────────────────────────────────────────────────
 export function CrashHandlingPanel() {
   const cfg = useAdminConfig();
-  const crashState = useCrashState();
   const [manual, setManual] = useState(String(cfg.manualCrashPoint));
   const [crashStake1, setCrashStake1] = useState(String(cfg.crashQuickStakes[0] ?? '200'));
   const [crashStake2, setCrashStake2] = useState(String(cfg.crashQuickStakes[1] ?? '500'));
   const [crashStake3, setCrashStake3] = useState(String(cfg.crashQuickStakes[2] ?? '1000'));
   const [crashStake4, setCrashStake4] = useState(String(cfg.crashQuickStakes[3] ?? '2000'));
+
+  // ── Stable next-round preview — recomputes only when mode/settings change,
+  // never on every render (no Math.random() in JSX).
+  const [preview, setPreview] = useState<string>('');
+  useEffect(() => {
+    if (cfg.mode === 'MANUAL') {
+      setPreview(cfg.manualCrashPoint.toFixed(2) + 'x');
+    } else {
+      const p = Math.min(99, Math.max(1, cfg.targetWinProbability)) / 100;
+      const edge = cfg.houseEdge / 100;
+      const u = Math.max(0.0001, 1 - Math.random());
+      const raw = (1 / u) * (1 - edge);
+      const point = Math.max(1.01, Math.min(200, Math.round(raw * 100) / 100));
+      setPreview(point.toFixed(2) + 'x');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfg.mode, cfg.manualCrashPoint, cfg.targetWinProbability, cfg.houseEdge]);
 
   const setMode = (mode: 'AUTO' | 'MANUAL') => store.setAdmin({ mode });
   const setProb = (v: number) => store.setAdmin({ targetWinProbability: v });
@@ -120,7 +134,7 @@ export function CrashHandlingPanel() {
         </div>
       )}
 
-      {/* Next Round Preview */}
+      {/* Next Round Preview — stable, only updates when settings change */}
       <div className="bg-slatepanel-800 rounded-xl p-3 border border-neon-400/30">
         <div className="flex items-center mb-2">
           <label className="text-xs font-semibold text-neon-300 uppercase tracking-wider flex items-center gap-2">
@@ -132,7 +146,7 @@ export function CrashHandlingPanel() {
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-slate-400 uppercase tracking-wider w-16">Outcome</span>
             <span className={`font-display font-extrabold text-xl tabular ${cfg.mode === 'MANUAL' ? 'text-coral-400' : 'text-white'}`}>
-              {cfg.mode === 'MANUAL' ? cfg.manualCrashPoint.toFixed(2) + 'x' : (() => { const p = Math.min(99, Math.max(1, cfg.targetWinProbability)) / 100; const edge = cfg.houseEdge / 100; const u = Math.max(0.0001, 1 - Math.random()); const raw = (1 / u) * (1 - edge); return Math.max(1.01, Math.min(200, Math.round(raw * 100) / 100)).toFixed(2) + 'x'; })()}
+              {preview}
             </span>
           </div>
           <p className="text-xs text-slate-400">
