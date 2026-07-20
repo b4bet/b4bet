@@ -1,150 +1,111 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Banknote, TrendingDown, CheckCircle2, XCircle, Clock, Loader2,
-  FileText, Search, Calendar, RefreshCw,
+  TrendingUp, TrendingDown, DollarSign, Clock, Loader2, RefreshCw, Calendar,
+  Gamepad2, Gift, Plus, Minus, Banknote, Wifi, Bell, ArrowRight,
 } from 'lucide-react';
-import { cms } from '../../lib/cms';
-import { supabaseGetTransactions, supabaseGetUsers, type SupabaseTransaction, type SupabaseProfile } from '../../lib/supabaseIntegration';
+import { supabase } from '../../integrations/supabase/client';
+import { supabaseGetTransactions, supabaseGetBets, type SupabaseTransaction, type SupabaseBet } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
-  return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return '\u20B9' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function fmtDate(s: string) {
   return new Date(s).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 function statusChip(status: string) {
   switch (status) {
-    case 'completed': return { cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30', label: 'Accepted' };
-    case 'processing': return { cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30', label: 'Processing' };
-    case 'failed':
-    case 'cancelled': return { cls: 'bg-red-500/15 text-red-300 border-red-500/30', label: 'Rejected' };
-    default: return { cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30', label: 'Pending' };
+    case 'completed': case 'approved': return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+    case 'processing': return 'bg-blue-500/15 text-blue-300 border-blue-500/30';
+    case 'failed': case 'cancelled': case 'rejected': return 'bg-red-500/15 text-red-300 border-red-500/30';
+    default: return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
   }
 }
 
-type Period = 'all' | 'day' | 'week' | 'month' | 'year' | 'custom';
-type ActMode = 'accept' | 'reject';
-type ActState = { id: string; mode: ActMode } | null;
+type Period = 'day' | 'week' | 'month' | 'year' | 'custom';
 
 const PERIODS: { key: Period; label: string }[] = [
-  { key: 'all', label: 'All' }, { key: 'day', label: 'Day' }, { key: 'week', label: 'Week' },
-  { key: 'month', label: 'Month' }, { key: 'year', label: 'Year' }, { key: 'custom', label: 'Custom' },
+  { key: 'day', label: '24H' }, { key: 'week', label: 'Week' },
+  { key: 'month', label: 'Month' }, { key: 'year', label: 'Year' },
+  { key: 'custom', label: 'Custom' },
 ];
 const MS: Record<string, number> = { day: 86400000, week: 604800000, month: 2592000000, year: 31536000000 };
 
-export default function RequestsTab() {
+export default function FinanceTab() {
   const [transactions, setTransactions] = useState<SupabaseTransaction[]>([]);
-  const [profiles, setProfiles]         = useState<SupabaseProfile[]>([]);
+  const [bets, setBets]                 = useState<SupabaseBet[]>([]);
   const [loading, setLoading]           = useState(true);
-  const [view, setView]                 = useState<'deposit' | 'withdrawal'>('deposit');
-  const [query, setQuery]               = useState('');
-  const [period, setPeriod]             = useState<Period>('all');
+  const [period, setPeriod]             = useState<Period>('day');
   const [fromDate, setFromDate]         = useState('');
   const [toDate, setToDate]             = useState('');
-  const [acting, setActing]             = useState<ActState>(null);
-  const [inputVal, setInputVal]         = useState('');
-  const [updatingId, setUpdatingId]     = useState<string | null>(null);
-  const [localMeta, setLocalMeta]       = useState<Record<string, { utr?: string; reason?: string }>>({});
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [txns, users] = await Promise.all([supabaseGetTransactions(), supabaseGetUsers()]);
+      const [txns, betsData] = await Promise.all([supabaseGetTransactions(), supabaseGetBets()]);
       setTransactions(txns);
-      setProfiles(users);
+      setBets(betsData);
     } finally { setLoading(false); }
   }, []);
 
-  // user_id (uuid) -> 6-digit account_id lookup
-  const accountIdMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const p of profiles) if (p.id && p.account_id) map[p.id] = p.account_id;
-    return map;
-  }, [profiles]);
-
   useEffect(() => { void load(); }, [load]);
+
+  // Supabase Realtime — auto-refresh finance data
+  useEffect(() => {
+    const channel = supabase
+      .channel('finance_tab_rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        void load();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bets' }, () => {
+        void load();
+      })
+      .subscribe((status) => {
+        setRealtimeConnected(status === 'SUBSCRIBED');
+      });
+
+    return () => { void supabase.removeChannel(channel); };
+  }, [load]);
 
   const { cutoff, endCutoff } = useMemo(() => {
     if (period === 'custom') {
       return { cutoff: fromDate ? new Date(fromDate).getTime() : 0, endCutoff: toDate ? new Date(toDate).getTime() + 86400000 : Date.now() + 86400000 };
     }
-    if (period === 'all') return { cutoff: 0, endCutoff: Date.now() + 86400000 };
-    return { cutoff: Date.now() - (MS[period] ?? 0), endCutoff: Date.now() + 86400000 };
+    return { cutoff: Date.now() - (MS[period] ?? MS.day), endCutoff: Date.now() + 86400000 };
   }, [period, fromDate, toDate]);
 
-  const filtered = useMemo(() => transactions.filter((t) => {
-    if (t.type !== view) return false;
-    const ts = new Date(t.created_at).getTime();
-    if (ts < cutoff || ts > endCutoff) return false;
-    if (!query.trim()) return true;
-    const q = query.toLowerCase();
-    const acc = t.user_id ? (accountIdMap[t.user_id] ?? '') : '';
-    return (t.user_id ?? '').toLowerCase().includes(q) || acc.toLowerCase().includes(q) || t.id.toLowerCase().includes(q) || t.status.toLowerCase().includes(q) || String(t.amount).includes(q);
-  }), [transactions, view, cutoff, endCutoff, query, accountIdMap]);
+  const inRange = (iso: string) => { const ts = new Date(iso).getTime(); return ts >= cutoff && ts <= endCutoff; };
+  const filteredTxns = transactions.filter((t) => inRange(t.created_at));
+  const filteredBets = bets.filter((b) => b.placed_at && inRange(b.placed_at));
 
-  const pendingDep = transactions.filter((t) => t.type === 'deposit'    && (t.status === 'pending' || t.status === 'processing')).length;
-  const pendingWd  = transactions.filter((t) => t.type === 'withdrawal' && (t.status === 'pending' || t.status === 'processing')).length;
+  const totalDeposits    = filteredTxns.filter((t) => t.type === 'deposit'    && (t.status === 'completed' || t.status === 'approved')).reduce((s, t) => s + t.amount, 0);
+  const totalWithdrawals = filteredTxns.filter((t) => t.type === 'withdrawal' && (t.status === 'completed' || t.status === 'approved')).reduce((s, t) => s + t.amount, 0);
+  const pendingCount     = filteredTxns.filter((t) => t.status === 'pending' || t.status === 'processing').length;
+  const gameProfit       = filteredBets.reduce((s, b) => s + (b.bet_amount - (b.win_amount ?? 0)), 0);
+  const bonusTotal       = filteredTxns.filter((t) => t.type === 'bonus').reduce((s, t) => s + t.amount, 0);
+  const adjPositive      = filteredTxns.filter((t) => t.type === 'adjustment' && t.amount > 0).reduce((s, t) => s + t.amount, 0);
+  const adjNegative      = filteredTxns.filter((t) => t.type === 'adjustment' && t.amount < 0).reduce((s, t) => s + Math.abs(t.amount), 0);
+  const liveProfit       = totalDeposits - totalWithdrawals + gameProfit - bonusTotal;
 
-  // ── Actions: go through cms so user gets notification + realtime bell update ──
-  const handleAccept = async (id: string) => {
-    const txn = transactions.find((t) => t.id === id);
-    if (!txn) { alert('Could not find this request in the loaded list. Try Refresh.'); return; }
-    setUpdatingId(id);
-    try {
-      if (txn.type === 'deposit') await cms.setDepositStatus(id, 'processing');
-      else await cms.setWithdrawalStatus(id, 'processing');
-      setTransactions((prev) => prev.map((t) => t.id === id ? { ...t, status: 'processing' } : t));
-    } catch (e) {
-      alert('Accept failed: ' + (e instanceof Error ? e.message : String(e)));
-    } finally { setUpdatingId(null); }
-  };
-
-  const handleSubmit = async () => {
-    if (!acting) return;
-    const { id, mode } = acting;
-    const txn = transactions.find((t) => t.id === id);
-    if (!txn) return;
-    const isDeposit = txn.type === 'deposit';
-
-    if (mode === 'accept') {
-      const utr = inputVal.trim();
-      if (!utr) { alert('UTR / Transaction ID is required to accept.'); return; }
-      setUpdatingId(id);
-      try {
-        // Sends user push notification + triggers referral if deposit
-        if (isDeposit) await cms.setDepositStatus(id, 'approved', utr);
-        else           await cms.setWithdrawalStatus(id, 'approved', utr);
-        setTransactions((prev) => prev.map((t) => t.id === id ? { ...t, status: 'completed' } : t));
-        setLocalMeta((prev) => ({ ...prev, [id]: { ...prev[id], utr } }));
-      } catch (e) {
-        alert('Approve failed: ' + (e instanceof Error ? e.message : String(e)));
-        return;
-      } finally { setUpdatingId(null); }
-    } else {
-      const reason = inputVal.trim() || undefined;
-      setUpdatingId(id);
-      try {
-        if (isDeposit) await cms.setDepositStatus(id, 'rejected', undefined, reason);
-        else           await cms.setWithdrawalStatus(id, 'rejected', undefined, reason);
-        setTransactions((prev) => prev.map((t) => t.id === id ? { ...t, status: 'failed' } : t));
-        if (reason) setLocalMeta((prev) => ({ ...prev, [id]: { ...prev[id], reason } }));
-      } catch (e) {
-        alert('Reject failed: ' + (e instanceof Error ? e.message : String(e)));
-        return;
-      } finally { setUpdatingId(null); }
-    }
-    setActing(null);
-    setInputVal('');
-  };
-
-  const clearAct = () => { setActing(null); setInputVal(''); };
+  const pendingTxns  = filteredTxns.filter((t) => t.status === 'pending' || t.status === 'processing');
+  const recentPending = [...pendingTxns].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 6);
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="font-display font-bold text-lg text-white">Deposit / Withdraw Requests</h2>
-          <p className="text-xs text-slate-500">Actions send user notifications via Supabase.</p>
+          <h2 className="font-display font-bold text-lg text-white">Finance Dashboard</h2>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-xs text-slate-500">Read-only overview — approve/reject from the Requests tab.</p>
+            <span className={`flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
+              realtimeConnected
+                ? 'text-emerald-400 border-emerald-500/40 bg-emerald-500/10'
+                : 'text-amber-400 border-amber-500/40 bg-amber-500/10'
+            }`}>
+              <Wifi className="w-2.5 h-2.5" />
+              {realtimeConnected ? 'Live' : 'Connecting…'}
+            </span>
+          </div>
         </div>
         <button onClick={() => void load()} disabled={loading}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-white text-xs font-semibold disabled:opacity-50">
@@ -177,111 +138,82 @@ export default function RequestsTab() {
         </div>
       )}
 
-      {/* Deposit / Withdrawal tabs */}
-      <div className="flex gap-2">
-        <button onClick={() => setView('deposit')}
-          className={`flex-1 px-3 py-2 rounded-xl border text-sm font-semibold flex items-center justify-center gap-2 transition-colors ${
-            view === 'deposit' ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
-          }`}>
-          <Banknote className="w-4 h-4" /> Deposits
-          {pendingDep > 0 && <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center">{pendingDep}</span>}
-        </button>
-        <button onClick={() => setView('withdrawal')}
-          className={`flex-1 px-3 py-2 rounded-xl border text-sm font-semibold flex items-center justify-center gap-2 transition-colors ${
-            view === 'withdrawal' ? 'bg-red-500/15 border-red-500/40 text-red-300' : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
-          }`}>
-          <TrendingDown className="w-4 h-4" /> Withdrawals
-          {pendingWd > 0 && <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center">{pendingWd}</span>}
-        </button>
+      {/* Stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard label="Deposits"    value={fmt(totalDeposits)}    icon={TrendingUp}  accent="text-emerald-400" />
+        <StatCard label="Withdrawals" value={fmt(totalWithdrawals)} icon={TrendingDown} accent="text-red-400" />
+        <StatCard label="Net Profit"  value={fmt(liveProfit)}       icon={DollarSign}  accent={liveProfit >= 0 ? 'text-violet-300' : 'text-red-400'} />
+        <StatCard label="Pending"     value={String(pendingCount)}  icon={Clock}       accent="text-amber-400" />
       </div>
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search user, amount, ID..."
-          className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-9 pr-4 py-2 text-sm text-white outline-none" />
-      </div>
-
-      {/* Cards */}
-      {loading ? (
-        <div className="flex items-center justify-center p-10 text-slate-400 gap-2"><Loader2 className="w-5 h-5 animate-spin" /> Loading from Supabase…</div>
-      ) : filtered.length === 0 ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 text-sm text-slate-500 text-center">
-          <Clock className="w-6 h-6 mx-auto mb-2 text-slate-600" />
-          No {view} requests in this period.
+      {/* Breakdown */}
+      <div>
+        <h3 className="font-bold text-white text-sm mb-2">Financial Breakdown</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <StatCard label="Signup Bonuses"  value={fmt(bonusTotal)}  icon={Gift}     accent="text-amber-300" />
+          <StatCard label="Manual Adjust +" value={fmt(adjPositive)} icon={Plus}     accent="text-emerald-300" />
+          <StatCard label="Manual Adjust -" value={fmt(adjNegative)} icon={Minus}    accent="text-red-300" />
+          <StatCard label="Game Profit"     value={fmt(gameProfit)}  icon={Gamepad2} accent={gameProfit >= 0 ? 'text-violet-300' : 'text-red-400'} />
         </div>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map((t) => {
-            const { cls, label } = statusChip(t.status);
-            const isActing   = acting?.id === t.id;
-            const isTerminal = t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled';
-            const meta       = localMeta[t.id];
-            const txnMeta    = (t.metadata as Record<string, unknown>) ?? {};
-            const accountId  = t.user_id ? (accountIdMap[t.user_id] ?? '—') : '—';
-            const method     = t.type === 'deposit'
-              ? ((txnMeta.method as string) || 'Manual')
-              : ((txnMeta.destination as string) || (txnMeta.upi_id as string) || '—');
-            const utr        = meta?.utr || (txnMeta.utr as string | undefined);
-            return (
-              <div key={t.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 space-y-2">
-                <div className="flex items-start justify-between gap-2">
+      </div>
+
+      {/* New Requests — notification only, action happens in Requests tab */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-bold text-white flex items-center gap-2">
+            <Bell className="w-4 h-4 text-amber-400" /> New Requests
+            {pendingCount > 0 && <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center">{pendingCount}</span>}
+          </h3>
+          <a href="#requests" className="flex items-center gap-1 text-[11px] font-semibold text-violet-300 hover:text-violet-200">
+            Go to Requests tab <ArrowRight className="w-3 h-3" />
+          </a>
+        </div>
+        {loading ? (
+          <div className="flex items-center justify-center p-8 text-slate-400 gap-2"><Loader2 className="w-5 h-5 animate-spin" /> Loading…</div>
+        ) : recentPending.length === 0 ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-sm text-slate-500 text-center">No pending deposit/withdrawal requests right now.</div>
+        ) : (
+          <div className="space-y-2">
+            {recentPending.map((t) => (
+              <div key={t.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {t.type === 'deposit'
+                    ? <Banknote className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                    : <TrendingDown className="w-4 h-4 text-red-400 flex-shrink-0" />}
                   <div className="min-w-0">
-                    <div className="text-sm text-white font-semibold font-mono truncate">ID: {accountId}</div>
-                    <div className="text-[10px] text-slate-500 truncate">{fmtDate(t.created_at)} · {method}</div>
+                    <div className="text-xs text-white font-semibold truncate">{t.type === 'deposit' ? 'Deposit' : 'Withdrawal'} request</div>
+                    <div className="text-[10px] text-slate-500 truncate">{fmtDate(t.created_at)}</div>
                   </div>
-                  <div className="text-sm font-bold text-white tabular flex-shrink-0">{fmt(t.amount)}</div>
                 </div>
-                {utr && (
-                  <div className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-2 py-1 flex items-center gap-1">
-                    <FileText className="w-3 h-3" /> UTR: <span className="font-mono">{utr}</span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cls}`}>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${statusChip(t.status)}`}>
                     {t.status === 'processing' && <Loader2 className="w-3 h-3 animate-spin" />}
-                    {label}
+                    {t.status}
                   </span>
-                  {!isTerminal && updatingId !== t.id && (
-                    <div className="flex gap-1.5">
-                      {t.status === 'pending' && (
-                        <button onClick={() => void handleAccept(t.id)} className="px-3 py-1.5 rounded-lg bg-blue-500/20 border border-blue-500/40 text-blue-300 text-[10px] font-semibold hover:text-blue-200">Accept</button>
-                      )}
-                      {t.status === 'processing' && (
-                        <button onClick={() => { setActing({ id: t.id, mode: 'accept' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold hover:text-emerald-200">Approve (UTR)</button>
-                      )}
-                      <button onClick={() => { setActing({ id: t.id, mode: 'reject' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/40 text-red-300 text-[10px] font-semibold hover:text-red-200">Reject</button>
-                    </div>
-                  )}
-                  {updatingId === t.id && <Loader2 className="w-4 h-4 animate-spin text-slate-400" />}
+                  <span className="text-sm font-bold text-white tabular">{fmt(t.amount)}</span>
                 </div>
-                {isActing && (
-                  <div className="flex items-center gap-2">
-                    <input type="text" value={inputVal} onChange={(e) => setInputVal(e.target.value)}
-                      placeholder={acting?.mode === 'accept' ? 'UTR / Transaction ID (required)' : 'Reason (optional)'}
-                      className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none" autoFocus />
-                    <button onClick={() => void handleSubmit()} className="px-3 py-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Save
-                    </button>
-                    <button onClick={clearAct} className="px-2 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 hover:text-white">
-                      <XCircle className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
-                {meta?.reason && (
-                  <div className="text-[11px] text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-2 py-1 flex items-center gap-1">
-                    <XCircle className="w-3 h-3" /> {meta.reason}
-                  </div>
-                )}
               </div>
-            );
-          })}
-        </div>
-      )}
-      <p className="text-[11px] text-slate-600 text-center">{filtered.length} {view} request{filtered.length !== 1 ? 's' : ''} shown</p>
+            ))}
+            {pendingTxns.length > recentPending.length && (
+              <p className="text-[11px] text-slate-600 text-center">+{pendingTxns.length - recentPending.length} more waiting — see Requests tab</p>
+            )}
+          </div>
+        )}
+      </div>
+
+      <p className="text-[11px] text-slate-600 text-center">Showing {filteredTxns.length} of {transactions.length} transactions</p>
     </div>
   );
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function _Search(props: React.SVGProps<SVGSVGElement>) { return null; }
+function StatCard({ label, value, icon: Icon, accent }: { label: string; value: string; icon: typeof TrendingUp; accent: string }) {
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 overflow-hidden">
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold truncate">{label}</span>
+        <Icon className={`w-4 h-4 flex-shrink-0 ${accent}`} />
+      </div>
+      <p className={`text-xl font-bold tabular truncate ${accent}`} title={value}>{value}</p>
+    </div>
+  );
+}
