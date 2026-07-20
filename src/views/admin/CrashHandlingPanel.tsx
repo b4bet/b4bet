@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Shield, Sliders, Target, Cpu, Zap, Rocket } from 'lucide-react';
-import { useAdminConfig } from '../../lib/hooks';
+import { useAdminConfig, useGameRound } from '../../lib/hooks';
 import { store } from '../../lib/store';
 
 /**
@@ -19,23 +19,29 @@ export function CrashHandlingPanel() {
   // Read crash config from gameHandlers.crash (same path as DB + Edge Function)
   const crash = cfg.gameHandlers['crash'] ?? store.getGameHandler('crash');
 
+  // Tracks the current round number — increments every time a crash round ends.
+  // Used as a dependency so the AUTO preview re-rolls on every new round automatically.
+  const currentRound = useGameRound('crash');
+
   const [manual, setManual] = useState(String(crash.manualCrashPoint ?? 2.0));
 
-  // Stable preview — only recomputes when mode/settings change
+  // Preview — recomputes whenever mode/settings change OR a new round starts.
+  // AUTO mode: fresh RNG roll each round (no refresh button needed).
+  // MANUAL mode: always shows the queued crash point.
   const [preview, setPreview] = useState<string>('');
   useEffect(() => {
     if (crash.mode === 'MANUAL') {
       setPreview((crash.manualCrashPoint ?? 2.0).toFixed(2) + 'x');
     } else {
-      const p = Math.min(99, Math.max(1, crash.targetWinProbability)) / 100;
       const edge = crash.houseEdge / 100;
       const u = Math.max(0.0001, 1 - Math.random());
       const raw = (1 / u) * (1 - edge);
       const point = Math.max(1.01, Math.min(200, Math.round(raw * 100) / 100));
       setPreview(point.toFixed(2) + 'x');
     }
+  // currentRound triggers a fresh preview roll each time a round ends
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crash.mode, crash.manualCrashPoint, crash.targetWinProbability, crash.houseEdge]);
+  }, [crash.mode, crash.manualCrashPoint, crash.targetWinProbability, crash.houseEdge, currentRound]);
 
   // All writes go through setGameHandler — which saves to adminConfig.gameHandlers['crash']
   // and the Edge Function reads adminConfig['crash'] — same path.
@@ -158,13 +164,18 @@ export function CrashHandlingPanel() {
         </div>
       )}
 
-      {/* Preview */}
+      {/* Preview — auto-updates each round, no refresh button needed */}
       <div className="bg-slatepanel-800 rounded-xl p-3 border border-neon-400/30">
         <label className="text-xs font-semibold text-neon-300 uppercase tracking-wider flex items-center gap-2 mb-2">
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
           </svg>
           Next Round Preview
+          {crash.mode === 'AUTO' && (
+            <span className="ml-auto text-[9px] text-slate-500 normal-case tracking-normal">
+              Round #{currentRound + 1}
+            </span>
+          )}
         </label>
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
@@ -176,7 +187,7 @@ export function CrashHandlingPanel() {
           <p className="text-xs text-slate-400">
             {crash.mode === 'MANUAL'
               ? `Manual override active · next round will bust at ${(crash.manualCrashPoint ?? 2.0).toFixed(2)}x`
-              : `Win-prob ${crash.targetWinProbability}% · Edge ${crash.houseEdge}%`}
+              : `Win-prob ${crash.targetWinProbability}% · Edge ${crash.houseEdge}% · updates each round`}
           </p>
         </div>
       </div>
