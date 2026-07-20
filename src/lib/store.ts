@@ -222,6 +222,9 @@ class Store {
         const { data: profile, error: profileErr } = session.userId
           ? await supabase.from('profiles').select('balance').eq('id', session.userId).single()
           : await supabase.from('profiles').select('balance').eq('username', session.username).single();
+        // TEMP DEBUG — remove after diagnosing. Shows exactly what the
+        // balance fetch returned, directly on screen (no devtools needed).
+        alert('DEBUG balance fetch\nuserId: ' + session.userId + '\nprofile: ' + JSON.stringify(profile) + '\nerror: ' + (profileErr ? profileErr.message : 'none'));
         if (profile) {
           this.balance = (profile as { balance: number }).balance || 0;
         } else if (profileErr) {
