@@ -219,10 +219,16 @@ class Store {
       }
 
       if (session && session.username) {
-        const { data: profile } = await supabase.from('profiles')
-          .select('balance').eq('username', session.username).single();
+        const { data: profile, error: profileErr } = session.userId
+          ? await supabase.from('profiles').select('balance').eq('id', session.userId).single()
+          : await supabase.from('profiles').select('balance').eq('username', session.username).single();
         if (profile) {
           this.balance = (profile as { balance: number }).balance || 0;
+        } else if (profileErr) {
+          // Don't silently zero out the balance on a lookup failure — keep
+          // whatever was last known (e.g. from persisted local cache) and
+          // log so this is diagnosable.
+          console.warn('[store] failed to load profile balance:', profileErr.message);
         }
         bus.emit(Topics.Balance, this.balance);
 
