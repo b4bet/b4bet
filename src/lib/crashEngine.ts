@@ -6,6 +6,7 @@
 import { bus, Topics } from './bus';
 import { store } from './store';
 import { GameService } from './game-service';
+import { auth } from './auth';
 import { cms } from './cms';
 
 import { sfx, startHum, updateHum, stopHum } from './crashAudio';
@@ -23,7 +24,7 @@ export interface BetSlot {
   placed: boolean;
   autoCashAt: number | null;
   cashedOutAt: number | null;
-  /** Alias for cashedOutAt — true when player has cashed out this round */
+  /** true when player has cashed out this round */
   cashedOut: boolean;
   win: number | null;
 }
@@ -35,6 +36,37 @@ const COUNTDOWN_SECS = 6;
 const FETCH_TIMEOUT_MS = 4000;
 
 function freshBet(id: 'A' | 'B'): BetSlot { return { id, amount: 100, placed: false, autoCashAt: null, cashedOutAt: null, cashedOut: false, win: null }; }
+
+/**
+ * Call crash_settle edge function for a single slot.
+ * This atomically updates balance in Supabase (credit on win, no change on bust —
+ * the debit already happened at bet placement time via debitBalance).
+ */
+async function settleSlotOnServer(
+  slot: BetSlot,
+  roundId: number,
+  bustPoint: number,
+): Promise<void> {
+  const session = auth.getSession();
+  if (!session) return;
+  try {
+    const result = await GameService.crashSettle(
+      session.userId,
+      roundId,
+      slot.amount,
+      slot.cashedOutAt,   // null if busted
+      bustPoint,
+    );
+    // Sync authoritative balance from server
+    if (typeof result.balance_after === 'number') {
+      store.setBalance(result.balance_after);
+    }
+  } catch (err) {
+    console.warn('[CrashEngine] crashSettle failed:', (err as Error)?.message ?? err);
+    // Don't update local balance if server call fails — leave it as-is
+    // so user sees their current balance and can retry/refresh
+  }
+}
 
 class CrashEngine {
   private state: EngineState = {
@@ -61,7 +93,6 @@ class CrashEngine {
   private broadcastBets() {
     const bets = { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
     bus.emit(Topics.CrashBets, bets);
-    // Also emit on legacy CrashTick topic for backward compat
     bus.emit(Topics.CrashTick, bets);
   }
 
@@ -132,22 +163,53 @@ class CrashEngine {
     const slot = this.state.bets[id]; if (!slot.placed || slot.cashedOutAt !== null) return;
     slot.cashedOutAt = cashOutAt;
     slot.cashedOut = true;
-    slot.win = Math.floor(slot.amount * cashOutAt); playCashoutSound();
-    bus.emit(Topics.CashoutEvent as string, { id, amount: slot.win, multiplier: cashOutAt, ts: Date.now() } satisfies CashoutEvent);
+    slot.win = Math.floor(slot.amount * cashOutAt);
+    playCashoutSound();
+    bus.emit(Topics.CrashCashout, { id, amount: slot.win, multiplier: cashOutAt, ts: Date.now() } satisfies CashoutEvent);
     this.broadcastBets();
-    store.credit(slot.win);
+
+    // Optimistic local credit so UI feels instant
+    store.addBalance(slot.win);
+
+    // Record locally for history
     store.recordCrashBet({ roundId: this.state.roundId, amount: slot.amount, cashOutAt, bustPoint: this.state.bustPoint, win: slot.win ?? 0 });
+
+    // Sync with Supabase via edge function (authoritative balance update)
+    void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
   }
 
-  private settleBustedBets() { for (const slot of Object.values(this.state.bets)) { if (!slot.placed || slot.cashedOutAt !== null) continue; slot.win = 0; store.recordCrashBet({ roundId: this.state.roundId, amount: slot.amount, cashOutAt: null, bustPoint: this.state.bustPoint, win: 0 }); } this.broadcastBets(); }
+  private settleBustedBets() {
+    const bustPoint = this.state.bustPoint;
+    const roundId = this.state.roundId;
+    for (const slot of Object.values(this.state.bets)) {
+      if (!slot.placed || slot.cashedOutAt !== null) continue;
+      slot.win = 0;
+      store.recordCrashBet({ roundId, amount: slot.amount, cashOutAt: null, bustPoint, win: 0 });
+      // Settle loss on server (records bet in DB, no balance change needed — debit already done)
+      void settleSlotOnServer(slot, roundId, bustPoint);
+    }
+    this.broadcastBets();
+  }
 
-  placeBet(id: 'A' | 'B', amount: number): { ok: boolean; reason?: string } { const slot = this.state.bets[id]; if (this.state.phase !== 'countdown') return { ok: false, reason: 'Round not in betting phase' }; if (slot.placed) return { ok: false, reason: 'Already placed' }; if (amount <= 0) return { ok: false, reason: 'Invalid amount' }; if (amount > store.balance) return { ok: false, reason: 'Insufficient balance' }; slot.amount = amount; slot.placed = true; store.debitBalance(amount); this.broadcastBets(); return { ok: true }; }
+  placeBet(id: 'A' | 'B', amount: number): { ok: boolean; reason?: string } {
+    const slot = this.state.bets[id];
+    if (this.state.phase !== 'countdown') return { ok: false, reason: 'Round not in betting phase' };
+    if (slot.placed) return { ok: false, reason: 'Already placed' };
+    if (amount <= 0) return { ok: false, reason: 'Invalid amount' };
+    if (amount > store.balance) return { ok: false, reason: 'Insufficient balance' };
+    slot.amount = amount;
+    slot.placed = true;
+    // Debit locally + Supabase via store.debit()
+    store.debit(amount);
+    this.broadcastBets();
+    return { ok: true };
+  }
 
   cancelBet(id: 'A' | 'B'): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (this.state.phase !== 'countdown') return { ok: false, reason: 'Cannot cancel after round starts' };
     if (!slot.placed) return { ok: false, reason: 'No bet to cancel' };
-    store.credit(slot.amount);
+    store.addBalance(slot.amount);
     this.state.bets[id] = freshBet(id);
     this.broadcastBets();
     return { ok: true };
