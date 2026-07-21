@@ -13,8 +13,11 @@ import {
   TicketPercent, Plus, X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal,
 } from 'lucide-react';
 
-// Import the fixed CrashHandlingPanel (uses store.setGameHandler('crash') — nested DB path)
+// CrashHandlingPanel — dedicated async Supabase-connected panel
 export { CrashHandlingPanel } from './CrashHandlingPanel';
+
+// AviatorHandlingPanel — dedicated async Supabase-connected panel (same pattern as Crash)
+export { AviatorHandlingPanel } from './AviatorHandlingPanel';
 
 // ─── 8-game registry: crash, mines, aviator, wingo, k3, fived, sunvsmoon, trading
 const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
@@ -29,7 +32,7 @@ const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Generic Game Handler Panel (shared by all auto games except crash)
+// Generic Game Handler Panel (shared by lottery-style games)
 // ─────────────────────────────────────────────────────────────────────────────
 function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlaceholder, manualHint }: {
   gameKey: string; label: string; icon: typeof Rocket; manualLabel: string;
@@ -62,8 +65,7 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
     if (h.mode === 'AUTO') setPreview(computeAutoOutcome(gameKey, h));
     else if (h.mode === 'MANUAL' && h.manualResult) {
       let detail = 'Manual override active';
-      if (gameKey === 'aviator') detail = 'Manual crash @ ' + h.manualResult + 'x';
-      else if (gameKey === 'wingo') detail = 'Manual digit: ' + h.manualResult;
+      if (gameKey === 'wingo') detail = 'Manual digit: ' + h.manualResult;
       else if (gameKey === 'k3') detail = 'Manual dice: ' + h.manualResult;
       else if (gameKey === 'fived') detail = 'Manual digits: ' + h.manualResult;
       else if (gameKey === 'sunvsmoon') detail = 'Manual side: ' + h.manualResult;
@@ -162,17 +164,16 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   );
 }
 
-// ── Individual exported handler panels
-export function AviatorHandlingPanel() { return <GameHandlerPanel gameKey="aviator" label="Aviator" icon={Plane} manualLabel="Bust Multiplier (x)" manualPlaceholder="2.00" manualHint="Plane flies away at this multiplier for the queued round." />; }
+// ── Individual exported handler panels (lottery-style games only)
 export function WingoHandlingPanel() { return <GameHandlerPanel gameKey="wingo" label="Win Go" icon={Circle} manualLabel="Result Number (0-9)" manualPlaceholder="5" manualHint="Force the winning digit for the queued draw." />; }
 export function K3HandlingPanel() { return <GameHandlerPanel gameKey="k3" label="K3" icon={Dices} manualLabel="Dice Result (a,b,c)" manualPlaceholder="3,3,3" manualHint="Three comma-separated dice values (1-6 each)." />; }
 export function FiveDHandlingPanel() { return <GameHandlerPanel gameKey="fived" label="5D" icon={Dices} manualLabel="Result Digits (5)" manualPlaceholder="12345" manualHint="Five-digit outcome, one digit per column." />; }
 export function SunMoonHandlingPanel() { return <GameHandlerPanel gameKey="sunvsmoon" label="Sun vs Moon" icon={Sun} manualLabel="Winning Side" manualPlaceholder="sun / moon / eclipse" manualHint="Forces the round outcome to Sun, Eclipse, or Moon." />; }
 
 export function AllGameHandlersSection() {
+  // AviatorHandlingPanel is re-exported from AviatorHandlingPanel.tsx above
   return (
     <div className="space-y-4">
-      <AviatorHandlingPanel />
       <WingoHandlingPanel />
       <K3HandlingPanel />
       <FiveDHandlingPanel />
@@ -576,7 +577,7 @@ export default function GameAlgosTab() {
     <div className="space-y-4">
       <div>
         <h2 className="font-display font-bold text-lg text-white">Game Algorithms & Assets</h2>
-        <p className="text-xs text-slate-500">Crash handling is pinned to the top of the dashboard. Manage game logos and redeem codes here.</p>
+        <p className="text-xs text-slate-500">Crash & Aviator handling panels are in Game Handlers tab. Manage game logos and redeem codes here.</p>
       </div>
       <div className="panel p-4">
         <h3 className="font-display font-bold text-sm text-white mb-1 flex items-center gap-2">
