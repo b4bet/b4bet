@@ -8,14 +8,14 @@
  *     after receiving the server's verdict — it no longer decides anything.
  */
 
-import { useMemo, useState, useCallback } from 'react';
-import { useMinesMyHistory } from '../lib/hooks';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 import { store } from '../lib/store';
 import { cms } from '../lib/cms';
 import { auth } from '../lib/auth';
 import { GameService } from '../lib/game-service';
 import { bus, Topics } from '../lib/bus';
-import { Bomb, Gem, Flag, Play, HandCoins } from 'lucide-react';
+import { supabase } from '../integrations/supabase/client';
+import { Bomb, Gem, Flag, Play, HandCoins, RefreshCw } from 'lucide-react';
 
 // ── Local UI state (does NOT encode outcome) ─────────────────────────────────
 
@@ -27,7 +27,6 @@ interface ClientMinesState {
   gemsFound: number;
   currentMultiplier: number;
   nextMultiplier: number;
-  // grid: 'hidden' | 'gem' | 'mine'
   grid: ('hidden' | 'gem' | 'mine')[];
   revealed: boolean[];
   busted: boolean;
@@ -48,6 +47,49 @@ function initialState(mineCount: number, stake: number): ClientMinesState {
     busted: false,
     cashedOut: false,
   };
+}
+
+// ── Supabase mines history ────────────────────────────────────────────────────
+
+interface SupabaseMinesBet {
+  id: string;
+  bet_amount: number;
+  win_amount: number | null;
+  multiplier: number | null;
+  status: string;
+  bet_details: { mines?: number; gems?: number } | null;
+  created_at: string;
+}
+
+function useSupabaseMinesHistory(refreshTrigger: number) {
+  const [rows, setRows] = useState<SupabaseMinesBet[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const session = auth.getSession();
+    if (!session?.userId) {
+      setRows([]);
+      return;
+    }
+    setLoading(true);
+    supabase
+      .from('bets')
+      .select('id, bet_amount, win_amount, multiplier, status, bet_details, created_at')
+      .eq('user_id', session.userId)
+      .order('created_at', { ascending: false })
+      .then(({ data, error }) => {
+        if (error) { console.warn('[mines] history fetch error:', error.message); }
+        // Filter only mines bets — they have bet_details with mines/gems keys
+        const mineBets = ((data ?? []) as SupabaseMinesBet[]).filter(
+          (b) => b.bet_details && typeof b.bet_details === 'object' && 'mines' in b.bet_details
+        );
+        setRows(mineBets);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
+  }, [refreshTrigger]);
+
+  return { rows, loading };
 }
 
 // ── Cell ─────────────────────────────────────────────────────────────────────
@@ -106,6 +148,7 @@ export default function MinesView() {
   const [stakeStr, setStakeStr] = useState('100');
   const [minesInput, setMinesInput] = useState(3);
   const [loading, setLoading] = useState(false);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
   const [game, setGame] = useState<ClientMinesState>(() =>
     initialState(3, 100)
   );
@@ -131,7 +174,6 @@ export default function MinesView() {
     setLoading(true);
     try {
       const res = await GameService.minesStart(session.userId, minesInput, amt);
-      // Balance already deducted server-side — sync local store display
       store.setBalance(res.balance_after);
       setGame({
         active: true,
@@ -164,13 +206,10 @@ export default function MinesView() {
       const res = await GameService.minesReveal(session.userId, game.sessionId, index);
 
       if (res.is_mine) {
-        // Busted — server reveals all mine positions
         const newGrid = [...game.grid] as ClientMinesState['grid'];
         const newRevealed = [...game.revealed];
-        // Mark the clicked tile as mine
         newGrid[index] = 'mine';
         newRevealed[index] = true;
-        // Reveal all mine positions returned by server
         if (res.mine_positions) {
           res.mine_positions.forEach((pos) => {
             newGrid[pos] = 'mine';
@@ -185,7 +224,6 @@ export default function MinesView() {
           revealed: newRevealed,
           gemsFound: res.gems_found,
         }));
-        // Local history only (no balance mutation here)
         store.recordMinesRound({
           stake: game.stake,
           mines: game.mineCount,
@@ -194,8 +232,9 @@ export default function MinesView() {
           win: 0,
           busted: true,
         });
+        // Refresh Supabase history after round ends
+        setHistoryRefresh((n) => n + 1);
       } else {
-        // Safe tile
         const newGrid = [...game.grid] as ClientMinesState['grid'];
         const newRevealed = [...game.revealed];
         newGrid[index] = 'gem';
@@ -225,10 +264,8 @@ export default function MinesView() {
     setLoading(true);
     try {
       const res = await GameService.minesCashout(session.userId, game.sessionId);
-      // Balance credited server-side — sync local store display
       store.setBalance(res.balance_after);
 
-      // Reveal all mines
       const newGrid = [...game.grid] as ClientMinesState['grid'];
       const newRevealed = [...game.revealed];
       res.mine_positions.forEach((pos) => {
@@ -244,7 +281,6 @@ export default function MinesView() {
         revealed: newRevealed,
       }));
 
-      // Local history only
       store.recordMinesRound({
         stake: game.stake,
         mines: game.mineCount,
@@ -254,6 +290,8 @@ export default function MinesView() {
         busted: false,
       });
       cms.toast({ title: 'Cashed out!', body: `You won ${store.currency}${res.payout.toFixed(2)}`, kind: 'success' });
+      // Refresh Supabase history after cashout
+      setHistoryRefresh((n) => n + 1);
     } catch (err) {
       cms.toast({ title: 'Cashout failed', body: err instanceof Error ? err.message : 'Server error', kind: 'alert' });
     } finally {
@@ -384,7 +422,7 @@ export default function MinesView() {
         Reveal gems to grow your multiplier. Hit a mine and you lose your stake. Cash out anytime to lock in winnings.
       </p>
 
-      <MinesStatsTabs />
+      <MinesStatsTabs historyRefresh={historyRefresh} onRefresh={() => setHistoryRefresh((n) => n + 1)} />
     </div>
   );
 }
@@ -400,8 +438,8 @@ const RANGE_MS: Record<Range, number> = {
   '1y': 365 * 24 * 60 * 60 * 1000,
 };
 
-function MinesStatsTabs() {
-  const myHistory = useMinesMyHistory();
+function MinesStatsTabs({ historyRefresh, onRefresh }: { historyRefresh: number; onRefresh: () => void }) {
+  const { rows: myHistory, loading: histLoading } = useSupabaseMinesHistory(historyRefresh);
   const [tab, setTab] = useState<MinesTab>('mine');
   const [range, setRange] = useState<Range>('1d');
 
@@ -435,29 +473,64 @@ function MinesStatsTabs() {
       </div>
       <div className="p-3">
         {tab === 'mine' ? (
-          myHistory.length === 0 ? (
-            <p className="text-xs text-slate-600 text-center py-3">No rounds yet. Play to build your history.</p>
-          ) : (
-            <div className="max-h-72 overflow-y-auto divide-y divide-borderline-900">
-              <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-500 font-semibold pb-1">
+          <div>
+            {/* Header row with refresh button */}
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between flex-1 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
                 <span>Stake</span><span>Mines</span><span>Gems</span><span>x</span><span>Payout</span>
               </div>
-              {myHistory.map((r) => {
-                const won = !r.busted && r.win > 0;
-                return (
-                  <div key={r.id} className={`flex items-center justify-between py-1.5 text-xs ${won ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
-                    <span className="tabular">{store.currency}{r.stake.toFixed(2)}</span>
-                    <span className="tabular">{r.mines}</span>
-                    <span className="tabular">{r.gems}</span>
-                    <span className="tabular">{r.multiplier.toFixed(2)}x</span>
-                    <span className={`tabular font-bold ${won ? 'bg-emeraldwin-500/15 px-2 py-0.5 rounded-md' : ''}`}>
-                      {store.currency}{r.win.toFixed(2)}
-                    </span>
-                  </div>
-                );
-              })}
+              <button
+                onClick={onRefresh}
+                disabled={histLoading}
+                className="ml-2 p-1 rounded-md text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
+                title="Refresh history"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${histLoading ? 'animate-spin' : ''}`} />
+              </button>
             </div>
-          )
+
+            {histLoading ? (
+              <div className="py-6 text-center">
+                <RefreshCw className="w-4 h-4 text-slate-600 animate-spin mx-auto" />
+              </div>
+            ) : myHistory.length === 0 ? (
+              <p className="text-xs text-slate-600 text-center py-3">No rounds yet. Play to build your history.</p>
+            ) : (
+              <div className="max-h-80 overflow-y-auto divide-y divide-borderline-900 pr-1">
+                {myHistory.map((r) => {
+                  const won = r.status === 'won';
+                  const mines = r.bet_details?.mines ?? '-';
+                  const gems = r.bet_details?.gems ?? '-';
+                  const multiplier = r.multiplier ?? 0;
+                  const payout = r.win_amount ?? 0;
+                  return (
+                    <div key={r.id} className={`flex items-center justify-between py-1.5 text-xs ${won ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
+                      <span className="tabular">{store.currency}{r.bet_amount.toFixed(2)}</span>
+                      <span className="tabular">{mines}</span>
+                      <span className="tabular">{gems}</span>
+                      <span className="tabular">{multiplier.toFixed(2)}x</span>
+                      <span className={`tabular font-bold ${won ? 'bg-emeraldwin-500/15 px-2 py-0.5 rounded-md' : ''}`}>
+                        {store.currency}{payout.toFixed(2)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Total summary */}
+            {myHistory.length > 0 && (
+              <div className="mt-2 pt-2 border-t border-borderline-900 flex items-center justify-between text-[10px] text-slate-500">
+                <span>{myHistory.length} rounds total</span>
+                <span>
+                  Won:{' '}
+                  <span className="text-emeraldwin-400 font-semibold">
+                    {store.currency}{myHistory.filter(r => r.status === 'won').reduce((s, r) => s + (r.win_amount ?? 0), 0).toFixed(2)}
+                  </span>
+                </span>
+              </div>
+            )}
+          </div>
         ) : (
           <div>
             <div className="flex items-center gap-1 mb-2">
@@ -471,17 +544,21 @@ function MinesStatsTabs() {
                 </button>
               ))}
             </div>
-            <div className="divide-y divide-borderline-900">
-              {topUsers.map((u, i) => (
-                <div key={u.user} className="flex items-center justify-between py-2 text-xs">
-                  <span className="flex items-center gap-2">
-                    <span className={`w-5 h-5 rounded-md grid place-items-center text-[10px] font-bold ${i === 0 ? 'bg-amberx-400 text-black' : i < 3 ? 'bg-coral-500/20 text-coral-300' : 'bg-slatepanel-800 text-slate-400'}`}>{i + 1}</span>
-                    <span className="font-semibold text-slate-200">{u.user}</span>
-                  </span>
-                  <span className="tabular font-bold text-emeraldwin-400">{store.currency}{u.earnings.toFixed(2)}</span>
-                </div>
-              ))}
-            </div>
+            {topUsers.length === 0 ? (
+              <p className="text-xs text-slate-600 text-center py-3">No ranking data yet.</p>
+            ) : (
+              <div className="divide-y divide-borderline-900">
+                {topUsers.map((u, i) => (
+                  <div key={u.user} className="flex items-center justify-between py-2 text-xs">
+                    <span className="flex items-center gap-2">
+                      <span className={`w-5 h-5 rounded-md grid place-items-center text-[10px] font-bold ${i === 0 ? 'bg-amberx-400 text-black' : i < 3 ? 'bg-coral-500/20 text-coral-300' : 'bg-slatepanel-800 text-slate-400'}`}>{i + 1}</span>
+                      <span className="font-semibold text-slate-200">{u.user}</span>
+                    </span>
+                    <span className="tabular font-bold text-emeraldwin-400">{store.currency}{u.earnings.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
