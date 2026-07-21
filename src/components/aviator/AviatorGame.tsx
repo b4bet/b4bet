@@ -89,17 +89,14 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   /**
    * Called by BettingPanel when the player clicks BET.
    *
-   * Steps:
-   * 1. Validate amount against configured limits.
-   * 2. Debit the player's LOCAL balance only (optimistic UI).
-   *    We use debitLocalOnly() — NOT debit() — because the server-side
-   *    aviator_place_bet call will deduct from Supabase itself. Using
-   *    debit() would write the reduced balance to Supabase first, then
-   *    the server would deduct again, causing a 2x deduction.
-   * 3. Register the bet on the server via `aviator_place_bet` so that
-   *    `aviator_cashout` can find it in the `bets` table.
+   * Returns a Promise<boolean> — true if bet was accepted locally.
+   * Also registers bet on server and stores bet_id in BetState so cashout
+   * can use direct ID lookup instead of fragile round_uuid matching.
+   *
+   * Uses debitLocalOnly() to avoid double-deduction: the server also
+   * deducts from Supabase in aviator_place_bet.
    */
-  const handlePlaceBet = useCallback((amount: number) => {
+  const handlePlaceBet = useCallback(async (amount: number): Promise<boolean> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
       cms.toast({
@@ -112,21 +109,36 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // Use debitLocalOnly: the server (aviator_place_bet) deducts from Supabase.
     // debit() would also write to Supabase causing a double deduction.
     const ok = store.debitLocalOnly(amount);
-    if (ok) {
-      // Register bet on server so cashout can find it by round_uuid.
-      const session = auth.getSession();
-      if (session) {
-        void GameService.aviatorPlaceBet(
-          session.userId,
-          amount,
-          aviatorLoop.getRoundUuid(),
-        ).catch(() => {
-          // Non-fatal: server rejected registration (e.g. round already flying).
-          // Player will see a cashout error if they try to cash out.
-        });
-      }
+    if (!ok) return false;
+
+    const session = auth.getSession();
+    if (!session) {
+      // Refund local debit if no session
+      store.credit(amount);
+      return false;
     }
-    return ok;
+
+    try {
+      const result = await GameService.aviatorPlaceBet(
+        session.userId,
+        amount,
+        aviatorLoop.getRoundUuid(),
+      );
+      if (result.success && result.bet_id) {
+        // Store bet_id in both panels' state — wrapSetBet will apply to the
+        // calling panel. We use a panel-specific setter exposed via the
+        // setBet0/setBet1 refs captured in closure.
+        // Signal success back; the panel will call setBet to store betId.
+        // We return the betId via a custom event so wrapSetBet can capture it.
+        const event = new CustomEvent('aviator:bet_registered', { detail: { betId: result.bet_id } });
+        window.dispatchEvent(event);
+      }
+      return true;
+    } catch {
+      // Server rejected bet — refund local debit so UI balance is correct.
+      store.credit(amount);
+      return false;
+    }
   }, []);
 
   const handleCancelBet = useCallback(
@@ -175,6 +187,16 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         const next = updater(prev);
         if (!prev.placed && next.placed && prev.roundId === roundId) {
           recordPlayerBet(panel, next.amount);
+          // Listen for server bet_id and store it in this panel's state
+          const handler = (e: Event) => {
+            const detail = (e as CustomEvent<{ betId: string }>).detail;
+            const setter2 = panel === 0 ? setBet0 : setBet1;
+            setter2((b) => ({ ...b, betId: detail.betId }));
+            window.removeEventListener('aviator:bet_registered', handler);
+          };
+          window.addEventListener('aviator:bet_registered', handler);
+          // Auto-cleanup after 10s to avoid leaks
+          setTimeout(() => window.removeEventListener('aviator:bet_registered', handler), 10_000);
         }
         if (prev.cashedOutAt === null && next.cashedOutAt !== null) {
           setAllBets((ab) =>
