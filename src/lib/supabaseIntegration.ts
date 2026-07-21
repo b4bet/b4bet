@@ -25,33 +25,8 @@ export async function logoutUser(): Promise<void> {
 }
 
 // ---- Stats ----
-// Reads admin-configured stats from the `home_stats` settings key.
-// Falls back to live DB counts if the key isn't set.
 export async function supabaseGetStats(): Promise<{ onlineUsers: number; topWin: number; paidOut: number }> {
   try {
-    const settings = await supabaseGetSettings();
-    const statsRow = settings.find((s) => s.key === 'home_stats');
-
-    if (statsRow?.value) {
-      try {
-        const cfg = typeof statsRow.value === 'string'
-          ? JSON.parse(statsRow.value)
-          : statsRow.value as Record<string, number>;
-
-        // Random online between min..max
-        const min = Number(cfg.onlineMin ?? 120);
-        const max = Number(cfg.onlineMax ?? 350);
-        const onlineUsers = Math.floor(Math.random() * (max - min + 1)) + min;
-
-        return {
-          onlineUsers,
-          topWin: Number(cfg.topWin ?? 0),
-          paidOut: Number(cfg.paidOut ?? 0),
-        };
-      } catch { /* fall through to live data */ }
-    }
-
-    // Fallback: live DB data
     const profiles = await supabaseGetUsers();
     const txns = await supabaseGetTransactions();
     const topWin = txns.reduce((max, t) => Math.max(max, t.win_amount ?? 0), 0);
@@ -75,10 +50,28 @@ export interface SupabaseProfile {
   total_deposit: number;
   total_withdrawal: number;
   vip_level: number;
+  /** is_admin is read-only — intentionally not exposed to any edit UI */
   is_admin: boolean;
+  is_active: boolean;
+  is_banned: boolean;
+  account_id: string;
+  referral_code: string | null;
+  signup_bonus_granted: boolean;
   created_at: string;
   updated_at: string;
   email?: string;
+}
+
+export interface UserUpdatePayload {
+  username?: string;
+  display_name?: string;
+  phone?: string;
+  email?: string;
+  balance?: number;
+  vip_level?: number;
+  is_active?: boolean;
+  is_banned?: boolean;
+  account_id?: string;
 }
 
 export async function supabaseGetUsers(): Promise<SupabaseProfile[]> {
@@ -94,10 +87,28 @@ export async function supabaseUpdateBalance(userId: string, newBalance: number):
   if (error) throw error;
 }
 
-export async function supabaseToggleAdmin(userId: string, isAdmin: boolean): Promise<void> {
-  const { error } = await supabase.rpc('admin_toggle_user_admin', { p_user_id: userId, p_is_admin: isAdmin });
+/**
+ * Update all editable user fields at once.
+ * NOTE: is_admin is deliberately excluded — it can only be changed via direct DB access.
+ */
+export async function supabaseUpdateUserFull(userId: string, payload: UserUpdatePayload): Promise<void> {
+  const { error } = await supabase.rpc('admin_update_user_full', {
+    p_user_id: userId,
+    p_username: payload.username ?? null,
+    p_display_name: payload.display_name ?? null,
+    p_phone: payload.phone ?? null,
+    p_email: payload.email ?? null,
+    p_balance: payload.balance != null ? payload.balance : null,
+    p_vip_level: payload.vip_level != null ? payload.vip_level : null,
+    p_is_active: payload.is_active != null ? payload.is_active : null,
+    p_is_banned: payload.is_banned != null ? payload.is_banned : null,
+    p_account_id: payload.account_id ?? null,
+  });
   if (error) throw error;
 }
+
+// supabaseToggleAdmin intentionally removed — admin status must only be
+// changed via direct database access, never through the admin panel UI.
 
 // ---- Transactions ----
 export interface SupabaseTransaction {
@@ -260,7 +271,8 @@ export async function supabaseDeleteBanner(id: string): Promise<void> {
 // ---- Support Tickets ----
 export interface SupabaseTicket {
   id: string; user_id: string | null; subject: string; message: string;
-  status: string; priority: string; created_at: string; updated_at: string;
+  status: string; priority: string; is_read: boolean;
+  created_at: string; updated_at: string;
   replies?: SupabaseTicketReply[];
 }
 
@@ -277,14 +289,17 @@ export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
   } catch (e) { console.error('[supabase] getTickets error:', e); return []; }
 }
 
-export async function supabaseCreateTicket(userId: string | null, subject: string, message: string): Promise<string | null> {
+export async function supabaseGetTicketReplies(ticketId: string): Promise<SupabaseTicketReply[]> {
   try {
-    const { data, error } = await supabase.rpc('admin_create_ticket', {
-      p_user_id: userId, p_subject: subject, p_message: message,
-    });
+    const { data, error } = await supabase.rpc('admin_get_ticket_replies', { p_ticket_id: ticketId });
     if (error) throw error;
-    return data as string;
-  } catch (e) { console.error('[supabase] createTicket error:', e); return null; }
+    return (data ?? []) as SupabaseTicketReply[];
+  } catch (e) { console.error('[supabase] getTicketReplies error:', e); return []; }
+}
+
+export async function supabaseReplyToTicket(ticketId: string, message: string): Promise<void> {
+  const { error } = await supabase.rpc('admin_reply_ticket', { p_ticket_id: ticketId, p_message: message });
+  if (error) throw error;
 }
 
 export async function supabaseUpdateTicketStatus(ticketId: string, status: string): Promise<void> {
@@ -292,9 +307,56 @@ export async function supabaseUpdateTicketStatus(ticketId: string, status: strin
   if (error) throw error;
 }
 
-export async function supabaseAddTicketReply(ticketId: string, sender: string, message: string): Promise<void> {
-  const { error } = await supabase.rpc('admin_add_ticket_reply', {
-    p_ticket_id: ticketId, p_sender: sender, p_message: message,
+export async function supabaseMarkTicketRead(ticketId: string): Promise<void> {
+  const { error } = await supabase.rpc('admin_mark_ticket_read', { p_ticket_id: ticketId });
+  if (error) throw error;
+}
+
+// ---- Notifications ----
+export interface SupabaseNotification {
+  id: string; title: string; body: string;
+  type: string; target: string; is_sent: boolean;
+  sent_at: string | null; created_at: string;
+}
+
+export async function supabaseGetNotifications(): Promise<SupabaseNotification[]> {
+  try {
+    const { data, error } = await supabase.rpc('admin_get_notifications');
+    if (error) throw error;
+    return (data ?? []) as SupabaseNotification[];
+  } catch (e) { console.error('[supabase] getNotifications error:', e); return []; }
+}
+
+export async function supabaseSendNotification(title: string, body: string, type: string, target: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase.rpc('admin_send_notification', {
+      p_title: title, p_body: body, p_type: type, p_target: target,
+    });
+    if (error) throw error;
+    return data as string;
+  } catch (e) { console.error('[supabase] sendNotification error:', e); return null; }
+}
+
+// ---- Affiliates ----
+export interface SupabaseAffiliate {
+  id: string; user_id: string; referral_code: string;
+  total_referrals: number; total_earnings: number;
+  commission_rate: number; is_active: boolean;
+  created_at: string; updated_at: string;
+  user_email?: string; user_username?: string;
+}
+
+export async function supabaseGetAffiliates(): Promise<SupabaseAffiliate[]> {
+  try {
+    const { data, error } = await supabase.rpc('admin_get_affiliates');
+    if (error) throw error;
+    return (data ?? []) as SupabaseAffiliate[];
+  } catch (e) { console.error('[supabase] getAffiliates error:', e); return []; }
+}
+
+export async function supabaseUpdateAffiliateCommission(affiliateId: string, rate: number): Promise<void> {
+  const { error } = await supabase.rpc('admin_update_affiliate_commission', {
+    p_affiliate_id: affiliateId, p_rate: rate,
   });
   if (error) throw error;
 }
