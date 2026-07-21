@@ -94,6 +94,38 @@ Deno.serve(async (req: Request) => {
       };
     }
 
+    // ─────────────────────────────────────────────────────────────────────
+    // revertCrashToAuto — fully reverts crash to AUTO mode at ALL paths in DB:
+    //   root.mode, root.manualTargetRoundId,
+    //   crash.mode (GAME_HANDLER_KEYS alias),
+    //   gameHandlers.crash.mode
+    // Must be called after each manual round fires.
+    // ─────────────────────────────────────────────────────────────────────
+    async function revertCrashToAuto(fullConfig: Record<string, unknown>) {
+      const existingCrash = (fullConfig.crash as Record<string, unknown>) ?? {};
+      const existingHandlers = (fullConfig.gameHandlers as Record<string, unknown>) ?? {};
+      const existingHandlerCrash = (existingHandlers.crash as Record<string, unknown>) ?? {};
+
+      const newConfig: Record<string, unknown> = {
+        ...fullConfig,
+        // Revert root-level fields
+        mode: "AUTO",
+        manualTargetRoundId: null,
+        // Revert crash alias (GAME_HANDLER_KEYS path)
+        crash: { ...existingCrash, mode: "AUTO", manualTargetRoundId: null },
+        // Revert gameHandlers.crash
+        gameHandlers: {
+          ...existingHandlers,
+          crash: { ...existingHandlerCrash, mode: "AUTO", manualTargetRoundId: null },
+        },
+      };
+
+      await supabase.rpc("admin_update_setting", {
+        p_key: "admin_config",
+        p_value: JSON.parse(JSON.stringify(newConfig)),
+      }).catch(() => {});
+    }
+
     // ====================================================================
     // CRASH: Get last 10 history (simple number array) — used by crashEngine on startup
     // ====================================================================
@@ -158,13 +190,11 @@ Deno.serve(async (req: Request) => {
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
 
         if (cfg.mode === "MANUAL") {
+          // Fetch fresh full config and revert ALL crash mode paths to AUTO
           const { data: settingsRows } = await supabase.rpc("admin_get_settings");
           const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
           const fullConfig = settings.find((r2) => r2.key === "admin_config")?.value ?? {};
-          await supabase.rpc("admin_update_setting", {
-            p_key: "admin_config",
-            p_value: JSON.parse(JSON.stringify({ ...fullConfig, mode: "AUTO", manualTargetRoundId: null })),
-          }).catch(() => {});
+          await revertCrashToAuto(fullConfig as Record<string, unknown>);
         }
         await supabase.from("crash_current_round").update({
           phase: "flying",
@@ -222,13 +252,11 @@ Deno.serve(async (req: Request) => {
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
 
         if (cfg.mode === "MANUAL") {
+          // Fetch fresh full config and revert ALL crash mode paths to AUTO
           const { data: settingsRows } = await supabase.rpc("admin_get_settings");
           const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
           const fullConfig = settings.find((r2) => r2.key === "admin_config")?.value ?? {};
-          await supabase.rpc("admin_update_setting", {
-            p_key: "admin_config",
-            p_value: JSON.parse(JSON.stringify({ ...fullConfig, mode: "AUTO", manualTargetRoundId: null })),
-          }).catch(() => {});
+          await revertCrashToAuto(fullConfig as Record<string, unknown>);
         }
 
         const newUuid = crypto.randomUUID();
@@ -504,7 +532,7 @@ Deno.serve(async (req: Request) => {
 
     if (action === "admin_preview_next_round") {
       const { game } = body;
-      const gameKey = (game as string) ?? "aviator";
+      const gameKey = (game as string) ?? "crash";
       const cfg = await getGameAdminConfig(gameKey);
       if (cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01) {
         return json({ mode: cfg.mode, preview: parseFloat(cfg.manualCrashPoint.toFixed(2)), gameKey });
