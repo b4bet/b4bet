@@ -48,7 +48,11 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
-  onPlaceBet: (amount: number) => Promise<boolean>;
+  /**
+   * Returns { ok, betId } — betId is this panel's own server-assigned ID.
+   * Each panel calls this independently and receives its OWN betId.
+   */
+  onPlaceBet: (amount: number) => Promise<{ ok: boolean; betId: string | null }>;
   onCancelBet: (amount: number) => void;
   onCashOut: (amount: number, at: number) => void;
   onWin: (amount: number) => void;
@@ -82,35 +86,58 @@ export function BettingPanel({
   const [autoCashoutInput, setAutoCashoutInput] = useState<string>(String(bet.autoCashoutValue));
   const [lastQuickBet, setLastQuickBet] = useState<number | null>(null);
 
-  // Keep a ref to latest bet so async functions never use stale closure values
+  // Always-fresh ref — async doCashOut reads from here, never from stale closure
   const betRef = useRef(bet);
   betRef.current = bet;
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const multiplierRef = useRef(multiplier);
+  multiplierRef.current = multiplier;
 
   useEffect(() => { setAmountInput(String(bet.amount)); }, [bet.amount]);
   useEffect(() => { setAutoCashoutInput(String(bet.autoCashoutValue)); }, [bet.autoCashoutValue]);
 
   const limits = store.getGameLimits('aviator');
 
+  // ── Place bet helper — stores betId directly into this panel's state ──────
+  async function placeBetAndStore(amount: number): Promise<boolean> {
+    const { ok, betId } = await onPlaceBet(amount);
+    if (ok) {
+      // Store betId immediately — this panel owns it exclusively
+      setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
+    }
+    return ok;
+  }
+
   // Round transition — fire pending/auto bets for next round.
   useEffect(() => {
     if (bet.roundId !== roundId) {
       setBet((b) => {
-        const nextRound = { ...b, roundId, placed: false, cashedOutAt: null, pendingNextRound: false, betId: null };
         const shouldPlace = b.autoBetEnabled || b.pendingNextRound;
+        const nextRound: BetState = {
+          ...b,
+          roundId,
+          placed: false,
+          cashedOutAt: null,
+          pendingNextRound: false,
+          betId: null,
+        };
         if (shouldPlace) {
           if (b.amount < limits.min || b.amount > limits.max) {
             nextRound.autoBetEnabled = false;
             nextRound.pendingNextRound = false;
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
-            void onPlaceBet(b.amount).then((ok) => {
-              if (!ok) {
+            // Place and store betId for next round's bet
+            void onPlaceBet(b.amount).then(({ ok, betId }) => {
+              if (ok) {
+                setBet((bb) => ({ ...bb, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
+              } else {
                 setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
                 onInsufficientBalance?.();
               }
             });
-            nextRound.placed = true;
-            nextRound.placedAtMs = Date.now();
+            nextRound.placed = false; // will be set true in the .then above
           }
         }
         return nextRound;
@@ -119,7 +146,7 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  // Auto cash-out trigger — uses betRef so never stale
+  // Auto cash-out trigger — reads fresh values from refs
   useEffect(() => {
     const b = betRef.current;
     if (
@@ -165,14 +192,13 @@ export function BettingPanel({
   const canCancel   = phase === 'waiting' && bet.placed  && bet.cashedOutAt === null;
   const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
 
-  // "BET / Next round" — visible whenever there is no active cashout-able bet
-  // Covers: flying (never bet this round), flying (already cashed out), crashed phase
+  // Green BET "Next round" — any time there's no active cashout-able bet
   const canQueueNextRound =
     (phase === 'flying' || phase === 'crashed') &&
     !canCashOut &&
     !bet.pendingNextRound;
 
-  // "CANCEL / Next round" — already queued, let user cancel
+  // Red CANCEL "Next round" — user already queued
   const canCancelQueue =
     (phase === 'flying' || phase === 'crashed') &&
     !canCashOut &&
@@ -198,9 +224,9 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
-        void onPlaceBet(bet.amount).then((ok) => {
+        void placeBetAndStore(bet.amount).then((ok) => {
           if (ok) {
-            setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
+            setBet((b) => ({ ...b, autoBetEnabled: true }));
           } else {
             onInsufficientBalance?.();
           }
@@ -216,16 +242,16 @@ export function BettingPanel({
   function handleBetClick() {
     if (!auth.getSession()) { bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login'); return; }
 
-    // 1. Active bet during flight → CASH OUT (highest priority)
+    // 1. Active bet during flight → CASH OUT
     if (canCashOut) { void doCashOut(); return; }
 
-    // 2. Already queued → cancel queue
+    // 2. Already queued → cancel
     if (canCancelQueue) { setBet((b) => ({ ...b, pendingNextRound: false })); return; }
 
     // 3. Waiting: cancel placed bet
     if (canCancel) { doCancel(); return; }
 
-    // 4. Waiting: insufficient balance notice
+    // 4. Waiting: insufficient balance
     if (isInsufficientBalance) { onInsufficientBalance?.(); return; }
 
     // 5. Waiting: place bet now
@@ -235,17 +261,13 @@ export function BettingPanel({
         return;
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
-      void onPlaceBet(bet.amount).then((ok) => {
-        if (ok) {
-          setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
-        } else {
-          onInsufficientBalance?.();
-        }
+      void placeBetAndStore(bet.amount).then((ok) => {
+        if (!ok) onInsufficientBalance?.();
       });
       return;
     }
 
-    // 6. Flying/crashed without active bet → queue for next round
+    // 6. Flying/crashed: queue for next round
     if (canQueueNextRound) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
@@ -265,14 +287,16 @@ export function BettingPanel({
 
   /**
    * Server-validated cash out.
-   * Uses betRef so it NEVER reads stale closure values even from async useEffect.
+   * Reads betId, amount, placedAtMs from betRef — always fresh, never stale.
    */
   async function doCashOut(atOverride?: number) {
     const b = betRef.current;
-    // Guard: only cash out if there is an active placed bet in flying phase
-    if (!(phase === 'flying' && b.placed && b.cashedOutAt === null)) return;
+    const currentPhase = phaseRef.current;
+    // Only cash out if there is a live active bet
+    if (!(currentPhase === 'flying' && b.placed && b.cashedOutAt === null)) return;
 
-    const at = atOverride ?? multiplier;
+    const at = atOverride ?? multiplierRef.current;
+    // Optimistically mark as cashed out to prevent double-tap
     setBet((prev) => ({ ...prev, cashedOutAt: at }));
 
     try {
@@ -288,6 +312,8 @@ export function BettingPanel({
       }
     } catch {
       cms.toast({ title: 'Cashout error', body: 'Could not confirm cashout. Please check your balance.', kind: 'alert' });
+      // Revert optimistic update so user can try again
+      setBet((prev) => ({ ...prev, cashedOutAt: null }));
     }
   }
 
@@ -328,7 +354,6 @@ export function BettingPanel({
     );
     // green — already set as default
   }
-  // canPlace: default green BET — already set
 
   const isButtonDisabled =
     !canPlace &&
