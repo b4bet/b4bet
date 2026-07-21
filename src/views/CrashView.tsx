@@ -140,17 +140,15 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
   return (
     <div className="flex flex-col h-full w-full bg-slatepanel-950 select-none">
 
-      {/* ── Top header row — pt-5 for spacing from main app header ── */}
-      <div className="flex items-center justify-between px-3 pt-5 pb-1 flex-shrink-0">
+      {/* ── Top header row — pt-2 ── */}
+      <div className="flex items-center justify-between px-3 pt-2 pb-1 flex-shrink-0">
 
-        {/* Left: JetX brand name */}
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-purple-400 via-fuchsia-400 to-pink-400 bg-clip-text text-transparent leading-none">
             JetX
           </span>
         </div>
 
-        {/* Right: Balance + Provably Fair + Settings */}
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <div className="px-2 py-1 rounded-lg bg-slatepanel-800 border border-borderline-900">
             <span className="text-xs font-bold text-white tabular-nums">{displayBalance}</span>
