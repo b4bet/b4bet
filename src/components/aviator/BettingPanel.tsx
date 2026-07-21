@@ -20,6 +20,8 @@ export interface BetState {
   roundId: number;
   /** Timestamp (ms) when the bet was placed — sent to server for timing validation */
   placedAtMs: number;
+  /** Server-assigned bet ID returned by aviator_place_bet. Used for direct cashout lookup. */
+  betId: string | null;
 }
 
 export function createInitialBet(roundId: number): BetState {
@@ -34,6 +36,7 @@ export function createInitialBet(roundId: number): BetState {
     pendingNextRound: false,
     roundId,
     placedAtMs: 0,
+    betId: null,
   };
 }
 
@@ -45,7 +48,7 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
-  onPlaceBet: (amount: number) => boolean;
+  onPlaceBet: (amount: number) => Promise<boolean>;
   onCancelBet: (amount: number) => void;
   onCashOut: (amount: number, at: number) => void;
   onWin: (amount: number) => void;
@@ -89,7 +92,7 @@ export function BettingPanel({
   useEffect(() => {
     if (bet.roundId !== roundId) {
       setBet((b) => {
-        const nextRound = { ...b, roundId, placed: false, cashedOutAt: null, pendingNextRound: false };
+        const nextRound = { ...b, roundId, placed: false, cashedOutAt: null, pendingNextRound: false, betId: null };
         const shouldPlace = b.autoBetEnabled || b.pendingNextRound;
         if (shouldPlace) {
           if (b.amount < limits.min || b.amount > limits.max) {
@@ -97,15 +100,15 @@ export function BettingPanel({
             nextRound.pendingNextRound = false;
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
-            const ok = onPlaceBet(b.amount);
-            if (ok) {
-              nextRound.placed = true;
-              nextRound.placedAtMs = Date.now();
-            } else {
-              nextRound.autoBetEnabled = false;
-              nextRound.pendingNextRound = false;
-              onInsufficientBalance?.();
-            }
+            // Fire the async bet placement; update betId when server confirms
+            void onPlaceBet(b.amount).then((ok) => {
+              if (!ok) {
+                setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
+                onInsufficientBalance?.();
+              }
+            });
+            nextRound.placed = true;
+            nextRound.placedAtMs = Date.now();
           }
         }
         return nextRound;
@@ -149,7 +152,7 @@ export function BettingPanel({
             .catch(() => { /* non-fatal */ });
         });
       }
-      setBet((b) => ({ ...b, placed: false }));
+      setBet((b) => ({ ...b, placed: false, betId: null }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
@@ -180,10 +183,13 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
-        const ok = onPlaceBet(bet.amount);
-        if (ok) {
-          setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
-        } else { onInsufficientBalance?.(); }
+        void onPlaceBet(bet.amount).then((ok) => {
+          if (ok) {
+            setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
+          } else {
+            onInsufficientBalance?.();
+          }
+        });
       } else {
         setBet((b) => ({ ...b, autoBetEnabled: true }));
       }
@@ -204,10 +210,13 @@ export function BettingPanel({
         return;
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
-      const ok = onPlaceBet(bet.amount);
-      if (ok) {
-        setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
-      } else { onInsufficientBalance?.(); }
+      void onPlaceBet(bet.amount).then((ok) => {
+        if (ok) {
+          setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
+        } else {
+          onInsufficientBalance?.();
+        }
+      });
       return;
     }
     if (canQueueNextRound) {
@@ -223,13 +232,15 @@ export function BettingPanel({
   function doCancel() {
     if (!canCancel) return;
     const amt = bet.amount;
-    setBet((b) => ({ ...b, placed: false }));
+    setBet((b) => ({ ...b, placed: false, betId: null }));
     onCancelBet(amt);
   }
 
   /**
    * Server-validated cash out.
-   * Passes the current multiplier so the server can verify and calculate winnings.
+   * Passes bet_id (if known) so the server can find the bet directly by ID,
+   * eliminating the round_uuid race condition that caused intermittent
+   * "Bet not found" errors.
    */
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
@@ -238,7 +249,7 @@ export function BettingPanel({
     setBet((b) => ({ ...b, cashedOutAt: at }));
 
     try {
-      const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs, at);
+      const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs, at, bet.betId);
       if (res.won && res.win > 0) {
         store.setBalance(res.balance_after);
         onCashOut(bet.amount, res.cashout_at ?? at);
