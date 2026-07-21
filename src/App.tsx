@@ -100,7 +100,8 @@ export default function App() {
         />
       )}
 
-      <div className={showHeader ? 'pb-16 pt-[56px]' : ''}>
+      {/* pt-[70px] matches new header height */}
+      <div className={showHeader ? 'pb-16 pt-[70px]' : ''}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView onNavigate={navigate} />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
