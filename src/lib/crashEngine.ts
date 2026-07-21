@@ -23,6 +23,7 @@ export interface BetSlot {
   amount: number;
   placed: boolean;
   autoCashAt: number | null;
+  autoEnabled: boolean;
   cashedOutAt: number | null;
   cashedOut: boolean;
   win: number | null;
@@ -61,7 +62,16 @@ const SESSION_ROUND_KEY = 'b4bet.crash.lastRoundId';
 const SESSION_PHASE_KEY = 'b4bet.crash.lastPhase';
 
 function freshBet(id: 'A' | 'B'): BetSlot {
-  return { id, amount: 100, placed: false, autoCashAt: null, cashedOutAt: null, cashedOut: false, win: null };
+  return {
+    id,
+    amount: 100,
+    placed: false,
+    autoCashAt: null,
+    autoEnabled: false,
+    cashedOutAt: null,
+    cashedOut: false,
+    win: null,
+  };
 }
 
 function multiplierFromElapsed(elapsedMs: number): number {
@@ -138,12 +148,12 @@ class CrashEngine {
     }
   }
 
-  /** Full provably-fair detail array — used by CrashFeedPopup */
+  /** Full provably-fair detail — used by CrashFeedPopup */
   getHistoryDetail(): CrashRoundDetail[] {
     return [...this.state.historyDetail];
   }
 
-  /** Current bets for both slots — used by useCrashBets() hook */
+  /** Current bets — used by useCrashBets() in hooks.ts */
   getBets(): Record<'A' | 'B', BetSlot> {
     return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
   }
@@ -260,7 +270,7 @@ class CrashEngine {
   private checkAutoCashouts() {
     const m = this.state.multiplier;
     for (const slot of Object.values(this.state.bets)) {
-      if (slot.placed && !slot.cashedOut && slot.autoCashAt !== null && m >= slot.autoCashAt) {
+      if (slot.placed && !slot.cashedOut && slot.autoEnabled && slot.autoCashAt !== null && m >= slot.autoCashAt) {
         this.performCashOut(slot.id, slot.autoCashAt);
       }
     }
@@ -271,8 +281,9 @@ class CrashEngine {
   private publishHistory() { bus.emit(Topics.CrashHistory, [...this.state.history]); }
 
   private broadcastBets() {
-    bus.emit(Topics.CrashBets, { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } });
-    bus.emit(Topics.CrashTick, { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } });
+    const bets = { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
+    bus.emit(Topics.CrashBets, bets);
+    bus.emit(Topics.CrashTick, bets);
   }
 
   private performCashOut(id: 'A' | 'B', cashOutAt: number) {
@@ -325,8 +336,18 @@ class CrashEngine {
     return { ok: true };
   }
 
+  /** Set auto cash-out for a slot. Called by DualBetPanel. */
   setAutoCashAt(id: 'A' | 'B', at: number | null) {
     this.state.bets[id].autoCashAt = at;
+  }
+
+  /**
+   * setAuto — DualBetPanel calls this as: crashEngine.setAuto(id, enabled, target)
+   * Enables/disables auto cashout and sets the target multiplier.
+   */
+  setAuto(id: 'A' | 'B', enabled: boolean, target: number) {
+    this.state.bets[id].autoEnabled = enabled;
+    this.state.bets[id].autoCashAt = enabled ? target : null;
   }
 
   cashOut(id: 'A' | 'B'): { ok: boolean; reason?: string } {
