@@ -29,6 +29,7 @@ export interface CrashRoundDetail {
   created_at: string;
 }
 
+/** Returned by crash_get_current_round — polled every 300ms */
 export interface CrashCurrentRoundResult {
   phase: 'waiting' | 'flying' | 'crashed';
   elapsed_ms: number;
@@ -71,12 +72,12 @@ export const GameService = {
     return get<{ history: CrashRoundDetail[] }>({ action: "crash_get_history" });
   },
 
-  /** Alias kept for CrashFeedPopup backward-compat */
+  /** Alias — some older components still call this */
   crashGetHistoryDetail(): Promise<{ history: CrashRoundDetail[] }> {
     return get<{ history: CrashRoundDetail[] }>({ action: "crash_get_history" });
   },
 
-  /** Poll every 300ms — returns phase, elapsed_ms, crash_point (only when crashed) */
+  /** Poll every 300ms — phase, elapsed_ms, crash_point (only when crashed) */
   crashGetCurrentRound(): Promise<CrashCurrentRoundResult> {
     return get<CrashCurrentRoundResult>({ action: "crash_get_current_round" });
   },
