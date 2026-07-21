@@ -6,7 +6,7 @@ import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
 import { auth } from '../../lib/auth';
 import { bus } from '../../lib/bus';
-import { aviatorLoop } from '../../lib/persistentGameEngine';
+import type { AviatorCashoutResult } from '../../lib/game-service';
 
 export interface BetState {
   amount: number;
@@ -50,10 +50,20 @@ interface BettingPanelProps {
   balance: number;
   /**
    * Returns { ok, betId } — betId is this panel's own server-assigned ID.
-   * Each panel calls this independently and receives its OWN betId.
+   * Serialized in AviatorGame to prevent Supabase race condition.
    */
   onPlaceBet: (amount: number) => Promise<{ ok: boolean; betId: string | null }>;
   onCancelBet: (amount: number) => void;
+  /**
+   * Server cashout call — serialized in AviatorGame so both panels never
+   * hit Supabase at the same time, preventing balance overwrite race.
+   */
+  onServerCashOut: (
+    amount: number,
+    placedAtMs: number,
+    multiplier: number,
+    betId: string | null,
+  ) => Promise<AviatorCashoutResult>;
   onCashOut: (amount: number, at: number) => void;
   onWin: (amount: number) => void;
   onInsufficientBalance?: () => void;
@@ -77,6 +87,7 @@ export function BettingPanel({
   balance,
   onPlaceBet,
   onCancelBet,
+  onServerCashOut,
   onCashOut,
   onWin,
   onInsufficientBalance,
@@ -86,7 +97,7 @@ export function BettingPanel({
   const [autoCashoutInput, setAutoCashoutInput] = useState<string>(String(bet.autoCashoutValue));
   const [lastQuickBet, setLastQuickBet] = useState<number | null>(null);
 
-  // Always-fresh ref — async doCashOut reads from here, never from stale closure
+  // Always-fresh refs — async doCashOut reads from here, never from stale closure
   const betRef = useRef(bet);
   betRef.current = bet;
   const phaseRef = useRef(phase);
@@ -103,7 +114,6 @@ export function BettingPanel({
   async function placeBetAndStore(amount: number): Promise<boolean> {
     const { ok, betId } = await onPlaceBet(amount);
     if (ok) {
-      // Store betId immediately — this panel owns it exclusively
       setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
     }
     return ok;
@@ -128,7 +138,6 @@ export function BettingPanel({
             nextRound.pendingNextRound = false;
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
-            // Place and store betId for next round's bet
             void onPlaceBet(b.amount).then(({ ok, betId }) => {
               if (ok) {
                 setBet((bb) => ({ ...bb, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
@@ -137,7 +146,7 @@ export function BettingPanel({
                 onInsufficientBalance?.();
               }
             });
-            nextRound.placed = false; // will be set true in the .then above
+            nextRound.placed = false;
           }
         }
         return nextRound;
@@ -146,7 +155,7 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  // Auto cash-out trigger — reads fresh values from refs
+  // Auto cash-out trigger
   useEffect(() => {
     const b = betRef.current;
     if (
@@ -167,18 +176,22 @@ export function BettingPanel({
       const session = auth.getSession();
       if (session) {
         void import('../../lib/game-service').then(({ GameService }) => {
-          void GameService.aviatorSettle(
-            session.userId,
-            aviatorLoop.getRoundUuid(),
-            bet.roundId,
-            bet.amount,
-          )
-            .then((res) => {
-              if (res.crash_point) {
-                aviatorLoop.reportServerCrash(res.crash_point);
-              }
-            })
-            .catch(() => { /* non-fatal */ });
+          void import('../../lib/persistentGameEngine').then(({ aviatorLoop }) => {
+            void GameService.aviatorSettle(
+              session.userId,
+              aviatorLoop.getRoundUuid(),
+              bet.roundId,
+              bet.amount,
+            )
+              .then((res) => {
+                if (res.crash_point) {
+                  void import('../../lib/persistentGameEngine').then(({ aviatorLoop: loop }) => {
+                    loop.reportServerCrash(res.crash_point);
+                  });
+                }
+              })
+              .catch(() => { /* non-fatal */ });
+          });
         });
       }
       setBet((b) => ({ ...b, placed: false, betId: null }));
@@ -192,13 +205,11 @@ export function BettingPanel({
   const canCancel   = phase === 'waiting' && bet.placed  && bet.cashedOutAt === null;
   const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
 
-  // Green BET "Next round" — any time there's no active cashout-able bet
   const canQueueNextRound =
     (phase === 'flying' || phase === 'crashed') &&
     !canCashOut &&
     !bet.pendingNextRound;
 
-  // Red CANCEL "Next round" — user already queued
   const canCancelQueue =
     (phase === 'flying' || phase === 'crashed') &&
     !canCashOut &&
@@ -242,19 +253,11 @@ export function BettingPanel({
   function handleBetClick() {
     if (!auth.getSession()) { bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login'); return; }
 
-    // 1. Active bet during flight → CASH OUT
     if (canCashOut) { void doCashOut(); return; }
-
-    // 2. Already queued → cancel
     if (canCancelQueue) { setBet((b) => ({ ...b, pendingNextRound: false })); return; }
-
-    // 3. Waiting: cancel placed bet
     if (canCancel) { doCancel(); return; }
-
-    // 4. Waiting: insufficient balance
     if (isInsufficientBalance) { onInsufficientBalance?.(); return; }
 
-    // 5. Waiting: place bet now
     if (canPlace) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
@@ -267,7 +270,6 @@ export function BettingPanel({
       return;
     }
 
-    // 6. Flying/crashed: queue for next round
     if (canQueueNextRound) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
@@ -288,31 +290,34 @@ export function BettingPanel({
   /**
    * Server-validated cash out.
    * Reads betId, amount, placedAtMs from betRef — always fresh, never stale.
+   * Actual server call goes through onServerCashOut (serialized in AviatorGame).
    */
   async function doCashOut(atOverride?: number) {
     const b = betRef.current;
     const currentPhase = phaseRef.current;
-    // Only cash out if there is a live active bet
     if (!(currentPhase === 'flying' && b.placed && b.cashedOutAt === null)) return;
 
     const at = atOverride ?? multiplierRef.current;
-    // Optimistically mark as cashed out to prevent double-tap
+    // Optimistically mark cashed out — prevents double-tap
     setBet((prev) => ({ ...prev, cashedOutAt: at }));
 
     try {
-      const res = await aviatorLoop.cashoutBet(b.amount, b.placedAtMs, at, b.betId);
+      // Delegate to AviatorGame which serializes concurrent cashouts
+      const res = await onServerCashOut(b.amount, b.placedAtMs, at, b.betId);
       if (res.won && res.win > 0) {
         store.setBalance(res.balance_after);
         onCashOut(b.amount, res.cashout_at ?? at);
         onWin(res.win);
       } else {
         if (res.crash_point !== null) {
-          aviatorLoop.reportServerCrash(res.crash_point);
+          void import('../../lib/persistentGameEngine').then(({ aviatorLoop }) => {
+            if (res.crash_point !== null) aviatorLoop.reportServerCrash(res.crash_point);
+          });
         }
       }
     } catch {
       cms.toast({ title: 'Cashout error', body: 'Could not confirm cashout. Please check your balance.', kind: 'alert' });
-      // Revert optimistic update so user can try again
+      // Revert optimistic update so user can retry
       setBet((prev) => ({ ...prev, cashedOutAt: null }));
     }
   }
@@ -352,7 +357,6 @@ export function BettingPanel({
         <span className="text-xs opacity-80">Next round</span>
       </span>
     );
-    // green — already set as default
   }
 
   const isButtonDisabled =
