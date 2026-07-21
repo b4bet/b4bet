@@ -150,14 +150,14 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
           </span>
         </div>
 
-        {/* Center: Balance */}
-        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slatepanel-800 border border-borderline-900">
-          <span className="text-[11px] text-slate-400 font-medium">Balance</span>
-          <span className="text-sm font-bold text-white tabular-nums">{displayBalance}</span>
-        </div>
+        {/* Right: Balance + Provably Fair + Settings */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {/* Balance — compact, no label */}
+          <div className="px-2 py-1 rounded-lg bg-slatepanel-800 border border-borderline-900">
+            <span className="text-xs font-bold text-white tabular-nums">{displayBalance}</span>
+          </div>
 
-        {/* Right: Provably fair + Settings */}
-        <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Provably Fair badge */}
           <button
             className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emeraldwin-500/10 border border-emeraldwin-500/30 cursor-default"
             aria-label="Provably fair"
@@ -169,10 +169,10 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
           <button
             ref={settingsButtonRef}
             onClick={() => setSettingsOpen(true)}
-            className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-emeraldwin-400/60 transition-colors flex-shrink-0"
+            className="w-8 h-8 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-emeraldwin-400/60 transition-colors flex-shrink-0"
             aria-label="Game settings"
           >
-            <Settings size={16} className="text-slate-400" />
+            <Settings size={15} className="text-slate-400" />
           </button>
         </div>
       </div>
