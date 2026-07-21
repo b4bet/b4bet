@@ -1,12 +1,13 @@
 import { useEffect, useState, useRef } from 'react';
 import { crashEngine } from '../lib/crashEngine';
-import { useCrashState, useCrashHistory, useGameLogos } from '../lib/hooks';
+import { useCrashState, useCrashHistory, useGameLogos, useBalance } from '../lib/hooks';
 import CrashCanvas from '../components/CrashCanvas';
 import DualBetPanel from '../components/DualBetPanel';
 import CrashSettingsModal from '../components/CrashSettingsModal';
 import CashoutPopupOverlay from '../components/CashoutPopupOverlay';
 import CrashHistoryTabs from '../components/CrashHistoryTabs';
-import { Settings, Rocket, ShieldCheck, X, Copy, ExternalLink } from 'lucide-react';
+import { Settings, ShieldCheck, X, Copy, ExternalLink } from 'lucide-react';
+import { store } from '../lib/store';
 import type { CrashRoundDetail } from '../lib/game-service';
 
 function multiplierColor(x: number) {
@@ -94,7 +95,7 @@ function VerifyPanel({ round, onClose }: VerifyPanelProps) {
 export default function CrashView({ onBack }: { onBack?: () => void }) {
   const state = useCrashState();
   const history = useCrashHistory();
-  const logos = useGameLogos();
+  const balance = useBalance();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [selectedRound, setSelectedRound] = useState<CrashRoundDetail | null>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
@@ -132,26 +133,37 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
     setSelectedRound((prev) => (prev?.round_uuid === detail.round_uuid ? null : detail));
   };
 
+  const displayBalance = balance >= 0
+    ? `${store.currency}${balance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : '…';
+
   return (
     <div className="flex flex-col h-full w-full bg-slatepanel-950 select-none">
 
       {/* ── Top header row ── */}
       <div className="flex items-center justify-between px-3 pt-2 pb-1 flex-shrink-0">
+
+        {/* Left: JetX brand name */}
         <div className="flex items-center gap-2 min-w-0">
-          {logos.crash ? (
-            <img src={logos.crash} alt="Crash" className="h-7 w-auto object-contain flex-shrink-0" />
-          ) : (
-            <Rocket size={20} className="text-neon-400 flex-shrink-0" />
-          )}
+          <span className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-purple-400 via-fuchsia-400 to-pink-400 bg-clip-text text-transparent leading-none">
+            JetX
+          </span>
         </div>
 
+        {/* Center: Balance */}
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slatepanel-800 border border-borderline-900">
+          <span className="text-[11px] text-slate-400 font-medium">Balance</span>
+          <span className="text-sm font-bold text-white tabular-nums">{displayBalance}</span>
+        </div>
+
+        {/* Right: Provably fair + Settings */}
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
             className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emeraldwin-500/10 border border-emeraldwin-500/30 cursor-default"
             aria-label="Provably fair"
           >
             <ShieldCheck size={12} className="text-emeraldwin-400 flex-shrink-0" />
-            <span className="text-emeraldwin-400 text-[11px] font-semibold leading-none">Provably Fair</span>
+            <span className="text-emeraldwin-400 text-[11px] font-semibold leading-none hidden sm:inline">Provably Fair</span>
           </button>
 
           <button
