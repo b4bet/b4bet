@@ -137,20 +137,6 @@ export interface RoundOutcomePreview {
 
 export const globalRounds: Record<string, number> = { wingo: 1, k3: 1, fived: 1, sunvsmoon: 1 };
 
-function seedLeaderboard(prefix: string): { user: string; earnings: number; ts: number }[] {
-  const names = ['NeonHawk','PixelFox','CyberLynx','QuantumOwl','AstroBee','NovaWolf','EchoFalcon','TurboKoi','GlitchRavn','PrismTiger','OrbitMoth','VoltGecko'];
-  const now = Date.now();
-  const rows: { user: string; earnings: number; ts: number }[] = [];
-  for (let i = 0; i < 40; i++) {
-    rows.push({
-      user: names[i % names.length] + (Math.floor(i / names.length) || ''),
-      earnings: Math.round((Math.random() * 9000 + 500) * 100) / 100,
-      ts: now - Math.floor(Math.random() * 365 * 24 * 60 * 60 * 1000),
-    });
-  }
-  return rows.map(r => ({ ...r, user: r.user + (prefix === 'mines' ? '\u00B7M' : '') }));
-}
-
 const GAME_HANDLER_KEYS = ['crash', 'aviator', 'wingo', 'k3', 'fived', 'sunvsmoon', 'trading'] as const;
 
 const DEFAULT_CRASH_HANDLER: GameHandlerConfig = {
@@ -193,8 +179,9 @@ class Store {
   sunMoonHistory: SunMoonRoundRecord[] = [];
   tradingHistory: TradingBetRecord[] = [];
 
-  crashLeaderboard = seedLeaderboard('crash');
-  minesLeaderboard = seedLeaderboard('mines');
+  // Leaderboards are populated from real player data only
+  crashLeaderboard: { user: string; earnings: number; ts: number }[] = [];
+  minesLeaderboard: { user: string; earnings: number; ts: number }[] = [];
 
   adminHistory: AdminHistoryRecord[] = [];
   balanceHistory: BalanceHistoryRecord[] = [];
@@ -594,6 +581,15 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'mines', amount: rec.stake, win: rec.win,
       result: rec.busted ? 'busted' : `${rec.multiplier.toFixed(2)}x` });
+    // Add to leaderboard if player won
+    if (!rec.busted && rec.win > 0) {
+      const session = auth.getSession();
+      const username = session?.username ?? meta.username;
+      this.minesLeaderboard = [
+        ...this.minesLeaderboard,
+        { user: username, earnings: rec.win, ts: Date.now() },
+      ];
+    }
     supabase.from('bets').insert({
       user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
       multiplier: rec.multiplier, status: rec.busted ? 'lost' : 'won',
