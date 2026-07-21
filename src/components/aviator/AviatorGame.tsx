@@ -91,14 +91,13 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
    *
    * Steps:
    * 1. Validate amount against configured limits.
-   * 2. Debit the player's local balance (optimistic UI).
+   * 2. Debit the player's LOCAL balance only (optimistic UI).
+   *    We use debitLocalOnly() — NOT debit() — because the server-side
+   *    aviator_place_bet call will deduct from Supabase itself. Using
+   *    debit() would write the reduced balance to Supabase first, then
+   *    the server would deduct again, causing a 2x deduction.
    * 3. Register the bet on the server via `aviator_place_bet` so that
    *    `aviator_cashout` can find it in the `bets` table.
-   *
-   * The server call is fire-and-forget: the local BET button state is set
-   * immediately. If the server rejects (e.g. race condition at round
-   * boundary), the cashout will return "Bet not found" and show an error
-   * toast — rare in practice.
    */
   const handlePlaceBet = useCallback((amount: number) => {
     const limits = store.getGameLimits('aviator');
@@ -110,7 +109,9 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       });
       return false;
     }
-    const ok = store.debit(amount);
+    // Use debitLocalOnly: the server (aviator_place_bet) deducts from Supabase.
+    // debit() would also write to Supabase causing a double deduction.
+    const ok = store.debitLocalOnly(amount);
     if (ok) {
       // Register bet on server so cashout can find it by round_uuid.
       const session = auth.getSession();
