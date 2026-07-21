@@ -1,97 +1,68 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { Shield, Sliders, Target, Cpu, Zap, Rocket, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
-import { useAdminConfig, useGameRound } from '../../lib/hooks';
+import { useAdminConfig } from '../../lib/hooks';
 import { store } from '../../lib/store';
-import { GameService } from '../../lib/game-service';
 
 /**
- * CrashHandlingPanel — reads/writes crash config via store.setGameHandler('crash', ...)
+ * CrashHandlingPanel
  *
- * DB structure: admin_config = { mode, manualCrashPoint, ... (root level for crash) }
- * store.setGameHandler('crash', ...) patches root level + gameHandlers.crash + crash alias
- * Edge Function reads crash config from ROOT level fields.
+ * AUTO mode  — no preview shown. Crash point is generated server-side the
+ *              moment the WAITING→FLYING transition fires. There is nothing
+ *              meaningful to preview before that.
  *
- * Preview is fetched from server via admin_preview_next_round so it reflects actual DB state.
- * After any save, we reload admin config from Supabase to confirm the write succeeded.
+ * MANUAL mode — admin sets a bust multiplier and clicks "Apply".
+ *               We write it via store.setGameHandler (which persists to
+ *               Supabase), wait 1 s, then reload admin config from Supabase
+ *               and show the confirmed value.  The Edge Function reads
+ *               root-level mode + manualCrashPoint for crash, so whatever
+ *               is confirmed here is exactly what the next round will use.
  */
 export function CrashHandlingPanel() {
   const cfg = useAdminConfig();
   const crash = cfg.gameHandlers['crash'] ?? store.getGameHandler('crash');
 
-  // Tracks round counter — triggers fresh preview on each new round
-  const currentRound = useGameRound('crash');
-
   const [manual, setManual] = useState(String(crash.manualCrashPoint ?? 2.0));
 
-  // Server-fetched preview state
-  const [preview, setPreview] = useState<string>('...');
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewMode, setPreviewMode] = useState<string>('');
-
-  // Save feedback state
+  // Confirmed value — shown after a successful save so admin can see what
+  // the server actually has stored.
+  const [confirmed, setConfirmed] = useState<number | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
-  // Fetch preview from server (reflects actual saved DB state)
-  const fetchServerPreview = useCallback(async () => {
-    setPreviewLoading(true);
-    try {
-      const res = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet?action=admin_preview_next_round&game=crash`,
-        { headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY } }
-      );
-      const data = await res.json() as { mode?: string; preview?: number; error?: string };
-      if (data.preview !== undefined) {
-        setPreview(data.preview.toFixed(2) + 'x');
-        setPreviewMode(data.mode ?? '');
-      }
-    } catch {
-      setPreview('—');
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, []);
-
-  // Refresh preview when mode/settings change or new round starts
-  useEffect(() => {
-    void fetchServerPreview();
-  }, [crash.mode, crash.manualCrashPoint, crash.targetWinProbability, crash.houseEdge, currentRound, fetchServerPreview]);
-
-  // --- Setters ---
   const setMode = async (mode: 'AUTO' | 'MANUAL') => {
     setSaveStatus('saving');
+    setConfirmed(null);
     try {
       store.setGameHandler('crash', { mode });
-      // Wait briefly then reload from Supabase to confirm
       await new Promise(r => setTimeout(r, 800));
       await store.loadAdminConfigFromSupabase();
       setSaveStatus('saved');
-      void fetchServerPreview();
     } catch {
       setSaveStatus('error');
     }
     setTimeout(() => setSaveStatus('idle'), 3000);
   };
 
-  const setProb = (v: number) =>
-    store.setGameHandler('crash', { targetWinProbability: v });
-
-  const setEdge = (v: number) =>
-    store.setGameHandler('crash', { houseEdge: v });
+  const setProb = (v: number) => store.setGameHandler('crash', { targetWinProbability: v });
+  const setEdge = (v: number) => store.setGameHandler('crash', { houseEdge: v });
 
   const applyManual = async () => {
     const point = Math.max(1.01, parseFloat(manual) || 1.01);
     setSaveStatus('saving');
+    setConfirmed(null);
     try {
       store.setGameHandler('crash', { manualCrashPoint: point, mode: 'MANUAL' });
-      // Wait for Supabase write then reload config to verify
+      // Wait for Supabase write to complete
       await new Promise(r => setTimeout(r, 1000));
+      // Reload from Supabase to verify what was actually saved
       await store.loadAdminConfigFromSupabase();
+      // Read back the confirmed value
+      const saved = store.getGameHandler('crash').manualCrashPoint ?? point;
+      setConfirmed(saved);
       setSaveStatus('saved');
-      void fetchServerPreview();
     } catch {
       setSaveStatus('error');
     }
-    setTimeout(() => setSaveStatus('idle'), 4000);
+    setTimeout(() => setSaveStatus('idle'), 5000);
   };
 
   // Quick stakes
@@ -108,6 +79,7 @@ export function CrashHandlingPanel() {
 
   return (
     <div className="panel p-4 space-y-4 border-neon-500/30">
+      {/* Header */}
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
@@ -123,19 +95,19 @@ export function CrashHandlingPanel() {
         </div>
       </div>
 
-      {/* Save feedback banner */}
+      {/* Save feedback */}
       {saveStatus !== 'idle' && (
         <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${
           saveStatus === 'saving' ? 'bg-slate-700 text-slate-300' :
-          saveStatus === 'saved' ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/40' :
-          'bg-red-900/60 text-red-300 border border-red-500/40'
+          saveStatus === 'saved'  ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/40' :
+                                    'bg-red-900/60 text-red-300 border border-red-500/40'
         }`}>
           {saveStatus === 'saving' && <RefreshCw className="w-4 h-4 animate-spin" />}
-          {saveStatus === 'saved' && <CheckCircle className="w-4 h-4" />}
-          {saveStatus === 'error' && <AlertCircle className="w-4 h-4" />}
+          {saveStatus === 'saved'  && <CheckCircle className="w-4 h-4" />}
+          {saveStatus === 'error'  && <AlertCircle className="w-4 h-4" />}
           {saveStatus === 'saving' && 'Saving to Supabase…'}
-          {saveStatus === 'saved' && 'Saved & confirmed from Supabase ✓'}
-          {saveStatus === 'error' && 'Save failed — check Supabase connection'}
+          {saveStatus === 'saved'  && 'Saved & confirmed ✓'}
+          {saveStatus === 'error'  && 'Save failed — check Supabase connection'}
         </div>
       )}
 
@@ -149,7 +121,7 @@ export function CrashHandlingPanel() {
             <Shield className={`w-4 h-4 ${crash.mode === 'AUTO' ? 'text-neon-300' : 'text-slate-500'}`} />
             <span className="font-display font-bold text-white text-sm">Automated</span>
           </div>
-          <p className="text-[11px] text-slate-400">Win-probability safeguards revenue.</p>
+          <p className="text-[11px] text-slate-400">Crash point generated server-side on round start.</p>
         </button>
         <button
           onClick={() => setMode('MANUAL')}
@@ -163,9 +135,12 @@ export function CrashHandlingPanel() {
         </button>
       </div>
 
-      {/* AUTO sliders */}
+      {/* AUTO — sliders only, no preview */}
       {crash.mode === 'AUTO' && (
         <div className="space-y-4 animate-fade-in">
+          <div className="rounded-xl bg-slatepanel-800 border border-neon-500/20 px-3 py-2 text-xs text-slate-400">
+            Crash point is generated by the server the moment each round starts. Nothing to preview in advance.
+          </div>
           <div>
             <div className="flex items-center justify-between mb-1">
               <label className="text-sm font-semibold text-white flex items-center gap-2">
@@ -195,20 +170,22 @@ export function CrashHandlingPanel() {
         </div>
       )}
 
-      {/* MANUAL input */}
+      {/* MANUAL — enter value, apply, see confirmed value */}
       {crash.mode === 'MANUAL' && (
-        <div className="space-y-2 animate-fade-in">
+        <div className="space-y-3 animate-fade-in">
           <label className="text-sm font-semibold text-white flex items-center gap-2">
             <Target className="w-4 h-4 text-coral-400" /> Termination Crash Multiplier
           </label>
+
           <div>
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Bust @ (x)</p>
             <input
               type="number" value={manual}
-              onChange={(e) => setManual(e.target.value)}
+              onChange={(e) => { setManual(e.target.value); setConfirmed(null); }}
               min={1.01} step={0.1} className="input tabular"
             />
           </div>
+
           <button
             onClick={applyManual}
             disabled={saveStatus === 'saving'}
@@ -217,49 +194,30 @@ export function CrashHandlingPanel() {
             {saveStatus === 'saving' && <RefreshCw className="w-4 h-4 animate-spin" />}
             Apply Manual Override
           </button>
-          <p className="text-[11px] text-slate-500">
-            Queued for next round: bust at{' '}
-            <span className="text-coral-300 font-semibold">{(crash.manualCrashPoint ?? 2.0).toFixed(2)}x</span>.
-            <br /><span className="text-emeraldwin-300 font-semibold">Switch back to Automated when done.</span>
-          </p>
+
+          {/* Confirmed value — shown only after successful save */}
+          {confirmed !== null && saveStatus !== 'error' && (
+            <div className="rounded-xl bg-coral-900/30 border border-coral-500/40 px-3 py-2.5">
+              <p className="text-[10px] uppercase tracking-wider text-coral-400 font-semibold mb-0.5">Confirmed in Supabase</p>
+              <p className="font-display font-extrabold text-2xl text-coral-300 tabular">
+                {confirmed.toFixed(2)}x
+              </p>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Next round will crash at exactly this multiplier.
+                After it fires, mode auto-reverts to AUTO.
+              </p>
+            </div>
+          )}
+
+          {confirmed === null && saveStatus === 'idle' && (
+            <p className="text-[11px] text-slate-500">
+              Currently queued:{' '}
+              <span className="text-coral-300 font-semibold">{(crash.manualCrashPoint ?? 2.0).toFixed(2)}x</span>
+              {' '}· Click Apply to update.
+            </p>
+          )}
         </div>
       )}
-
-      {/* Preview — fetched from server so it reflects actual saved DB state */}
-      <div className="bg-slatepanel-800 rounded-xl p-3 border border-neon-400/30">
-        <label className="text-xs font-semibold text-neon-300 uppercase tracking-wider flex items-center gap-2 mb-2">
-          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-          </svg>
-          Next Round Preview
-          <span className="ml-auto text-[9px] text-slate-500 normal-case tracking-normal flex items-center gap-1">
-            {previewLoading
-              ? <><RefreshCw className="w-3 h-3 animate-spin inline" /> fetching…</>
-              : <>server · round #{currentRound + 1}</>
-            }
-          </span>
-          <button
-            onClick={fetchServerPreview}
-            title="Refresh preview from server"
-            className="ml-1 text-slate-500 hover:text-neon-300 transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-          </button>
-        </label>
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-slate-400 uppercase tracking-wider w-16">Outcome</span>
-            <span className={`font-display font-extrabold text-xl tabular ${previewMode === 'MANUAL' ? 'text-coral-400' : 'text-white'} ${previewLoading ? 'opacity-40' : ''}`}>
-              {preview}
-            </span>
-          </div>
-          <p className="text-xs text-slate-400">
-            {previewMode === 'MANUAL'
-              ? `Server confirmed MANUAL · next round will bust at ${preview}`
-              : `Server AUTO mode · Win-prob ${crash.targetWinProbability}% · Edge ${crash.houseEdge}%`}
-          </p>
-        </div>
-      </div>
 
       {/* Quick stakes */}
       <div>
