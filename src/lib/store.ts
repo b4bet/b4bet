@@ -347,6 +347,29 @@ class Store {
     return true;
   }
 
+  /**
+   * Debit balance only in local memory — does NOT write to Supabase.
+   * Use this when the server-side operation will deduct the balance itself
+   * (e.g. aviator_place_bet), to prevent a double deduction where both the
+   * client and the server each subtract the bet amount from Supabase.
+   */
+  debitLocalOnly(amount: number): boolean {
+    if (!auth.getSession()) {
+      bus.emit(Topics.AuthOpenModal, 'login');
+      return false;
+    }
+    if (amount > this.balance) return false;
+    const next = Math.max(0, Math.round((this.balance - amount) * 100) / 100);
+    this.balance = next;
+    const session = auth.getSession();
+    if (session) {
+      this.balancesByUser[session.username.toLowerCase()] = next;
+      this.persistBalances();
+    }
+    bus.emit(Topics.Balance, this.balance);
+    return true;
+  }
+
   addBalance(amount: number) { this.credit(amount); }
   deductBalance(amount: number): boolean { return this.debit(amount); }
 
