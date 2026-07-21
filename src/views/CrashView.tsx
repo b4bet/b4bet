@@ -5,9 +5,8 @@ import CrashCanvas from '../components/CrashCanvas';
 import DualBetPanel from '../components/DualBetPanel';
 import CrashSettingsModal from '../components/CrashSettingsModal';
 import CashoutPopupOverlay from '../components/CashoutPopupOverlay';
-import CrashFeedPopup from '../components/CrashFeedPopup';
 import CrashHistoryTabs from '../components/CrashHistoryTabs';
-import { Settings, History, Rocket, ShieldCheck, X, Copy, ExternalLink } from 'lucide-react';
+import { Settings, Rocket, ShieldCheck, X, Copy, ExternalLink } from 'lucide-react';
 import type { CrashRoundDetail } from '../lib/game-service';
 
 function multiplierColor(x: number) {
@@ -17,8 +16,6 @@ function multiplierColor(x: number) {
   if (x >= 1.5) return 'text-white bg-white/5 border-white/20';
   return 'text-red-400 bg-red-500/10 border-red-500/40';
 }
-
-// ── Inline Verify Panel ───────────────────────────────────────────────────────
 
 interface VerifyPanelProps {
   round: CrashRoundDetail;
@@ -36,7 +33,6 @@ function VerifyPanel({ round, onClose }: VerifyPanelProps) {
 
   return (
     <div className="mx-2 mt-1 mb-2 rounded-xl border border-neon-500/30 bg-slatepanel-800 p-3 space-y-3 text-xs">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5 text-neon-400 font-semibold">
           <ShieldCheck size={13} />
@@ -47,7 +43,6 @@ function VerifyPanel({ round, onClose }: VerifyPanelProps) {
         </button>
       </div>
 
-      {/* Hash */}
       <div className="space-y-1">
         <p className="text-slate-400">Server Seed Hash (before round)</p>
         <div className="flex items-center gap-2 bg-black/30 rounded-lg px-2 py-1.5">
@@ -60,7 +55,6 @@ function VerifyPanel({ round, onClose }: VerifyPanelProps) {
         </div>
       </div>
 
-      {/* Seed */}
       {round.server_seed ? (
         <div className="space-y-1">
           <p className="text-slate-400">Server Seed (revealed after crash)</p>
@@ -86,7 +80,6 @@ function VerifyPanel({ round, onClose }: VerifyPanelProps) {
         <p className="text-slate-500 italic">Server seed will be revealed after the round ends.</p>
       )}
 
-      {/* How it works */}
       <div className="text-slate-500 space-y-0.5 border-t border-white/10 pt-2">
         <p className="font-medium text-slate-400">How to verify:</p>
         <p>1. Copy the Server Seed above</p>
@@ -103,10 +96,8 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
   const history = useCrashHistory();
   const logos = useGameLogos();
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [feedOpen, setFeedOpen] = useState(false);
   const [selectedRound, setSelectedRound] = useState<CrashRoundDetail | null>(null);
   const settingsButtonRef = useRef<HTMLButtonElement>(null);
-  const feedButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     import('../lib/crashAudio').then((m) => { m.setCrashAudioActive(true); m.startBgm(); });
@@ -126,10 +117,8 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
   const detailHistory = crashEngine.getHistoryDetail();
 
   const handleBubbleClick = (bp: number, idx: number) => {
-    // Find matching detail by index or bust_point
     const detail = detailHistory[idx] ?? detailHistory.find((d) => d.bust_point === bp);
     if (!detail) {
-      // Fallback: show minimal panel
       const fallback: CrashRoundDetail = {
         bust_point: bp,
         round_uuid: String(idx),
@@ -146,9 +135,8 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
   return (
     <div className="flex flex-col h-full w-full bg-slatepanel-950 select-none">
 
-      {/* ── Top header row — logo · provably fair badge · settings · feed ── */}
+      {/* ── Top header row ── */}
       <div className="flex items-center justify-between px-3 pt-2 pb-1 flex-shrink-0">
-        {/* Logo */}
         <div className="flex items-center gap-2 min-w-0">
           {logos.crash ? (
             <img src={logos.crash} alt="Crash" className="h-7 w-auto object-contain flex-shrink-0" />
@@ -157,13 +145,10 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
           )}
         </div>
 
-        {/* Right side: Provably Fair badge + settings + feed */}
         <div className="flex items-center gap-2 flex-shrink-0">
-
           <button
-            onClick={() => setFeedOpen(!feedOpen)}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emeraldwin-500/10 border border-emeraldwin-500/30 hover:border-emeraldwin-400/60 transition-colors"
-            aria-label="Provably fair — tap to verify"
+            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emeraldwin-500/10 border border-emeraldwin-500/30 cursor-default"
+            aria-label="Provably fair"
           >
             <ShieldCheck size={12} className="text-emeraldwin-400 flex-shrink-0" />
             <span className="text-emeraldwin-400 text-[11px] font-semibold leading-none">Provably Fair</span>
@@ -177,30 +162,17 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
           >
             <Settings size={16} className="text-slate-400" />
           </button>
-
-          <button
-            ref={feedButtonRef}
-            onClick={() => setFeedOpen(!feedOpen)}
-            className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors flex-shrink-0"
-            aria-label={feedOpen ? 'Close crash feed' : 'Open crash feed'}
-          >
-            {feedOpen ? (
-              <div className="relative">
-                <History size={16} className="text-neon-400" />
-              </div>
-            ) : (
-              <History size={16} className="text-slate-400" />
-            )}
-          </button>
         </div>
       </div>
 
       <CrashSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} buttonRef={settingsButtonRef} />
-      <CrashFeedPopup open={feedOpen} onClose={() => setFeedOpen(false)} history={history} buttonRef={feedButtonRef} />
 
-      {/* ── Recent Crash History Bar (clickable bubbles) ── */}
+      {/* ── Recent Crash History Bar ── */}
       <div className="flex flex-col px-2 pb-1 flex-shrink-0 gap-0.5">
-        <div className="flex items-center gap-1 flex-nowrap overflow-x-auto hide-scrollbar">
+        <div
+          className="flex items-center gap-1 flex-nowrap overflow-x-auto"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        >
           {recentHistory.length === 0 ? (
             Array.from({ length: 10 }).map((_, i) => (
               <div key={i} className="flex-shrink-0 h-6 w-11 rounded bg-slatepanel-800 animate-pulse" />
@@ -208,7 +180,9 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
           ) : (
             recentHistory.map((bp, i) => {
               const detail = detailHistory[i] ?? detailHistory.find((d) => d.bust_point === bp);
-              const isSelected = selectedRound && (detail ? selectedRound.round_uuid === detail.round_uuid : selectedRound.bust_point === bp && selectedRound.round_uuid === String(i));
+              const isSelected = selectedRound && (detail
+                ? selectedRound.round_uuid === detail.round_uuid
+                : selectedRound.bust_point === bp && selectedRound.round_uuid === String(i));
               return (
                 <button
                   key={i}
@@ -228,21 +202,18 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
         </div>
       </div>
 
-      {/* ── Inline Verify Panel (shows below history bar on tap) ── */}
+      {/* ── Inline Verify Panel ── */}
       {selectedRound && (
         <VerifyPanel round={selectedRound} onClose={() => setSelectedRound(null)} />
       )}
 
-      {/* Game canvas with overlay popup container */}
+      {/* Game canvas */}
       <div className="relative flex-1 min-h-0">
         <CrashCanvas state={state} />
         <CashoutPopupOverlay />
       </div>
 
-      {/* Dual stacked betting panels */}
       <DualBetPanel />
-
-      {/* History tabs */}
       <CrashHistoryTabs />
     </div>
   );
