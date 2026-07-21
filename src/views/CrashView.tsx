@@ -141,7 +141,7 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
     <div className="flex flex-col h-full w-full bg-slatepanel-950 select-none">
 
       {/* ── Top header row — pt-2 ── */}
-      <div className="flex items-center justify-between px-3 pt-2 pb-1 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 pt-3 pb-1 flex-shrink-0">
 
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-lg font-extrabold tracking-tight bg-gradient-to-r from-purple-400 via-fuchsia-400 to-pink-400 bg-clip-text text-transparent leading-none">
