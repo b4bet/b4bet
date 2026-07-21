@@ -20,18 +20,16 @@ export function HistoryBar({ history }: HistoryBarProps) {
     const el = scrollRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-      if (delta !== 0) {
-        e.preventDefault();
-        el.scrollLeft += delta;
-      }
+      // Use deltaX for trackpad horizontal swipe, deltaY for vertical mouse wheel
+      const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+      e.preventDefault();
+      el.scrollLeft += delta;
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
   }, []);
 
   return (
-    // No overflow-hidden on the outer div — it would clip the scrollable row.
     <div className="relative bg-ink-800 border-b border-ink-600/60">
       {/* Gradient fade on left */}
       <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-ink-800 to-transparent z-10" />
@@ -40,11 +38,9 @@ export function HistoryBar({ history }: HistoryBarProps) {
 
       <div
         ref={scrollRef}
-        className="flex items-center gap-2 overflow-x-auto px-4 sm:px-5 py-2"
+        className="flex items-center gap-2 overflow-x-auto px-4 sm:px-5 py-2 cursor-grab active:cursor-grabbing"
         style={{
-          // Hide scrollbar visually while keeping scroll functionality
           scrollbarWidth: 'none',
-          // Allow native horizontal swipe on mobile without fighting vertical scroll
           touchAction: 'pan-x',
           WebkitOverflowScrolling: 'touch',
         } as React.CSSProperties}
