@@ -120,15 +120,15 @@ export default function Header({
           </button>
 
           {/* Logo */}
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             {logo ? (
-              <img src={logo} alt="logo" className="h-7 w-auto" />
+              <img src={logo} alt="logo" className="h-10 w-auto max-w-[44px] object-contain" />
             ) : (
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center">
-                <span className="text-white font-black text-xs">M</span>
+              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center">
+                <span className="text-white font-black text-sm">M</span>
               </div>
             )}
-            {textLogo && <img src={textLogo} alt="" className="h-5 w-auto" />}
+            {textLogo && <img src={textLogo} alt="" className="h-7 w-auto max-w-[110px] object-contain" />}
             {onBack && (
               <button onClick={onBack} className="flex items-center gap-1 text-slate-400 hover:text-white text-xs ml-1">
                 <ChevronLeft className="w-4 h-4" /> Back
