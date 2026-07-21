@@ -122,10 +122,10 @@ export default function Header({
           {/* Logo */}
           <div className="flex items-center gap-2">
             {logo ? (
-              <img src={logo} alt="logo" className="h-10 w-auto max-w-[44px] object-contain" />
+              <img src={logo} alt="logo" style={{ height: '60px', width: 'auto', maxWidth: '66px', objectFit: 'contain' }} />
             ) : (
-              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center">
-                <span className="text-white font-black text-sm">M</span>
+              <div className="rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center" style={{ width: '60px', height: '60px' }}>
+                <span className="text-white font-black text-base">M</span>
               </div>
             )}
             {textLogo && <img src={textLogo} alt="" className="h-7 w-auto max-w-[110px] object-contain" />}
