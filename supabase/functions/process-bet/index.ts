@@ -363,6 +363,12 @@ Deno.serve(async (req: Request) => {
 
     // ====================================================================
     // AVIATOR: Place bet
+    //
+    // FIX: The bets table has round_id FK → game_rounds(id). Aviator does
+    // NOT use game_rounds, so we must set round_id = NULL and store the
+    // aviator round UUID only in bet_details.round_uuid. This prevents an
+    // FK violation that silently blocked the insert, causing bets to be
+    // missing at cashout time → "Bet not found" → cashout error.
     // ====================================================================
     if (action === "aviator_place_bet") {
       const { user_id, bet_amount, round_uuid } = body;
@@ -374,9 +380,17 @@ Deno.serve(async (req: Request) => {
       await supabase.from("profiles").update({ balance: profile.balance - (bet_amount as number) }).eq("id", user_id);
       const { data: gameRow } = await supabase.from("games").select("id").eq("slug", "aviator").single();
       const activeUuid = round_uuid ?? round.round_uuid;
+      // round_id is intentionally NULL — aviator uses its own round UUID system
+      // stored in bet_details.round_uuid. Setting round_id to the UUID string
+      // caused an FK violation against game_rounds(id) and silently prevented
+      // the bet from being inserted.
       const { data: bet } = await supabase.from("bets").insert({
-        user_id, game_id: gameRow?.id, round_id: activeUuid, bet_amount,
-        bet_details: { round_uuid: activeUuid }, status: "pending",
+        user_id,
+        game_id: gameRow?.id,
+        round_id: null,
+        bet_amount,
+        bet_details: { round_uuid: activeUuid },
+        status: "pending",
       }).select().single();
       return json({ success: true, bet_id: bet?.id, round_uuid: activeUuid });
     }
