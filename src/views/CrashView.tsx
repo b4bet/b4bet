@@ -40,14 +40,13 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
     };
   }, []);
 
-  // Last 10 history entries from Supabase (loaded by crashEngine on startup)
   const recentHistory = history.slice(0, 10);
 
   return (
     <div className="flex flex-col h-full w-full bg-slatepanel-950 select-none">
 
-      {/* Top header row — logo · settings · feed */}
-      <div className="flex items-center justify-between px-3 pt-2 pb-1 flex-shrink-0">
+      {/* Top header row — pt-5 to add space from main app header */}
+      <div className="flex items-center justify-between px-3 pt-5 pb-1 flex-shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           {logos.crash ? (
             <img src={logos.crash} alt="JetX" className="h-7 object-contain" />
@@ -83,13 +82,12 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
       <CrashSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} buttonRef={settingsButtonRef} />
       <CrashFeedPopup open={feedOpen} onClose={() => setFeedOpen(false)} history={history} buttonRef={feedButtonRef} />
 
-      {/* ── Recent Crash History Bar (last 10 from Supabase) ── */}
+      {/* Recent Crash History Bar */}
       <div
         className="flex items-center gap-1 px-2 pb-1 flex-shrink-0 flex-nowrap overflow-x-auto"
         style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
       >
         {recentHistory.length === 0 ? (
-          // Skeleton placeholders while loading
           Array.from({ length: 10 }).map((_, i) => (
             <div key={i} className="flex-shrink-0 h-6 w-11 rounded bg-slatepanel-800 animate-pulse" />
           ))
@@ -105,16 +103,13 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
         )}
       </div>
 
-      {/* Game canvas with overlay popup container */}
+      {/* Game canvas */}
       <div className="relative flex-1 min-h-0">
         <CrashCanvas state={state} />
         <CashoutPopupOverlay />
       </div>
 
-      {/* Dual stacked betting panels */}
       <DualBetPanel />
-
-      {/* History tabs */}
       <CrashHistoryTabs />
     </div>
   );
