@@ -67,7 +67,6 @@ function InsufficientBalancePopup({ visible, onClose }: { visible: boolean; onCl
   );
 }
 
-// Dynamically updates the browser tab favicon from admin-uploaded URL
 function useDynamicFavicon(faviconUrl: string | null) {
   useEffect(() => {
     if (!faviconUrl) return;
@@ -105,7 +104,6 @@ export default function Header({
   const [showInsufficientBal, setShowInsufficientBal] = useState(false);
   const [session, setSession] = useState<AuthSession | null>(auth.getSession());
 
-  // Swap favicon dynamically when admin uploads one
   useDynamicFavicon(favicon ?? null);
 
   useEffect(() => {
@@ -127,8 +125,8 @@ export default function Header({
 
   return (
     <>
-      {/* Header height 70px to fit 60px logo */}
-      <header className="fixed top-0 left-0 right-0 z-30 bg-midnight-900/95 backdrop-blur border-b border-borderline-900" style={{ height: '70px' }}>
+      {/* Header height 62px — fits 50px logo with vertical breathing room */}
+      <header className="fixed top-0 left-0 right-0 z-30 bg-midnight-900/95 backdrop-blur border-b border-borderline-900" style={{ height: '62px' }}>
         <div className="flex items-center gap-3 h-full px-3">
 
           {/* LEFT: Hamburger + Logo together */}
@@ -141,14 +139,14 @@ export default function Header({
             </button>
 
             {logo ? (
-              <img src={logo} alt="logo" style={{ height: '60px', width: 'auto', maxWidth: '66px', objectFit: 'contain' }} />
+              <img src={logo} alt="logo" style={{ height: '50px', width: 'auto', maxWidth: '56px', objectFit: 'contain' }} />
             ) : (
-              <div className="rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center shrink-0" style={{ width: '60px', height: '60px' }}>
-                <span className="text-white font-black text-base">M</span>
+              <div className="rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center shrink-0" style={{ width: '50px', height: '50px' }}>
+                <span className="text-white font-black text-sm">M</span>
               </div>
             )}
 
-            {textLogo && <img src={textLogo} alt="" className="h-7 w-auto max-w-[110px] object-contain" />}
+            {textLogo && <img src={textLogo} alt="" className="h-6 w-auto max-w-[100px] object-contain" />}
 
             {onBack && (
               <button onClick={onBack} className="flex items-center gap-1 text-slate-400 hover:text-white text-xs ml-1">
