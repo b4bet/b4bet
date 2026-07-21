@@ -1,16 +1,31 @@
 import { useRef, useState, useEffect } from 'react';
-import { Image as ImageIcon, Trash2, Upload, Link as LinkIcon, Type, Globe, RefreshCw, CheckCircle2 } from 'lucide-react';
+import { Image as ImageIcon, Trash2, Upload, Link as LinkIcon, Type, Globe, RefreshCw, CheckCircle2, Loader2 } from 'lucide-react';
 import { cms } from '../../lib/cms';
 import { supabase } from '@/integrations/supabase/client';
-import { useBanners, useLogo, useTextLogo, useFavicon, readFileAsDataUrl } from '../../lib/cmsHooks';
+import { useBanners, useLogo, useTextLogo, useFavicon } from '../../lib/cmsHooks';
 
-// Logo/favicon are saved to the settings table with these keys
+// Settings keys
 const LOGO_KEY = 'site_logo_data_url';
 const TEXT_LOGO_KEY = 'site_text_logo_data_url';
 const FAVICON_KEY = 'site_favicon_data_url';
 
+/** Upload a File to Supabase Storage and return its public URL */
+async function uploadToStorage(bucket: string, file: File, pathPrefix: string): Promise<string> {
+  const ext = file.name.split('.').pop() ?? 'png';
+  const path = `${pathPrefix}-${Date.now()}.${ext}`;
+  const { error } = await supabase.storage.from(bucket).upload(path, file, { upsert: true, contentType: file.type });
+  if (error) throw new Error(error.message);
+  const { data } = supabase.storage.from(bucket).getPublicUrl(path);
+  return data.publicUrl;
+}
+
+/** Save URL to settings table */
 async function saveSetting(key: string, value: string | null) {
-  await supabase.rpc('admin_update_setting', { p_key: key, p_value: value }).catch(() => {});
+  const { error } = await supabase.rpc('admin_update_setting', {
+    p_key: key,
+    p_value: value as unknown as Record<string, unknown>,
+  });
+  if (error) throw new Error(error.message);
 }
 
 async function loadLogoSettings() {
@@ -37,46 +52,62 @@ export default function BannerLogoTab() {
   const bannerInput = useRef<HTMLInputElement>(null);
   const [newLink, setNewLink] = useState('');
   const [logoSaved, setLogoSaved] = useState(false);
+  const [uploading, setUploading] = useState<string | null>(null); // which slot is uploading
 
-  // Load logo/favicon from Supabase on mount
-  useEffect(() => {
-    loadLogoSettings();
-  }, []);
-
-  // Supabase realtime: banners table changes → useBanners() hook already reactive via cms.ts subscription
-  // settings table changes → logo also reloads via cms_settings channel in cms.ts
+  useEffect(() => { loadLogoSettings(); }, []);
 
   const onLogoPick = async (f: File | null) => {
     if (!f) return;
-    const dataUrl = await readFileAsDataUrl(f);
-    cms.setLogo(dataUrl);
-    await saveSetting(LOGO_KEY, dataUrl);
-    setLogoSaved(true);
-    cms.toast({ title: 'Website logo updated', body: 'Header logo replaced globally.', kind: 'success' });
-    setTimeout(() => setLogoSaved(false), 3000);
+    setUploading('logo');
+    try {
+      const url = await uploadToStorage('logos', f, 'icon-logo');
+      cms.setLogo(url);
+      await saveSetting(LOGO_KEY, url);
+      setLogoSaved(true);
+      cms.toast({ title: 'Website logo updated', body: 'Header logo replaced globally.', kind: 'success' });
+      setTimeout(() => setLogoSaved(false), 3000);
+    } catch (e) {
+      cms.toast({ title: 'Upload failed', body: (e as Error).message, kind: 'alert' });
+    } finally { setUploading(null); }
   };
 
   const onTextLogoPick = async (f: File | null) => {
     if (!f) return;
-    const dataUrl = await readFileAsDataUrl(f);
-    cms.setTextLogo(dataUrl);
-    await saveSetting(TEXT_LOGO_KEY, dataUrl);
-    cms.toast({ title: 'Text logo updated', body: 'Brand text image replaced.', kind: 'success' });
+    setUploading('textLogo');
+    try {
+      const url = await uploadToStorage('logos', f, 'text-logo');
+      cms.setTextLogo(url);
+      await saveSetting(TEXT_LOGO_KEY, url);
+      cms.toast({ title: 'Text logo updated', body: 'Brand text image replaced.', kind: 'success' });
+    } catch (e) {
+      cms.toast({ title: 'Upload failed', body: (e as Error).message, kind: 'alert' });
+    } finally { setUploading(null); }
   };
 
   const onFaviconPick = async (f: File | null) => {
     if (!f) return;
-    const dataUrl = await readFileAsDataUrl(f);
-    cms.setFavicon(dataUrl);
-    await saveSetting(FAVICON_KEY, dataUrl);
-    cms.toast({ title: 'Favicon updated', body: 'Browser tab icon refreshed.', kind: 'success' });
+    setUploading('favicon');
+    try {
+      const url = await uploadToStorage('logos', f, 'favicon');
+      cms.setFavicon(url);
+      await saveSetting(FAVICON_KEY, url);
+      cms.toast({ title: 'Favicon updated', body: 'Browser tab icon refreshed.', kind: 'success' });
+    } catch (e) {
+      cms.toast({ title: 'Upload failed', body: (e as Error).message, kind: 'alert' });
+    } finally { setUploading(null); }
   };
 
   const onBannerPick = async (f: File | null) => {
     if (!f) return;
-    cms.addBanner(await readFileAsDataUrl(f), newLink.trim());
-    setNewLink('');
-    cms.toast({ title: 'Banner added', body: 'Slider updated in Supabase.', kind: 'success' });
+    setUploading('banner');
+    try {
+      const url = await uploadToStorage('banners', f, 'slide');
+      cms.addBanner(url, newLink.trim());
+      setNewLink('');
+      cms.toast({ title: 'Banner added', body: 'Slider updated in Supabase.', kind: 'success' });
+    } catch (e) {
+      cms.toast({ title: 'Banner upload failed', body: (e as Error).message, kind: 'alert' });
+    } finally { setUploading(null); }
   };
 
   const handleRemoveLogo = async () => {
@@ -94,6 +125,18 @@ export default function BannerLogoTab() {
     await saveSetting(FAVICON_KEY, null);
   };
 
+  const UploadBtn = ({ slot, onClick }: { slot: string; onClick: () => void }) => (
+    <button
+      onClick={onClick}
+      disabled={uploading === slot}
+      className="btn-primary px-3 py-1.5 text-xs flex-1 flex items-center justify-center gap-1 disabled:opacity-60"
+    >
+      {uploading === slot
+        ? <><Loader2 className="w-3 h-3 animate-spin" /> Uploading...</>
+        : <><Upload className="w-3 h-3" /> Upload</>}
+    </button>
+  );
+
   return (
     <div className="space-y-6">
       <div className="panel p-4">
@@ -106,7 +149,7 @@ export default function BannerLogoTab() {
             </span>
           )}
         </div>
-        <p className="text-slate-400 text-sm mb-4">Upload slider images with outbound links and replace the global website logo. All data saved to Supabase — realtime sync to all users.</p>
+        <p className="text-slate-400 text-sm mb-4">Upload slider images with outbound links and replace the global website logo. Files are stored in Supabase Storage — realtime sync to all users.</p>
 
         {/* Logo manager */}
         <div className="panel p-4 mb-4">
@@ -123,9 +166,7 @@ export default function BannerLogoTab() {
               </div>
               <input ref={logoInput} type="file" accept="image/*" className="hidden" onChange={e => onLogoPick(e.target.files?.[0] ?? null)} />
               <div className="flex gap-2">
-                <button onClick={() => logoInput.current?.click()} className="btn-primary px-3 py-1.5 text-xs flex-1">
-                  <Upload className="w-3 h-3 inline mr-1" />Upload
-                </button>
+                <UploadBtn slot="logo" onClick={() => logoInput.current?.click()} />
                 {logo && (
                   <button onClick={handleRemoveLogo} className="btn-ghost px-2 py-1.5 text-xs">
                     <Trash2 className="w-3 h-3" />
@@ -142,9 +183,7 @@ export default function BannerLogoTab() {
               </div>
               <input ref={textLogoInput} type="file" accept="image/*" className="hidden" onChange={e => onTextLogoPick(e.target.files?.[0] ?? null)} />
               <div className="flex gap-2">
-                <button onClick={() => textLogoInput.current?.click()} className="btn-primary px-3 py-1.5 text-xs flex-1">
-                  <Upload className="w-3 h-3 inline mr-1" />Upload
-                </button>
+                <UploadBtn slot="textLogo" onClick={() => textLogoInput.current?.click()} />
                 {textLogo && (
                   <button onClick={handleRemoveTextLogo} className="btn-ghost px-2 py-1.5 text-xs">
                     <Trash2 className="w-3 h-3" />
@@ -161,9 +200,7 @@ export default function BannerLogoTab() {
               </div>
               <input ref={faviconInput} type="file" accept="image/*" className="hidden" onChange={e => onFaviconPick(e.target.files?.[0] ?? null)} />
               <div className="flex gap-2">
-                <button onClick={() => faviconInput.current?.click()} className="btn-primary px-3 py-1.5 text-xs flex-1">
-                  <Upload className="w-3 h-3 inline mr-1" />Upload
-                </button>
+                <UploadBtn slot="favicon" onClick={() => faviconInput.current?.click()} />
                 {favicon && (
                   <button onClick={handleRemoveFavicon} className="btn-ghost px-2 py-1.5 text-xs">
                     <Trash2 className="w-3 h-3" />
@@ -195,8 +232,14 @@ export default function BannerLogoTab() {
               />
             </div>
             <input ref={bannerInput} type="file" accept="image/*" className="hidden" onChange={e => onBannerPick(e.target.files?.[0] ?? null)} />
-            <button onClick={() => bannerInput.current?.click()} className="btn-primary px-3 py-2 text-sm whitespace-nowrap">
-              <Upload className="w-4 h-4 inline mr-1" />Upload Slide
+            <button
+              onClick={() => bannerInput.current?.click()}
+              disabled={uploading === 'banner'}
+              className="btn-primary px-3 py-2 text-sm whitespace-nowrap flex items-center gap-1 disabled:opacity-60"
+            >
+              {uploading === 'banner'
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Uploading...</>
+                : <><Upload className="w-4 h-4" /> Upload Slide</>}
             </button>
           </div>
 
