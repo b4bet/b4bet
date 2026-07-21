@@ -185,20 +185,31 @@ class CrashEngine {
   private async poll() {
     try {
       const r = await GameService.crashGetCurrentRound();
-      const newRound = r.round_uuid && r.round_uuid !== this.lastKnownRoundId;
 
-      if (newRound) {
+      // ── NEW ROUND DETECTION ──────────────────────────────────────────────
+      // A "new round" is when:
+      //   1. round_uuid changed AND
+      //   2. the server phase is 'waiting' (new betting window opened)
+      //
+      // IMPORTANT: Do NOT treat waiting→flying UUID change as a new round.
+      // The DB function (after fix) keeps the same UUID waiting→flying, so bets
+      // placed during countdown are still valid when flying starts.
+      // Before the DB fix, a new UUID was generated at flying start — this caused
+      // crashEngine to think a new round started, reset bets, and refund locally
+      // even though balance was already debited → balance cut with no bet counted.
+      const uuidChanged = r.round_uuid && r.round_uuid !== this.lastKnownRoundId;
+      const isNewRound = uuidChanged && r.phase === 'waiting';
+
+      if (isNewRound) {
         this.lastKnownRoundId = r.round_uuid ?? '';
         try { sessionStorage.setItem(SESSION_ROUND_KEY, this.lastKnownRoundId); } catch { /* ignore */ }
 
-        // ── GUARD: If either slot has a placed-but-unsettled bet from the
-        // previous round, refund it before wiping. This prevents the race where:
-        // 1. User clicks BET → debit runs → slot.placed = true
-        // 2. poll() resolves with new round_uuid (async gap)
-        // 3. bets get reset to freshBet() → user's bet disappears but balance already cut
+        // Safety guard: settle any placed-but-unsettled bets before wiping.
+        // Under normal operation (DB fix applied) this should never trigger because
+        // bets are either cashed out or settled by settleBustedBets() before the
+        // crashed→waiting transition. But kept as a safety net.
         for (const slot of Object.values(this.state.bets)) {
           if (slot.placed && slot.cashedOutAt === null && slot.win === null) {
-            // Refund locally — the bet was never acknowledged by the server round
             store.credit(slot.amount);
           }
         }
@@ -210,6 +221,11 @@ class CrashEngine {
         this.didPlayStart = false;
         this.didPlayCrash = false;
         this.broadcastBets();
+      } else if (uuidChanged && this.lastKnownRoundId === '') {
+        // First poll ever — just sync the round ID without resetting bets
+        this.lastKnownRoundId = r.round_uuid ?? '';
+        this.state.roundId = r.round_uuid ?? '';
+        try { sessionStorage.setItem(SESSION_ROUND_KEY, this.lastKnownRoundId); } catch { /* ignore */ }
       }
 
       const prevPhase = this.lastKnownPhase;
