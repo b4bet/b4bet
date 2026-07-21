@@ -170,7 +170,7 @@ export default function CrashCanvas({ state }: Props) {
 
   return (
     <div className="relative rounded-2xl border border-borderline-900 overflow-hidden">
-      <canvas ref={canvasRef} className="w-full h-64 sm:h-80 md:h-96 block" />
+      <canvas ref={canvasRef} className="w-full h-44 sm:h-52 md:h-60 block" />
       {state.phase === 'flying' && (
         <div className="absolute top-3 left-3 chip bg-emeraldwin-500/15 border border-emeraldwin-500/40 text-emeraldwin-400 animate-pulse-glow">
           <span className="w-1.5 h-1.5 rounded-full bg-emeraldwin-500 animate-ticker-blink" />
