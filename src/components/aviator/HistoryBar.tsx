@@ -7,11 +7,16 @@ interface HistoryBarProps {
 
 export function HistoryBar({ history }: HistoryBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Track whether user has scrolled away from the left edge
+  const userScrolledRef = useRef(false);
 
-  // Auto-scroll to leftmost (most recent) badge when history updates.
+  // Only auto-scroll to left when a new round lands AND the user hasn't scrolled away.
+  // If the user is browsing older history, leave them there.
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTo({ left: 0, behavior: 'smooth' });
+    const el = scrollRef.current;
+    if (!el) return;
+    if (!userScrolledRef.current) {
+      el.scrollTo({ left: 0, behavior: 'smooth' });
     }
   }, [history]);
 
@@ -21,11 +26,26 @@ export function HistoryBar({ history }: HistoryBarProps) {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      // Prefer horizontal delta (trackpad), fall back to vertical (mouse wheel)
-      el.scrollLeft += e.deltaX !== 0 ? e.deltaX : e.deltaY;
+      const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+      el.scrollLeft += delta;
+      // Mark user as having scrolled if they move right
+      if (delta > 0) userScrolledRef.current = true;
+      // Reset when they scroll all the way back to start
+      if (el.scrollLeft <= 0) userScrolledRef.current = false;
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Detect manual scroll (touch / scrollbar) to update userScrolledRef
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      userScrolledRef.current = el.scrollLeft > 4;
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
   }, []);
 
   // Mouse drag-to-scroll (click + drag left/right)
@@ -47,6 +67,7 @@ export function HistoryBar({ history }: HistoryBarProps) {
       if (!isDragging) return;
       const dx = e.pageX - startX;
       el.scrollLeft = scrollStart - dx;
+      userScrolledRef.current = el.scrollLeft > 4;
     };
     const onMouseUp = () => {
       isDragging = false;
