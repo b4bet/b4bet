@@ -136,18 +136,15 @@ class CrashEngine {
 
   private async loadHistory() {
     try {
-      // Use crashGetHistoryDetail which returns full CrashRoundDetail[] with bust_point + seeds
       const r = await GameService.crashGetHistoryDetail();
       if (r.history && r.history.length > 0) {
         this.state.historyDetail = r.history;
-        // Extract the numeric bust_point from each detail object
         this.state.history = r.history.map((d) => Number(d.bust_point));
         this.publishHistory();
         this.publish();
       }
     } catch (err) {
       console.warn('[CrashEngine] loadHistory failed:', (err as Error)?.message ?? err);
-      // Fall back to simple history if detail RPC fails
       try {
         const r2 = await GameService.crashGetHistory();
         if (r2.history && r2.history.length > 0) {
@@ -193,6 +190,19 @@ class CrashEngine {
       if (newRound) {
         this.lastKnownRoundId = r.round_uuid ?? '';
         try { sessionStorage.setItem(SESSION_ROUND_KEY, this.lastKnownRoundId); } catch { /* ignore */ }
+
+        // ── GUARD: If either slot has a placed-but-unsettled bet from the
+        // previous round, refund it before wiping. This prevents the race where:
+        // 1. User clicks BET → debit runs → slot.placed = true
+        // 2. poll() resolves with new round_uuid (async gap)
+        // 3. bets get reset to freshBet() → user's bet disappears but balance already cut
+        for (const slot of Object.values(this.state.bets)) {
+          if (slot.placed && slot.cashedOutAt === null && slot.win === null) {
+            // Refund locally — the bet was never acknowledged by the server round
+            store.credit(slot.amount);
+          }
+        }
+
         this.state.bets = { A: freshBet('A'), B: freshBet('B') };
         this.state.win = null;
         this.state.roundId = r.round_uuid ?? '';
@@ -251,7 +261,6 @@ class CrashEngine {
             this.publishHistory();
           }
           this.settleBustedBets();
-          // Refresh full history detail after crash so provably-fair data is fresh
           setTimeout(() => { void this.loadHistory(); }, 2000);
         } else {
           this.state.phase = 'busted';
