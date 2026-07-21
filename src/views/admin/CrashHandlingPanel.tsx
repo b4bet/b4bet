@@ -1,59 +1,97 @@
-import { useState, useEffect } from 'react';
-import { Shield, Sliders, Target, Cpu, Zap, Rocket } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Shield, Sliders, Target, Cpu, Zap, Rocket, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
 import { useAdminConfig, useGameRound } from '../../lib/hooks';
 import { store } from '../../lib/store';
+import { GameService } from '../../lib/game-service';
 
 /**
  * CrashHandlingPanel — reads/writes crash config via store.setGameHandler('crash', ...)
  *
- * DB structure: admin_config = { crash: { mode, manualCrashPoint, ... }, aviator: {...}, ... }
- * ALL games including crash are nested under their gameKey.
- * store.setGameHandler() patches adminConfig.gameHandlers[gameKey] and persists to Supabase
- * as admin_config[gameKey] — consistent with what the Edge Function reads.
+ * DB structure: admin_config = { mode, manualCrashPoint, ... (root level for crash) }
+ * store.setGameHandler('crash', ...) patches root level + gameHandlers.crash + crash alias
+ * Edge Function reads crash config from ROOT level fields.
  *
- * DO NOT use store.setAdmin({ mode, manualCrashPoint }) for crash — that patches root level
- * which is NOT where the Edge Function reads crash config from.
+ * Preview is fetched from server via admin_preview_next_round so it reflects actual DB state.
+ * After any save, we reload admin config from Supabase to confirm the write succeeded.
  */
 export function CrashHandlingPanel() {
   const cfg = useAdminConfig();
-  // Read crash config from gameHandlers.crash (same path as DB + Edge Function)
   const crash = cfg.gameHandlers['crash'] ?? store.getGameHandler('crash');
 
-  // Tracks the current round number — increments every time a crash round ends.
-  // Used as a dependency so the AUTO preview re-rolls on every new round automatically.
+  // Tracks round counter — triggers fresh preview on each new round
   const currentRound = useGameRound('crash');
 
   const [manual, setManual] = useState(String(crash.manualCrashPoint ?? 2.0));
 
-  // Preview — recomputes whenever mode/settings change OR a new round starts.
-  // AUTO mode: fresh RNG roll each round (no refresh button needed).
-  // MANUAL mode: always shows the queued crash point.
-  const [preview, setPreview] = useState<string>('');
-  useEffect(() => {
-    if (crash.mode === 'MANUAL') {
-      setPreview((crash.manualCrashPoint ?? 2.0).toFixed(2) + 'x');
-    } else {
-      const edge = crash.houseEdge / 100;
-      const u = Math.max(0.0001, 1 - Math.random());
-      const raw = (1 / u) * (1 - edge);
-      const point = Math.max(1.01, Math.min(200, Math.round(raw * 100) / 100));
-      setPreview(point.toFixed(2) + 'x');
-    }
-  // currentRound triggers a fresh preview roll each time a round ends
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [crash.mode, crash.manualCrashPoint, crash.targetWinProbability, crash.houseEdge, currentRound]);
+  // Server-fetched preview state
+  const [preview, setPreview] = useState<string>('...');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewMode, setPreviewMode] = useState<string>('');
 
-  // All writes go through setGameHandler — which saves to adminConfig.gameHandlers['crash']
-  // and the Edge Function reads adminConfig['crash'] — same path.
-  const setMode = (mode: 'AUTO' | 'MANUAL') =>
-    store.setGameHandler('crash', { mode });
+  // Save feedback state
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  // Fetch preview from server (reflects actual saved DB state)
+  const fetchServerPreview = useCallback(async () => {
+    setPreviewLoading(true);
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet?action=admin_preview_next_round&game=crash`,
+        { headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY } }
+      );
+      const data = await res.json() as { mode?: string; preview?: number; error?: string };
+      if (data.preview !== undefined) {
+        setPreview(data.preview.toFixed(2) + 'x');
+        setPreviewMode(data.mode ?? '');
+      }
+    } catch {
+      setPreview('—');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, []);
+
+  // Refresh preview when mode/settings change or new round starts
+  useEffect(() => {
+    void fetchServerPreview();
+  }, [crash.mode, crash.manualCrashPoint, crash.targetWinProbability, crash.houseEdge, currentRound, fetchServerPreview]);
+
+  // --- Setters ---
+  const setMode = async (mode: 'AUTO' | 'MANUAL') => {
+    setSaveStatus('saving');
+    try {
+      store.setGameHandler('crash', { mode });
+      // Wait briefly then reload from Supabase to confirm
+      await new Promise(r => setTimeout(r, 800));
+      await store.loadAdminConfigFromSupabase();
+      setSaveStatus('saved');
+      void fetchServerPreview();
+    } catch {
+      setSaveStatus('error');
+    }
+    setTimeout(() => setSaveStatus('idle'), 3000);
+  };
+
   const setProb = (v: number) =>
     store.setGameHandler('crash', { targetWinProbability: v });
+
   const setEdge = (v: number) =>
     store.setGameHandler('crash', { houseEdge: v });
-  const applyManual = () => {
+
+  const applyManual = async () => {
     const point = Math.max(1.01, parseFloat(manual) || 1.01);
-    store.setGameHandler('crash', { manualCrashPoint: point, mode: 'MANUAL' });
+    setSaveStatus('saving');
+    try {
+      store.setGameHandler('crash', { manualCrashPoint: point, mode: 'MANUAL' });
+      // Wait for Supabase write then reload config to verify
+      await new Promise(r => setTimeout(r, 1000));
+      await store.loadAdminConfigFromSupabase();
+      setSaveStatus('saved');
+      void fetchServerPreview();
+    } catch {
+      setSaveStatus('error');
+    }
+    setTimeout(() => setSaveStatus('idle'), 4000);
   };
 
   // Quick stakes
@@ -84,6 +122,22 @@ export function CrashHandlingPanel() {
           </p>
         </div>
       </div>
+
+      {/* Save feedback banner */}
+      {saveStatus !== 'idle' && (
+        <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-semibold ${
+          saveStatus === 'saving' ? 'bg-slate-700 text-slate-300' :
+          saveStatus === 'saved' ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/40' :
+          'bg-red-900/60 text-red-300 border border-red-500/40'
+        }`}>
+          {saveStatus === 'saving' && <RefreshCw className="w-4 h-4 animate-spin" />}
+          {saveStatus === 'saved' && <CheckCircle className="w-4 h-4" />}
+          {saveStatus === 'error' && <AlertCircle className="w-4 h-4" />}
+          {saveStatus === 'saving' && 'Saving to Supabase…'}
+          {saveStatus === 'saved' && 'Saved & confirmed from Supabase ✓'}
+          {saveStatus === 'error' && 'Save failed — check Supabase connection'}
+        </div>
+      )}
 
       {/* Mode toggle */}
       <div className="grid grid-cols-2 gap-2">
@@ -155,7 +209,14 @@ export function CrashHandlingPanel() {
               min={1.01} step={0.1} className="input tabular"
             />
           </div>
-          <button onClick={applyManual} className="btn-coral w-full py-2">Apply Manual Override</button>
+          <button
+            onClick={applyManual}
+            disabled={saveStatus === 'saving'}
+            className="btn-coral w-full py-2 flex items-center justify-center gap-2 disabled:opacity-60"
+          >
+            {saveStatus === 'saving' && <RefreshCw className="w-4 h-4 animate-spin" />}
+            Apply Manual Override
+          </button>
           <p className="text-[11px] text-slate-500">
             Queued for next round: bust at{' '}
             <span className="text-coral-300 font-semibold">{(crash.manualCrashPoint ?? 2.0).toFixed(2)}x</span>.
@@ -164,30 +225,38 @@ export function CrashHandlingPanel() {
         </div>
       )}
 
-      {/* Preview — auto-updates each round, no refresh button needed */}
+      {/* Preview — fetched from server so it reflects actual saved DB state */}
       <div className="bg-slatepanel-800 rounded-xl p-3 border border-neon-400/30">
         <label className="text-xs font-semibold text-neon-300 uppercase tracking-wider flex items-center gap-2 mb-2">
           <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
           </svg>
           Next Round Preview
-          {crash.mode === 'AUTO' && (
-            <span className="ml-auto text-[9px] text-slate-500 normal-case tracking-normal">
-              Round #{currentRound + 1}
-            </span>
-          )}
+          <span className="ml-auto text-[9px] text-slate-500 normal-case tracking-normal flex items-center gap-1">
+            {previewLoading
+              ? <><RefreshCw className="w-3 h-3 animate-spin inline" /> fetching…</>
+              : <>server · round #{currentRound + 1}</>
+            }
+          </span>
+          <button
+            onClick={fetchServerPreview}
+            title="Refresh preview from server"
+            className="ml-1 text-slate-500 hover:text-neon-300 transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+          </button>
         </label>
         <div className="space-y-1.5">
           <div className="flex items-center gap-2">
             <span className="text-[10px] text-slate-400 uppercase tracking-wider w-16">Outcome</span>
-            <span className={`font-display font-extrabold text-xl tabular ${crash.mode === 'MANUAL' ? 'text-coral-400' : 'text-white'}`}>
+            <span className={`font-display font-extrabold text-xl tabular ${previewMode === 'MANUAL' ? 'text-coral-400' : 'text-white'} ${previewLoading ? 'opacity-40' : ''}`}>
               {preview}
             </span>
           </div>
           <p className="text-xs text-slate-400">
-            {crash.mode === 'MANUAL'
-              ? `Manual override active · next round will bust at ${(crash.manualCrashPoint ?? 2.0).toFixed(2)}x`
-              : `Win-prob ${crash.targetWinProbability}% · Edge ${crash.houseEdge}% · updates each round`}
+            {previewMode === 'MANUAL'
+              ? `Server confirmed MANUAL · next round will bust at ${preview}`
+              : `Server AUTO mode · Win-prob ${crash.targetWinProbability}% · Edge ${crash.houseEdge}%`}
           </p>
         </div>
       </div>
