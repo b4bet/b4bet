@@ -6,63 +6,53 @@ import { store } from '../../lib/store';
 /**
  * CrashHandlingPanel
  *
- * AUTO mode  — no preview shown. Crash point is generated server-side the
- *              moment the WAITING→FLYING transition fires. There is nothing
- *              meaningful to preview before that.
+ * AUTO mode  — no preview. Crash point is generated server-side the instant
+ *              WAITING→FLYING fires. Nothing to show in advance.
  *
- * MANUAL mode — admin sets a bust multiplier and clicks "Apply".
- *               We write it via store.setGameHandler (which persists to
- *               Supabase), wait 1 s, then reload admin config from Supabase
- *               and show the confirmed value.  The Edge Function reads
- *               root-level mode + manualCrashPoint for crash, so whatever
- *               is confirmed here is exactly what the next round will use.
+ * MANUAL mode — admin types a multiplier, clicks Apply.
+ *               We call store.setGameHandlerAsync() which AWAITS the Supabase
+ *               write (no blind timeout).  On success we reload from Supabase
+ *               and display the confirmed value from the DB.
+ *               The Edge Function reads root-level mode + manualCrashPoint for
+ *               crash, so this value is exactly what the next round will use.
+ *               After the round fires the Edge Function auto-reverts to AUTO.
  */
 export function CrashHandlingPanel() {
   const cfg = useAdminConfig();
   const crash = cfg.gameHandlers['crash'] ?? store.getGameHandler('crash');
 
   const [manual, setManual] = useState(String(crash.manualCrashPoint ?? 2.0));
-
-  // Confirmed value — shown after a successful save so admin can see what
-  // the server actually has stored.
   const [confirmed, setConfirmed] = useState<number | null>(null);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const setMode = async (mode: 'AUTO' | 'MANUAL') => {
+  const doSave = async (patch: Parameters<typeof store.setGameHandlerAsync>[1]) => {
     setSaveStatus('saving');
     setConfirmed(null);
+    setErrorMsg('');
     try {
-      store.setGameHandler('crash', { mode });
-      await new Promise(r => setTimeout(r, 800));
+      // Await the real Supabase write — throws on failure
+      await store.setGameHandlerAsync('crash', patch);
+      // Reload from Supabase to confirm what was actually stored
       await store.loadAdminConfigFromSupabase();
+      const saved = store.getGameHandler('crash');
+      setConfirmed(saved.manualCrashPoint ?? null);
       setSaveStatus('saved');
-    } catch {
+    } catch (e) {
+      setErrorMsg((e as Error).message ?? 'Unknown error');
       setSaveStatus('error');
     }
-    setTimeout(() => setSaveStatus('idle'), 3000);
+    setTimeout(() => setSaveStatus('idle'), 5000);
   };
+
+  const setMode = (mode: 'AUTO' | 'MANUAL') => doSave({ mode });
 
   const setProb = (v: number) => store.setGameHandler('crash', { targetWinProbability: v });
   const setEdge = (v: number) => store.setGameHandler('crash', { houseEdge: v });
 
-  const applyManual = async () => {
+  const applyManual = () => {
     const point = Math.max(1.01, parseFloat(manual) || 1.01);
-    setSaveStatus('saving');
-    setConfirmed(null);
-    try {
-      store.setGameHandler('crash', { manualCrashPoint: point, mode: 'MANUAL' });
-      // Wait for Supabase write to complete
-      await new Promise(r => setTimeout(r, 1000));
-      // Reload from Supabase to verify what was actually saved
-      await store.loadAdminConfigFromSupabase();
-      // Read back the confirmed value
-      const saved = store.getGameHandler('crash').manualCrashPoint ?? point;
-      setConfirmed(saved);
-      setSaveStatus('saved');
-    } catch {
-      setSaveStatus('error');
-    }
-    setTimeout(() => setSaveStatus('idle'), 5000);
+    void doSave({ manualCrashPoint: point, mode: 'MANUAL' });
   };
 
   // Quick stakes
@@ -102,12 +92,14 @@ export function CrashHandlingPanel() {
           saveStatus === 'saved'  ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/40' :
                                     'bg-red-900/60 text-red-300 border border-red-500/40'
         }`}>
-          {saveStatus === 'saving' && <RefreshCw className="w-4 h-4 animate-spin" />}
-          {saveStatus === 'saved'  && <CheckCircle className="w-4 h-4" />}
-          {saveStatus === 'error'  && <AlertCircle className="w-4 h-4" />}
-          {saveStatus === 'saving' && 'Saving to Supabase…'}
-          {saveStatus === 'saved'  && 'Saved & confirmed ✓'}
-          {saveStatus === 'error'  && 'Save failed — check Supabase connection'}
+          {saveStatus === 'saving' && <RefreshCw className="w-4 h-4 animate-spin flex-shrink-0" />}
+          {saveStatus === 'saved'  && <CheckCircle className="w-4 h-4 flex-shrink-0" />}
+          {saveStatus === 'error'  && <AlertCircle className="w-4 h-4 flex-shrink-0" />}
+          <span>
+            {saveStatus === 'saving' && 'Writing to Supabase…'}
+            {saveStatus === 'saved'  && 'Supabase confirmed ✓'}
+            {saveStatus === 'error'  && `Save failed: ${errorMsg || 'check Supabase connection'}`}
+          </span>
         </div>
       )}
 
@@ -115,7 +107,8 @@ export function CrashHandlingPanel() {
       <div className="grid grid-cols-2 gap-2">
         <button
           onClick={() => setMode('AUTO')}
-          className={`panel p-3 text-left transition-all ${crash.mode === 'AUTO' ? 'border-neon-400 ring-1 ring-neon-400/40' : 'opacity-70 hover:opacity-100'}`}
+          disabled={saveStatus === 'saving'}
+          className={`panel p-3 text-left transition-all disabled:opacity-50 ${crash.mode === 'AUTO' ? 'border-neon-400 ring-1 ring-neon-400/40' : 'opacity-70 hover:opacity-100'}`}
         >
           <div className="flex items-center gap-2 mb-1">
             <Shield className={`w-4 h-4 ${crash.mode === 'AUTO' ? 'text-neon-300' : 'text-slate-500'}`} />
@@ -125,7 +118,8 @@ export function CrashHandlingPanel() {
         </button>
         <button
           onClick={() => setMode('MANUAL')}
-          className={`panel p-3 text-left transition-all ${crash.mode === 'MANUAL' ? 'border-coral-400 ring-1 ring-coral-400/40' : 'opacity-70 hover:opacity-100'}`}
+          disabled={saveStatus === 'saving'}
+          className={`panel p-3 text-left transition-all disabled:opacity-50 ${crash.mode === 'MANUAL' ? 'border-coral-400 ring-1 ring-coral-400/40' : 'opacity-70 hover:opacity-100'}`}
         >
           <div className="flex items-center gap-2 mb-1">
             <Cpu className={`w-4 h-4 ${crash.mode === 'MANUAL' ? 'text-coral-400' : 'text-slate-500'}`} />
@@ -170,7 +164,7 @@ export function CrashHandlingPanel() {
         </div>
       )}
 
-      {/* MANUAL — enter value, apply, see confirmed value */}
+      {/* MANUAL — enter value, apply, see DB-confirmed result */}
       {crash.mode === 'MANUAL' && (
         <div className="space-y-3 animate-fade-in">
           <label className="text-sm font-semibold text-white flex items-center gap-2">
@@ -191,14 +185,16 @@ export function CrashHandlingPanel() {
             disabled={saveStatus === 'saving'}
             className="btn-coral w-full py-2 flex items-center justify-center gap-2 disabled:opacity-60"
           >
-            {saveStatus === 'saving' && <RefreshCw className="w-4 h-4 animate-spin" />}
+            {saveStatus === 'saving' ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
             Apply Manual Override
           </button>
 
-          {/* Confirmed value — shown only after successful save */}
+          {/* Confirmed — shown only after DB write succeeds */}
           {confirmed !== null && saveStatus !== 'error' && (
             <div className="rounded-xl bg-coral-900/30 border border-coral-500/40 px-3 py-2.5">
-              <p className="text-[10px] uppercase tracking-wider text-coral-400 font-semibold mb-0.5">Confirmed in Supabase</p>
+              <p className="text-[10px] uppercase tracking-wider text-coral-400 font-semibold mb-0.5">
+                Confirmed in Supabase
+              </p>
               <p className="font-display font-extrabold text-2xl text-coral-300 tabular">
                 {confirmed.toFixed(2)}x
               </p>
@@ -213,7 +209,7 @@ export function CrashHandlingPanel() {
             <p className="text-[11px] text-slate-500">
               Currently queued:{' '}
               <span className="text-coral-300 font-semibold">{(crash.manualCrashPoint ?? 2.0).toFixed(2)}x</span>
-              {' '}· Click Apply to update.
+              {' '}· Click Apply to save.
             </p>
           )}
         </div>
