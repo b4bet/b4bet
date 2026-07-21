@@ -75,15 +75,30 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, [roundId]);
 
   /**
+   * Serialization queue — ensures server bet-place calls never run concurrently.
+   *
+   * Problem: When both panels call handlePlaceBet at the same moment, both
+   * hit Supabase in parallel. The server reads balance=1000 for both, subtracts
+   * 100 each, and both write balance=900 — effectively only one deduction happens.
+   *
+   * Fix: Chain every server call onto a shared promise. The second call waits for
+   * the first to finish (and for Supabase to have committed the updated balance)
+   * before it starts. That way each call sees the correct reduced balance.
+   */
+  const placeBetQueueRef = useRef<Promise<void>>(Promise.resolve());
+
+  /**
    * Called by BettingPanel when the player clicks BET.
    *
    * Returns { ok, betId } — betId is the server-assigned ID for this specific
-   * panel's bet. Each panel gets its OWN betId directly from the return value,
-   * eliminating the cross-panel contamination that occurred with the old
-   * broadcast event approach.
+   * panel's bet. Each panel gets its OWN betId directly from the return value.
    *
    * Uses debitLocalOnly() to avoid double-deduction: the server also
    * deducts from Supabase in aviator_place_bet.
+   *
+   * Server calls are serialized via placeBetQueueRef to prevent the race
+   * condition where two simultaneous Supabase writes both read the same
+   * balance and only subtract once.
    */
   const handlePlaceBet = useCallback(async (amount: number): Promise<{ ok: boolean; betId: string | null }> => {
     const limits = store.getGameLimits('aviator');
@@ -96,8 +111,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       return { ok: false, betId: null };
     }
 
-    // Use debitLocalOnly: the server (aviator_place_bet) deducts from Supabase.
-    // debit() would also write to Supabase causing a double deduction.
+    // Debit locally immediately so the UI shows the reduced balance at once
     const ok = store.debitLocalOnly(amount);
     if (!ok) return { ok: false, betId: null };
 
@@ -107,6 +121,17 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       return { ok: false, betId: null };
     }
 
+    // Serialize: wait for any in-flight place-bet to finish before hitting server.
+    // This prevents both panels from reading the same Supabase balance simultaneously
+    // and only deducting once.
+    let resolveQueue!: () => void;
+    const myTurn = new Promise<void>((res) => { resolveQueue = res; });
+    const prevQueue = placeBetQueueRef.current;
+    placeBetQueueRef.current = myTurn;
+
+    // Wait for previous bet to finish
+    await prevQueue;
+
     try {
       const result = await GameService.aviatorPlaceBet(
         session.userId,
@@ -115,9 +140,12 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       );
       return { ok: true, betId: result.success ? (result.bet_id ?? null) : null };
     } catch {
-      // Server rejected bet — refund local debit so UI balance is correct.
+      // Server rejected — refund local debit
       store.credit(amount);
       return { ok: false, betId: null };
+    } finally {
+      // Unblock the next queued bet (if any)
+      resolveQueue();
     }
   }, []);
 
