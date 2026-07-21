@@ -2,7 +2,7 @@
  * MinesView — server-side outcome version.
  */
 
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { store } from '../lib/store';
 import { cms } from '../lib/cms';
 import { auth } from '../lib/auth';
@@ -51,8 +51,24 @@ interface SupabaseMinesBet {
   win_amount: number | null;
   multiplier: number | null;
   status: string;
-  bet_details: { mines?: number; gems?: number } | null;
-  created_at: string;
+  // bet_details is stored as JSONB — may arrive as object or string
+  bet_details: unknown;
+  placed_at: string;
+}
+
+/** Safely parse bet_details regardless of whether Supabase returns it as object or string */
+function parseBetDetails(raw: unknown): { mines?: number; gems?: number } {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw as { mines?: number; gems?: number };
+  if (typeof raw === 'string') {
+    try { return JSON.parse(raw) as { mines?: number; gems?: number }; } catch { return {}; }
+  }
+  return {};
+}
+
+function isMinesBet(row: SupabaseMinesBet): boolean {
+  const d = parseBetDetails(row.bet_details);
+  return 'mines' in d;
 }
 
 function useSupabaseMinesHistory() {
@@ -68,8 +84,8 @@ function useSupabaseMinesHistory() {
     async function fetchHistory() {
       setLoading(true);
       try {
-        // Use supabase.auth.getSession() directly — auth.getSession() may be
-        // null on first render because the AuthManager loads asynchronously.
+        // Get the current authenticated Supabase session — this attaches
+        // the JWT so RLS policy (auth.uid() = user_id) is satisfied.
         const { data: { session } } = await supabase.auth.getSession();
         const userId = session?.user?.id ?? auth.getSession()?.userId;
 
@@ -78,26 +94,23 @@ function useSupabaseMinesHistory() {
           return;
         }
 
+        // NOTE: column is `placed_at`, not `created_at`
         const { data, error } = await supabase
           .from('bets')
-          .select('id, bet_amount, win_amount, multiplier, status, bet_details, created_at')
+          .select('id, bet_amount, win_amount, multiplier, status, bet_details, placed_at')
           .eq('user_id', userId)
-          .order('created_at', { ascending: false });
+          .order('placed_at', { ascending: false });
 
         if (error) {
-          console.warn('[mines] history fetch error:', error.message);
+          console.warn('[mines] history fetch error:', error.message, error);
           if (!cancelled) setRows([]);
           return;
         }
 
-        const mineBets = ((data ?? []) as SupabaseMinesBet[]).filter(
-          (b) =>
-            b.bet_details &&
-            typeof b.bet_details === 'object' &&
-            'mines' in (b.bet_details as object)
-        );
-
+        const mineBets = ((data ?? []) as SupabaseMinesBet[]).filter(isMinesBet);
         if (!cancelled) setRows(mineBets);
+      } catch (e) {
+        console.warn('[mines] history exception:', e);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -107,11 +120,9 @@ function useSupabaseMinesHistory() {
     return () => { cancelled = true; };
   }, [refreshKey]);
 
-  // Also refresh when auth state changes (login / logout)
+  // Re-fetch on auth state change (login / logout)
   useEffect(() => {
-    const unsub = bus.on(Topics.AuthState, () => {
-      setRefreshKey((k) => k + 1);
-    });
+    const unsub = bus.on(Topics.AuthState, () => setRefreshKey((k) => k + 1));
     return unsub;
   }, []);
 
@@ -235,8 +246,7 @@ export default function MinesView() {
         }
         setGame((g) => ({ ...g, active: false, busted: true, grid: newGrid, revealed: newRevealed, gemsFound: res.gems_found }));
         store.recordMinesRound({ stake: game.stake, mines: game.mineCount, gems: res.gems_found, multiplier: res.current_multiplier, win: 0, busted: true });
-        // Small delay so Supabase has time to write the bet row before we fetch
-        setTimeout(refreshHistory, 800);
+        setTimeout(refreshHistory, 1200);
       } else {
         const newGrid = [...game.grid] as ClientMinesState['grid'];
         const newRevealed = [...game.revealed];
@@ -265,8 +275,7 @@ export default function MinesView() {
       setGame((g) => ({ ...g, active: false, cashedOut: true, grid: newGrid, revealed: newRevealed }));
       store.recordMinesRound({ stake: game.stake, mines: game.mineCount, gems: game.gemsFound, multiplier: res.multiplier, win: res.payout, busted: false });
       cms.toast({ title: 'Cashed out!', body: `You won ${store.currency}${res.payout.toFixed(2)}`, kind: 'success' });
-      // Small delay so Supabase has time to write the bet row before we fetch
-      setTimeout(refreshHistory, 800);
+      setTimeout(refreshHistory, 1200);
     } catch (err) {
       cms.toast({ title: 'Cashout failed', body: err instanceof Error ? err.message : 'Server error', kind: 'alert' });
     } finally {
@@ -372,7 +381,7 @@ export default function MinesView() {
   );
 }
 
-// ── History panel (My History only, no Top Ranking) ───────────────────────────
+// ── History panel ─────────────────────────────────────────────────────────────
 
 function MinesHistoryPanel({
   rows,
@@ -411,7 +420,7 @@ function MinesHistoryPanel({
           <p className="text-xs text-slate-600 text-center py-4">No rounds yet. Play to build your history.</p>
         ) : (
           <>
-            {/* Fixed column headers — will never shift regardless of value widths */}
+            {/* Fixed column headers */}
             <div className="grid grid-cols-[1.8rem_1.6rem_3.2rem_1fr_1fr] gap-x-2 pb-1 mb-1 border-b border-borderline-900 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
               <span>💣</span>
               <span>💎</span>
@@ -423,24 +432,20 @@ function MinesHistoryPanel({
             <div className="max-h-72 overflow-y-auto divide-y divide-borderline-900">
               {rows.map((r) => {
                 const won = r.status === 'won';
-                const mines = r.bet_details?.mines ?? '-';
-                const gems = r.bet_details?.gems ?? '-';
-                const multiplier = r.multiplier ?? 0;
+                const d = parseBetDetails(r.bet_details);
+                const mines = d.mines ?? '-';
+                const gems = d.gems ?? '-';
+                const multiplier = r.multiplier ? Number(r.multiplier) : 0;
                 const payout = r.win_amount ?? 0;
                 return (
                   <div
                     key={r.id}
                     className="grid grid-cols-[1.8rem_1.6rem_3.2rem_1fr_1fr] gap-x-2 py-1.5 text-xs items-center"
                   >
-                    {/* Mines count */}
                     <span className={`tabular font-mono ${won ? 'text-emeraldwin-400' : 'text-coral-400'}`}>{mines}</span>
-                    {/* Gems count */}
                     <span className={`tabular font-mono ${won ? 'text-emeraldwin-400' : 'text-coral-400'}`}>{gems}</span>
-                    {/* Multiplier */}
                     <span className={`tabular font-mono text-right ${won ? 'text-emeraldwin-400' : 'text-coral-400'}`}>{multiplier.toFixed(2)}x</span>
-                    {/* Stake — neutral color, truncated */}
                     <span className="tabular font-mono text-right text-slate-400 truncate">{store.currency}{r.bet_amount.toFixed(0)}</span>
-                    {/* Payout — green on win, dash on loss */}
                     <span className={`tabular font-mono text-right font-bold truncate ${won ? 'text-emeraldwin-400' : 'text-slate-600'}`}>
                       {won ? `${store.currency}${payout.toFixed(2)}` : '—'}
                     </span>
