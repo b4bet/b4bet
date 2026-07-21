@@ -49,6 +49,12 @@ export interface AviatorHistoryResult {
   history: number[];
 }
 
+export interface AviatorPlaceBetResult {
+  success: boolean;
+  bet_id: string | null;
+  round_uuid: string | null;
+}
+
 export interface CrashBustResult { bust_point: number; }
 export interface CrashSettleResult { success: boolean; win: number; verified_bust: number | null; balance_after: number; }
 export interface MinesStartResult { success: boolean; session_id: string; balance_after: number; grid_size: number; mine_count: number; }
@@ -193,6 +199,29 @@ export const GameService = {
       parseFloat(String(r.bust_point))
     );
     return { history };
+  },
+
+  /**
+   * Register a bet on the server during the waiting phase.
+   *
+   * This MUST be called every time a player places a bet so the server has a
+   * record in the `bets` table. Without this, `aviator_cashout` returns
+   * "Bet not found" and the player's balance is never credited.
+   *
+   * The server also debits `profiles.balance`; `store.setBalance` called after
+   * cashout will reconcile the authoritative server balance to local state.
+   */
+  aviatorPlaceBet(
+    userId: string,
+    betAmount: number,
+    roundUuid: string | null,
+  ): Promise<AviatorPlaceBetResult> {
+    return post<AviatorPlaceBetResult>({
+      action: 'aviator_place_bet',
+      user_id: userId,
+      bet_amount: betAmount,
+      round_uuid: roundUuid,
+    });
   },
 
   /**

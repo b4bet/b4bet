@@ -10,6 +10,9 @@ import { formatMoney, randomAvatarColor, randomName } from './game/format';
 import { useBalance } from '../../lib/hooks';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
+import { auth } from '../../lib/auth';
+import { GameService } from '../../lib/game-service';
+import { aviatorLoop } from '../../lib/persistentGameEngine';
 
 const PLAYER_NAME = 'You';
 
@@ -83,13 +86,46 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multiplier, phase]);
 
+  /**
+   * Called by BettingPanel when the player clicks BET.
+   *
+   * Steps:
+   * 1. Validate amount against configured limits.
+   * 2. Debit the player's local balance (optimistic UI).
+   * 3. Register the bet on the server via `aviator_place_bet` so that
+   *    `aviator_cashout` can find it in the `bets` table.
+   *
+   * The server call is fire-and-forget: the local BET button state is set
+   * immediately. If the server rejects (e.g. race condition at round
+   * boundary), the cashout will return "Bet not found" and show an error
+   * toast — rare in practice.
+   */
   const handlePlaceBet = useCallback((amount: number) => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
-      cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
+      cms.toast({
+        title: 'Bet out of range',
+        body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`,
+        kind: 'alert',
+      });
       return false;
     }
-    return store.debit(amount);
+    const ok = store.debit(amount);
+    if (ok) {
+      // Register bet on server so cashout can find it by round_uuid.
+      const session = auth.getSession();
+      if (session) {
+        void GameService.aviatorPlaceBet(
+          session.userId,
+          amount,
+          aviatorLoop.getRoundUuid(),
+        ).catch(() => {
+          // Non-fatal: server rejected registration (e.g. round already flying).
+          // Player will see a cashout error if they try to cash out.
+        });
+      }
+    }
+    return ok;
   }, []);
 
   const handleCancelBet = useCallback(
