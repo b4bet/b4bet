@@ -1,16 +1,15 @@
-// crashEngine.ts — SERVER-SYNCED shared round.
-// All users see the same phase, multiplier, and crash point.
-// Client polls crash_get_current_round every 300ms.
-// On startup, loads last 20 rounds from server for history bar.
+// crashEngine.ts — SERVER-SYNCED shared crash round.
+// Polls crash_get_current_round every 300ms.
+// Loads last 20 provably-fair rounds on startup for history bar + popup.
 
 import { bus, Topics } from './bus';
 import { store } from './store';
 import { GameService } from './game-service';
 import type { CrashRoundDetail } from './game-service';
 import { auth } from './auth';
-
 import { sfx, startHum, updateHum, stopHum } from './crashAudio';
-function playStartSound() { try { sfx.start(); startHum(); } catch { /* ignore */ } }
+
+function playStartSound() { try { sfx.start(); startHum(); } catch { /* audio not ready */ } }
 function playTickSound(m: number) { try { updateHum(m); } catch { /* ignore */ } }
 function playCrashSound() { try { stopHum(); sfx.crash(); } catch { /* ignore */ } }
 function playCashoutSound() { try { sfx.cashout(); } catch { /* ignore */ } }
@@ -18,6 +17,7 @@ function playCashoutSound() { try { sfx.cashout(); } catch { /* ignore */ } }
 export type CrashPhase = 'countdown' | 'flying' | 'busted';
 
 export interface CashoutEvent { id: string; amount: number; multiplier: number; ts: number; }
+
 export interface BetSlot {
   id: 'A' | 'B';
   amount: number;
@@ -27,6 +27,7 @@ export interface BetSlot {
   cashedOut: boolean;
   win: number | null;
 }
+
 export interface CrashState {
   phase: CrashPhase;
   multiplier: number;
@@ -72,8 +73,11 @@ async function settleSlotOnServer(slot: BetSlot, roundId: string, bustPoint: num
   if (!session) return;
   try {
     const result = await GameService.crashSettle(
-      session.userId, roundId as unknown as number,
-      slot.amount, slot.cashedOutAt, bustPoint,
+      session.userId,
+      roundId as unknown as number,
+      slot.amount,
+      slot.cashedOutAt,
+      bustPoint,
     );
     if (typeof result.balance_after === 'number') store.setBalance(result.balance_after);
   } catch (err) {
@@ -83,12 +87,19 @@ async function settleSlotOnServer(slot: BetSlot, roundId: string, bustPoint: num
 
 class CrashEngine {
   private state: EngineState = {
-    phase: 'countdown', multiplier: 1.0, countdown: 6,
-    roundId: '', roundSeq: 0,
-    bustPoint: 0, history: [], historyDetail: [],
+    phase: 'countdown',
+    multiplier: 1.0,
+    countdown: 6,
+    roundId: '',
+    roundSeq: 0,
+    bustPoint: 0,
+    history: [],
+    historyDetail: [],
     bets: { A: freshBet('A'), B: freshBet('B') },
-    startedAt: Date.now(), win: null,
-    serverElapsedAtConnect: 0, connectTime: Date.now(),
+    startedAt: Date.now(),
+    win: null,
+    serverElapsedAtConnect: 0,
+    connectTime: Date.now(),
   };
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -127,15 +138,33 @@ class CrashEngine {
     }
   }
 
-  /** Full provably-fair detail for CrashFeedPopup */
+  /** Full provably-fair detail array — used by CrashFeedPopup */
   getHistoryDetail(): CrashRoundDetail[] {
     return [...this.state.historyDetail];
+  }
+
+  /** Current bets for both slots — used by useCrashBets() hook */
+  getBets(): Record<'A' | 'B', BetSlot> {
+    return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
+  }
+
+  getState(): CrashState {
+    return {
+      phase: this.state.phase,
+      multiplier: this.state.multiplier,
+      countdown: this.state.countdown,
+      roundId: this.state.roundId,
+      roundSeq: this.state.roundSeq,
+      bustPoint: this.state.bustPoint,
+      history: [...this.state.history],
+      bets: { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } },
+      startedAt: this.state.startedAt,
+    };
   }
 
   private async poll() {
     try {
       const r = await GameService.crashGetCurrentRound();
-
       const newRound = r.round_uuid && r.round_uuid !== this.lastKnownRoundId;
 
       if (newRound) {
@@ -177,7 +206,7 @@ class CrashEngine {
           this.state.connectTime = Date.now();
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.bustPoint = 0;
-          if (!this.didPlayStart && !this.lastKnownRoundId) {
+          if (!this.didPlayStart) {
             playStartSound();
             this.didPlayStart = true;
           }
@@ -199,6 +228,8 @@ class CrashEngine {
             this.publishHistory();
           }
           this.settleBustedBets();
+          // Refresh full history detail after crash so provably-fair data is fresh
+          setTimeout(() => { void this.loadHistory(); }, 2000);
         } else {
           this.state.phase = 'busted';
           if (r.crash_point) {
@@ -237,9 +268,7 @@ class CrashEngine {
 
   private publish() { bus.emit(Topics.CrashState, this.getState()); }
 
-  private publishHistory() {
-    bus.emit(Topics.CrashHistory, [...this.state.history]);
-  }
+  private publishHistory() { bus.emit(Topics.CrashHistory, [...this.state.history]); }
 
   private broadcastBets() {
     bus.emit(Topics.CrashBets, { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } });
@@ -307,25 +336,6 @@ class CrashEngine {
     if (slot.cashedOut) return { ok: false, reason: 'Already cashed out' };
     this.performCashOut(id, this.state.multiplier);
     return { ok: true };
-  }
-
-  /** Used by useCrashBets() hook in hooks.ts */
-  getBets(): Record<'A' | 'B', BetSlot> {
-    return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
-  }
-
-  getState(): CrashState {
-    return {
-      phase: this.state.phase,
-      multiplier: this.state.multiplier,
-      countdown: this.state.countdown,
-      roundId: this.state.roundId,
-      roundSeq: this.state.roundSeq,
-      bustPoint: this.state.bustPoint,
-      history: [...this.state.history],
-      bets: { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } },
-      startedAt: this.state.startedAt,
-    };
   }
 }
 
