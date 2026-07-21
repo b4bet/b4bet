@@ -186,8 +186,6 @@ export const GameService = {
 
   /**
    * Fetch the last 20 completed Aviator rounds for history bar pre-fill.
-   * Used on startup so new users see history immediately without waiting
-   * for a live crash to occur.
    */
   async aviatorGetHistory(): Promise<AviatorHistoryResult> {
     const { data } = await supabase
@@ -203,13 +201,8 @@ export const GameService = {
 
   /**
    * Register a bet on the server during the waiting phase.
-   *
-   * This MUST be called every time a player places a bet so the server has a
-   * record in the `bets` table. Without this, `aviator_cashout` returns
-   * "Bet not found" and the player's balance is never credited.
-   *
-   * The server also debits `profiles.balance`; `store.setBalance` called after
-   * cashout will reconcile the authoritative server balance to local state.
+   * Returns bet_id which should be stored and passed to aviatorCashout
+   * for direct bet lookup (avoids round_uuid race condition).
    */
   aviatorPlaceBet(
     userId: string,
@@ -227,15 +220,9 @@ export const GameService = {
   /**
    * Cash out at the given multiplier.
    *
-   * The Edge Function expects `cashout_multiplier` to be present — without it
-   * the server returns 400 "Missing params" and the cashout silently fails.
-   *
-   * The server response uses different field names than our internal type, so
-   * we map them here:
-   *   win_amount  → win
-   *   multiplier  → cashout_at
-   *   bustPoint   → crash_point
-   *   success     → won
+   * @param betId - Server-assigned bet ID from aviatorPlaceBet. When provided,
+   *                the server looks up the bet directly by ID — most reliable.
+   *                Falls back to round_uuid lookup if null.
    */
   async aviatorCashout(
     userId: string,
@@ -243,6 +230,7 @@ export const GameService = {
     roundId: number,
     betAmount: number,
     cashoutMultiplier: number,
+    betId?: string | null,
   ): Promise<AviatorCashoutResult> {
     type RawResponse = {
       success?: boolean;
@@ -259,6 +247,9 @@ export const GameService = {
       round_id: roundId,
       bet_amount: betAmount,
       cashout_multiplier: cashoutMultiplier,
+      // Pass bet_id so the server finds the bet directly by ID.
+      // This is the most reliable path — avoids round_uuid race conditions.
+      ...(betId ? { bet_id: betId } : {}),
     });
     return {
       success:      raw.success      ?? false,
