@@ -309,7 +309,7 @@ class CrashEngine {
     return { ok: true };
   }
 
-  /** Used by useCrashBets() hook */
+  /** Used by useCrashBets() hook in hooks.ts */
   getBets(): Record<'A' | 'B', BetSlot> {
     return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
   }
