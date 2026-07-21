@@ -5,35 +5,6 @@
  * • K3
  * • 5D
  * • Aviator
- *
- * SECURITY NOTE — Aviator:
- * The crash point for each round is generated EXCLUSIVELY server-side via
- * the process-bet Edge Function, which uses crypto.getRandomValues().
- *
- * SHARED ROUND MODEL (v2):
- * The server owns ONE shared `aviator_current_round` row. Every client polls
- * `aviator_get_current_round` every ~300ms. On mount the client immediately
- * jumps to the server's current phase/elapsed time so a user opening mid-flight
- * sees the right multiplier — not "waiting" / round 1.
- *
- * MULTIPLIER FORMULA:
- *   m = e^(0.12 * t_seconds)  — MUST match the Postgres RPC:
- *     exp(0.12 * (elapsed_ms / 1000)) >= crash_point
- *
- * ROUND-ID SEMANTICS:
- *   roundId only increments when the server returns phase='waiting' with a
- *   new UUID — i.e. a genuinely new betting round has started. It does NOT
- *   increment on the waiting→flying UUID change (same betting round). This
- *   prevents the BettingPanel round-transition effect from firing mid-bet
- *   and incorrectly resetting placed=false, which caused the green BET
- *   button to reappear immediately after a player placed a bet.
- *
- * HISTORY PRE-FILL:
- *   On first server sync the engine fetches the last 20 completed rounds
- *   from aviator_rounds so new users see the history bar immediately.
- *
- * SECURITY:
- *   crash_point is NEVER returned by the server while phase='flying'.
  */
 
 import { bus } from './bus';
@@ -323,8 +294,6 @@ class AviatorLoop {
       const res = await GameService.aviatorGetCurrentRound();
       this.applyServerState(res);
 
-      // On first successful sync, pre-fill history from the last 20 completed
-      // rounds so new users see the history bar immediately.
       if (!this.bootstrapped) {
         this.bootstrapped = true;
         try {
@@ -350,10 +319,6 @@ class AviatorLoop {
   }) {
     const now = Date.now();
 
-    // Update UUID. roundId only increments when phase='waiting' (new betting
-    // round). The waiting→flying UUID change is within the same betting round
-    // and must NOT increment roundId — doing so would trigger BettingPanel's
-    // round-transition effect and incorrectly reset placed=false.
     if (res.round_uuid && res.round_uuid !== this.roundUuid) {
       if (this.roundUuid !== null && res.phase === 'waiting') {
         this.roundId += 1;
@@ -426,13 +391,19 @@ class AviatorLoop {
 
   /**
    * Cash out the current bet at the given multiplier.
-   * The multiplier is forwarded to the server as cashout_multiplier so it
-   * can calculate winnings and verify the cashout was before the crash.
+   *
+   * @param betAmount  - Original bet amount
+   * @param placedAtMs - Timestamp when bet was placed (ms)
+   * @param multiplier - Multiplier to cash out at
+   * @param betId      - Server-assigned bet ID (from aviatorPlaceBet). When
+   *                     provided, the server looks up the bet directly by ID
+   *                     which is far more reliable than the round_uuid fallback.
    */
   cashoutBet(
     betAmount: number,
     placedAtMs: number,
     multiplier: number,
+    betId?: string | null,
   ): Promise<import('./game-service').AviatorCashoutResult> {
     const session = auth.getSession();
     if (!session) return Promise.reject(new Error('Not authenticated'));
@@ -442,6 +413,7 @@ class AviatorLoop {
       this.roundId,
       betAmount,
       multiplier,
+      betId ?? null,
     );
   }
 
