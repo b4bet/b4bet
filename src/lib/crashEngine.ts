@@ -136,15 +136,28 @@ class CrashEngine {
 
   private async loadHistory() {
     try {
-      const r = await GameService.crashGetHistory();
+      // Use crashGetHistoryDetail which returns full CrashRoundDetail[] with bust_point + seeds
+      const r = await GameService.crashGetHistoryDetail();
       if (r.history && r.history.length > 0) {
         this.state.historyDetail = r.history;
-        this.state.history = r.history.map((d) => d.bust_point);
+        // Extract the numeric bust_point from each detail object
+        this.state.history = r.history.map((d) => Number(d.bust_point));
         this.publishHistory();
         this.publish();
       }
     } catch (err) {
       console.warn('[CrashEngine] loadHistory failed:', (err as Error)?.message ?? err);
+      // Fall back to simple history if detail RPC fails
+      try {
+        const r2 = await GameService.crashGetHistory();
+        if (r2.history && r2.history.length > 0) {
+          this.state.history = r2.history.map((v) => Number(v));
+          this.publishHistory();
+          this.publish();
+        }
+      } catch (err2) {
+        console.warn('[CrashEngine] loadHistory fallback failed:', (err2 as Error)?.message ?? err2);
+      }
     }
   }
 
