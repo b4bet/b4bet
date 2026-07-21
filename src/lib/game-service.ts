@@ -24,6 +24,19 @@ export interface CrashHistoryResult {
   history: number[];
 }
 
+/** Full round detail for provably fair verification panel */
+export interface CrashRoundDetail {
+  bust_point: number;
+  round_uuid: string;
+  server_seed?: string | null;
+  server_seed_hash: string;
+  created_at: string;
+}
+
+export interface CrashHistoryDetailResult {
+  history: CrashRoundDetail[];
+}
+
 export interface CrashBustResult { bust_point: number; }
 export interface CrashSettleResult { success: boolean; win: number; verified_bust: number | null; balance_after: number; }
 export interface MinesStartResult { success: boolean; session_id: string; balance_after: number; grid_size: number; mine_count: number; }
@@ -86,30 +99,40 @@ export const GameService = {
 
   /**
    * Get current round state. Called every 300ms by the crash engine.
-   * Uses the crash_get_current_round() Postgres RPC which handles all
-   * phase transitions (waiting→flying→crashed→waiting) server-side.
+   * Uses crash_get_current_round() Postgres RPC which handles all phase
+   * transitions (waiting→flying→crashed→waiting) server-side.
    */
   async crashGetCurrentRound(): Promise<CrashCurrentRoundResult> {
     const { data, error } = await supabase.rpc('crash_get_current_round');
     if (error) throw new Error(error.message);
-    // RPC returns a jsonb object — Supabase client parses it automatically
     const d = data as CrashCurrentRoundResult;
     return {
-      round_uuid:        d.round_uuid       ?? '',
-      phase:             (d.phase           ?? 'waiting') as CrashCurrentRoundResult['phase'],
-      elapsed_ms:        Number(d.elapsed_ms ?? 0),
-      crash_point:       d.crash_point != null ? Number(d.crash_point) : null,
-      last_crash_point:  d.last_crash_point != null ? Number(d.last_crash_point) : null,
+      round_uuid:       d.round_uuid       ?? '',
+      phase:            (d.phase           ?? 'waiting') as CrashCurrentRoundResult['phase'],
+      elapsed_ms:       Number(d.elapsed_ms ?? 0),
+      crash_point:      d.crash_point      != null ? Number(d.crash_point)      : null,
+      last_crash_point: d.last_crash_point != null ? Number(d.last_crash_point) : null,
     };
   },
 
   /**
-   * Get last 20 completed rounds for the history bar.
+   * Get last 20 completed rounds (bust points only) for the history bar.
    */
   async crashGetHistory(): Promise<CrashHistoryResult> {
     const { data, error } = await supabase.rpc('crash_get_history');
     if (error) throw new Error(error.message);
     const d = data as { history?: number[] };
+    return { history: d?.history ?? [] };
+  },
+
+  /**
+   * Get last 20 completed rounds with server_seed + hash for the
+   * provably fair verification panel (CrashFeedPopup).
+   */
+  async crashGetHistoryDetail(): Promise<CrashHistoryDetailResult> {
+    const { data, error } = await supabase.rpc('crash_get_history_detail');
+    if (error) throw new Error(error.message);
+    const d = data as { history?: CrashRoundDetail[] };
     return { history: d?.history ?? [] };
   },
 
