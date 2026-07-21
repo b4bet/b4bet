@@ -71,8 +71,8 @@ export default function CrashHistoryTabs() {
           }));
           setAllBets(rows);
         }
-      })
-      .finally(() => setLoadingAll(false));
+        setLoadingAll(false);
+      });
   }, [tab]);
 
   const topRows = useMemo(() => {
@@ -127,7 +127,7 @@ export default function CrashHistoryTabs() {
       {/* Body */}
       <div className="max-h-72 overflow-y-auto scrollbar-thin overflow-x-auto">
 
-        {/* ── ALL BETS — real data from Supabase ─────────────────── */}
+        {/* ── ALL BETS — real Supabase data, no fake players ─── */}
         {tab === 'all' && (
           <table className="w-full text-[11px]">
             <thead className="text-slate-500 uppercase tracking-wider sticky top-0 bg-slatepanel-900">
