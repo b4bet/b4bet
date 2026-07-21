@@ -142,7 +142,6 @@ export function BettingPanel({
             bet.amount,
           )
             .then((res) => {
-              // Update history with real crash point if not already shown
               if (res.crash_point) {
                 aviatorLoop.reportServerCrash(res.crash_point);
               }
@@ -228,16 +227,19 @@ export function BettingPanel({
     onCancelBet(amt);
   }
 
-  /** Server-validated cash out. Uses round_uuid from the engine for accurate server validation. */
+  /**
+   * Server-validated cash out.
+   * Passes the current multiplier so the server can verify and calculate winnings.
+   */
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
     const at = atOverride ?? multiplier;
+    // Optimistically mark as cashed out in UI immediately
     setBet((b) => ({ ...b, cashedOutAt: at }));
 
     try {
-      const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs);
+      const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs, at);
       if (res.won && res.win > 0) {
-        // Sync balance from server
         store.setBalance(res.balance_after);
         onCashOut(bet.amount, res.cashout_at ?? at);
         onWin(res.win);

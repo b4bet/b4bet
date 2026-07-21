@@ -16,15 +16,15 @@ export function HistoryBar({ history }: HistoryBarProps) {
   }, [history]);
 
   // Allow horizontal scrolling with the mouse wheel on desktop.
-  // Without this, no-scrollbar means desktop users have no way to scroll.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      // Only hijack if the scroll is more vertical than horizontal (normal wheel)
-      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      // Handle both vertical wheel (deltaY) and horizontal trackpad (deltaX)
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (delta !== 0) {
         e.preventDefault();
-        el.scrollLeft += e.deltaY;
+        el.scrollLeft += delta;
       }
     };
     el.addEventListener('wheel', onWheel, { passive: false });
@@ -32,15 +32,16 @@ export function HistoryBar({ history }: HistoryBarProps) {
   }, []);
 
   return (
-    <div className="relative bg-ink-800 border-b border-ink-600/60 overflow-hidden">
-      {/* Gradient fade on left — visually hints there's more content to scroll back to */}
+    <div className="relative bg-ink-800 border-b border-ink-600/60">
+      {/* Gradient fade on left */}
       <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-ink-800 to-transparent z-10" />
-      {/* Gradient fade on right — hints there's more history to scroll through */}
+      {/* Gradient fade on right */}
       <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-ink-800 to-transparent z-10" />
 
       <div
         ref={scrollRef}
         className="no-scrollbar flex items-center gap-2 overflow-x-auto px-4 sm:px-5 py-2 scroll-smooth"
+        style={{ touchAction: 'pan-x' }}
       >
         {history.length === 0 && (
           <span className="text-xs text-gray-600 italic px-1">No rounds yet — first flight incoming…</span>

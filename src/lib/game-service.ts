@@ -63,21 +63,27 @@ export interface AviatorRoundStartResult {
   started_at?: string;
   already_exists?: boolean;
 }
+
+/** Normalised cashout result — mapped from the Edge Function response. */
 export interface AviatorCashoutResult {
   success: boolean;
+  /** True when the bet was cashed out before the crash. */
   won: boolean;
+  /** The multiplier at which the cashout was accepted. */
   cashout_at: number | null;
+  /** Gross win amount (bet × multiplier). */
   win: number;
   balance_after: number;
   crash_point: number | null;
 }
+
 export interface AviatorSettleResult { success: boolean; crash_point: number; }
 export interface AviatorRoundStatusResult {
   crashed: boolean;
   crash_point: number | null;
 }
 
-// ── Helper ───────────────────────────────────────────────────────────────────
+// ── Helper ────────────────────────────────────────────────────────────────────
 
 async function get<T>(params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams(params).toString();
@@ -104,7 +110,7 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
   return data;
 }
 
-// ── Game API ─────────────────────────────────────────────────────────────────
+// ── Game API ────────────────────────────────────────────────────────────────
 
 export const GameService = {
   // ── Crash ──────────────────────────────────────────────────────────────────
@@ -189,6 +195,52 @@ export const GameService = {
     return { history };
   },
 
+  /**
+   * Cash out at the given multiplier.
+   *
+   * The Edge Function expects `cashout_multiplier` to be present — without it
+   * the server returns 400 "Missing params" and the cashout silently fails.
+   *
+   * The server response uses different field names than our internal type, so
+   * we map them here:
+   *   win_amount  → win
+   *   multiplier  → cashout_at
+   *   bustPoint   → crash_point
+   *   success     → won
+   */
+  async aviatorCashout(
+    userId: string,
+    roundUuid: string | null,
+    roundId: number,
+    betAmount: number,
+    cashoutMultiplier: number,
+  ): Promise<AviatorCashoutResult> {
+    type RawResponse = {
+      success?: boolean;
+      win_amount?: number;
+      balance_after?: number;
+      multiplier?: number;
+      bustPoint?: number | null;
+      error?: string;
+    };
+    const raw = await post<RawResponse>({
+      action: "aviator_cashout",
+      user_id: userId,
+      round_uuid: roundUuid,
+      round_id: roundId,
+      bet_amount: betAmount,
+      cashout_multiplier: cashoutMultiplier,
+    });
+    return {
+      success:      raw.success      ?? false,
+      won:          raw.success      ?? false,
+      cashout_at:   raw.multiplier   ?? cashoutMultiplier,
+      win:          raw.win_amount   ?? 0,
+      balance_after: raw.balance_after ?? 0,
+      crash_point:  raw.bustPoint    ?? null,
+    };
+  },
+
   aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
     return post<AviatorRoundStartResult>({
       game_type: "aviator_round_start",
@@ -197,27 +249,16 @@ export const GameService = {
     });
   },
 
-  aviatorCashout(
+  aviatorSettle(
     userId: string,
     roundUuid: string | null,
     roundId: number,
     betAmount: number,
-    placedAtMs: number,
-  ): Promise<AviatorCashoutResult> {
-    return post<AviatorCashoutResult>({
-      game_type: "aviator_cashout",
+  ): Promise<AviatorSettleResult> {
+    return post<AviatorSettleResult>({
+      action: "aviator_settle_lost",
       user_id: userId,
       round_uuid: roundUuid,
-      round_id: roundId,
-      bet_amount: betAmount,
-      placed_at_ms: placedAtMs,
-    });
-  },
-
-  aviatorSettle(userId: string, roundId: number, betAmount: number): Promise<AviatorSettleResult> {
-    return post<AviatorSettleResult>({
-      game_type: "aviator_settle",
-      user_id: userId,
       round_id: roundId,
       bet_amount: betAmount,
     });
