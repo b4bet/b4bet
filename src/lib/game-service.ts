@@ -1,13 +1,11 @@
 /**
- * game-service.ts
- *
- * Thin client wrapper around the process-bet Edge Function.
+ * game-service.ts — Thin client wrapper around the process-bet Edge Function.
  * ALL game outcomes are determined server-side.
  */
 
 const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface CrashBustResult { bust_point: number; }
 export interface CrashSettleResult { success: boolean; win: number; verified_bust: number | null; balance_after: number; }
@@ -55,10 +53,7 @@ async function get<T>(params: Record<string, string>): Promise<T> {
 async function post<T>(body: Record<string, unknown>): Promise<T> {
   const res = await fetch(EDGE_FN, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
-    },
+    headers: { "Content-Type": "application/json", "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY },
     body: JSON.stringify(body),
   });
   const data = await res.json() as T & { error?: string };
@@ -66,17 +61,22 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
   return data;
 }
 
-// ── Game API ─────────────────────────────────────────────────────────────────
+// ── Game API ──────────────────────────────────────────────────────────────────
 
 export const GameService = {
-  // ── Crash ──────────────────────────────────────────────────────────────────
+  // ── Crash ─────────────────────────────────────────────────────────────────
 
-  /** Load last 20 crash rounds with full provably-fair detail */
+  /** Last 20 crash rounds with provably-fair seed + hash */
   crashGetHistory(): Promise<{ history: CrashRoundDetail[] }> {
     return get<{ history: CrashRoundDetail[] }>({ action: "crash_get_history" });
   },
 
-  /** Poll every 300ms — returns current phase, elapsed_ms, crash_point (only when crashed) */
+  /** Alias kept for CrashFeedPopup backward-compat */
+  crashGetHistoryDetail(): Promise<{ history: CrashRoundDetail[] }> {
+    return get<{ history: CrashRoundDetail[] }>({ action: "crash_get_history" });
+  },
+
+  /** Poll every 300ms — returns phase, elapsed_ms, crash_point (only when crashed) */
   crashGetCurrentRound(): Promise<CrashCurrentRoundResult> {
     return get<CrashCurrentRoundResult>({ action: "crash_get_current_round" });
   },
@@ -98,7 +98,7 @@ export const GameService = {
     });
   },
 
-  // ── Mines ──────────────────────────────────────────────────────────────────
+  // ── Mines ─────────────────────────────────────────────────────────────────
   minesStart(userId: string, mineCount: number, stake: number): Promise<MinesStartResult> {
     return post<MinesStartResult>({ game_type: "mines_start", user_id: userId, mine_count: mineCount, stake });
   },
@@ -109,7 +109,7 @@ export const GameService = {
     return post<MinesCashoutResult>({ game_type: "mines_cashout", user_id: userId, session_id: sessionId });
   },
 
-  // ── Sun vs Moon ────────────────────────────────────────────────────────────
+  // ── Sun vs Moon ───────────────────────────────────────────────────────────
   sunMoonGetResult(roundId: number): Promise<SunMoonResult> {
     return get<SunMoonResult>({ action: "sunvsmoon_result", round_id: String(roundId) });
   },
@@ -117,21 +117,12 @@ export const GameService = {
     return post<SunMoonSettleResult>({ game_type: "sunvsmoon_settle", user_id: userId, round_id: roundId, bet, stake });
   },
 
-  // ── Trading ────────────────────────────────────────────────────────────────
+  // ── Trading ───────────────────────────────────────────────────────────────
   tradingSettle(userId: string, symbol: string, direction: "UP" | "DOWN", stake: number, entryPrice: number, exitPrice: number, payoutPct: number): Promise<TradingSettleResult> {
-    return post<TradingSettleResult>({
-      game_type: "trading_settle",
-      user_id: userId,
-      symbol,
-      direction,
-      stake,
-      entry_price: entryPrice,
-      exit_price: exitPrice,
-      payout_pct: payoutPct,
-    });
+    return post<TradingSettleResult>({ game_type: "trading_settle", user_id: userId, symbol, direction, stake, entry_price: entryPrice, exit_price: exitPrice, payout_pct: payoutPct });
   },
 
-  // ── Aviator ────────────────────────────────────────────────────────────────
+  // ── Aviator ───────────────────────────────────────────────────────────────
   aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
     return post<AviatorRoundStartResult>({ game_type: "aviator_round_start", user_id: userId, round_id: roundId });
   },
