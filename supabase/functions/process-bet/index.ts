@@ -64,7 +64,7 @@ Deno.serve(async (req: Request) => {
       });
 
     // ─────────────────────────────────────────────────────────────────────
-    // getGameAdminConfig — reads admin_config from Supabase.
+    // getGameAdminConfig
     // ─────────────────────────────────────────────────────────────────────
     async function getGameAdminConfig(gameKey: string) {
       const { data: settingsRows } = await supabase.rpc("admin_get_settings");
@@ -95,11 +95,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // revertCrashToAuto — fully reverts crash to AUTO mode at ALL paths in DB:
-    //   root.mode, root.manualTargetRoundId,
-    //   crash.mode (GAME_HANDLER_KEYS alias),
-    //   gameHandlers.crash.mode
-    // Must be called after each manual round fires.
+    // revertCrashToAuto
     // ─────────────────────────────────────────────────────────────────────
     async function revertCrashToAuto(fullConfig: Record<string, unknown>) {
       const existingCrash = (fullConfig.crash as Record<string, unknown>) ?? {};
@@ -108,12 +104,9 @@ Deno.serve(async (req: Request) => {
 
       const newConfig: Record<string, unknown> = {
         ...fullConfig,
-        // Revert root-level fields
         mode: "AUTO",
         manualTargetRoundId: null,
-        // Revert crash alias (GAME_HANDLER_KEYS path)
         crash: { ...existingCrash, mode: "AUTO", manualTargetRoundId: null },
-        // Revert gameHandlers.crash
         gameHandlers: {
           ...existingHandlers,
           crash: { ...existingHandlerCrash, mode: "AUTO", manualTargetRoundId: null },
@@ -127,7 +120,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ====================================================================
-    // CRASH: Get last 10 history (simple number array) — used by crashEngine on startup
+    // CRASH: Get last 10 history
     // ====================================================================
     if (action === "crash_get_history") {
       const { data: rows } = await supabase
@@ -141,7 +134,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ====================================================================
-    // CRASH: Get last 20 history with provably fair detail — used by CrashFeedPopup
+    // CRASH: Get last 20 history with provably fair detail
     // ====================================================================
     if (action === "crash_get_history_detail") {
       const { data: rows } = await supabase
@@ -161,7 +154,7 @@ Deno.serve(async (req: Request) => {
     }
 
     // ====================================================================
-    // CRASH: Get current shared round (primary sync endpoint)
+    // CRASH: Get current shared round
     // ====================================================================
     if (action === "crash_get_current_round") {
       const { data: r } = await supabase
@@ -182,7 +175,6 @@ Deno.serve(async (req: Request) => {
       const now = Date.now();
       const elapsed = now - new Date(r.phase_started_at).getTime();
 
-      // ── WAITING → FLYING (after 6s)
       if (r.phase === "waiting" && elapsed >= CRASH_WAIT_MS) {
         const cfg = await getGameAdminConfig("crash");
         const bustPoint = cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01
@@ -190,7 +182,6 @@ Deno.serve(async (req: Request) => {
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
 
         if (cfg.mode === "MANUAL") {
-          // Fetch fresh full config and revert ALL crash mode paths to AUTO
           const { data: settingsRows } = await supabase.rpc("admin_get_settings");
           const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
           const fullConfig = settings.find((r2) => r2.key === "admin_config")?.value ?? {};
@@ -205,16 +196,13 @@ Deno.serve(async (req: Request) => {
         return json({ phase: "flying", elapsed_ms: 0, crash_point: null, round_uuid: r.round_uuid });
       }
 
-      // ── FLYING → CRASHED (when flight duration reached)
       if (r.phase === "flying" && r.crash_point) {
         const dur = flightDurationMs(Number(r.crash_point));
         if (elapsed >= dur) {
           const newUuid = r.round_uuid ?? crypto.randomUUID();
-          // Generate a server seed for provably fair
           const serverSeedBytes = new Uint8Array(32);
           crypto.getRandomValues(serverSeedBytes);
           const serverSeed = Array.from(serverSeedBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-          // Hash the seed
           const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(serverSeed));
           const serverSeedHash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
 
@@ -225,7 +213,6 @@ Deno.serve(async (req: Request) => {
             elapsed_ms: 0,
           }).eq("id", 1);
 
-          // Store full provably fair data in crash_rounds
           await supabase.from("crash_rounds").insert({
             bust_point: Number(r.crash_point),
             round_uuid: newUuid,
@@ -244,7 +231,6 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // ── CRASHED → WAITING (after 3s hold)
       if (r.phase === "crashed" && elapsed >= CRASH_CRASH_HOLD_MS) {
         const cfg = await getGameAdminConfig("crash");
         const bustPoint = cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01
@@ -252,7 +238,6 @@ Deno.serve(async (req: Request) => {
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
 
         if (cfg.mode === "MANUAL") {
-          // Fetch fresh full config and revert ALL crash mode paths to AUTO
           const { data: settingsRows } = await supabase.rpc("admin_get_settings");
           const settings = (settingsRows as Array<{ key: string; value: Record<string, unknown> }>) ?? [];
           const fullConfig = settings.find((r2) => r2.key === "admin_config")?.value ?? {};
@@ -275,7 +260,6 @@ Deno.serve(async (req: Request) => {
         });
       }
 
-      // ── No transition needed: return current state
       return json({
         phase: r.phase,
         elapsed_ms: elapsed,
@@ -287,6 +271,12 @@ Deno.serve(async (req: Request) => {
 
     // ====================================================================
     // AVIATOR: Get current round
+    //
+    // KEY FIX: Do NOT generate a new UUID on waiting→flying.
+    // Bets are placed and stored with the WAITING phase UUID. If we change
+    // the UUID on flying, the cashout search (bet_details->>round_uuid)
+    // will never find the bet → "Bet not found" → balance not credited.
+    // Only generate a new UUID on crashed→waiting (truly new round).
     // ====================================================================
     if (action === "aviator_get_current_round" || action === "aviator_round_status" || action === "aviator_game_loop") {
       const { data: r } = await supabase
@@ -305,32 +295,42 @@ Deno.serve(async (req: Request) => {
       const now = Date.now();
       const elapsed = now - new Date(r.phase_started_at).getTime();
 
+      // WAITING → FLYING: keep same UUID (bets stored with this UUID must match at cashout)
       if (r.phase === "waiting" && elapsed >= AV_WAIT_MS) {
         const cfg = await getGameAdminConfig("aviator");
         const bustPoint = cfg.mode === "MANUAL" && cfg.manualCrashPoint >= 1.01
           ? parseFloat(cfg.manualCrashPoint.toFixed(2))
           : generateBustPoint(cfg.targetWinProbability, cfg.houseEdge);
-        const newUuid = crypto.randomUUID();
+        // IMPORTANT: reuse r.round_uuid — do NOT generate a new UUID here.
+        // The UUID must stay the same so bet_details->>round_uuid matches during cashout.
         await supabase.from("aviator_current_round").update({
           phase: "flying", phase_started_at: new Date().toISOString(),
-          crash_point: bustPoint, elapsed_ms: 0, round_uuid: newUuid,
+          crash_point: bustPoint, elapsed_ms: 0,
+          // round_uuid intentionally NOT updated here
         }).eq("id", 1);
-        return json({ phase: "flying", elapsed_ms: 0, crash_point: null, round_uuid: newUuid, just_transitioned: true });
+        return json({ phase: "flying", elapsed_ms: 0, crash_point: null, round_uuid: r.round_uuid, just_transitioned: true });
       }
 
       if (r.phase === "flying" && r.crash_point) {
-        const flightDuration = Math.log(Number(r.crash_point)) * 6000;
+        const flightDuration = flightDurationMs(Number(r.crash_point));
         if (elapsed >= flightDuration) {
           await supabase.from("aviator_current_round").update({
             phase: "crashed", phase_started_at: new Date().toISOString(),
             last_crash_point: r.crash_point, elapsed_ms: 0,
           }).eq("id", 1);
+          // Settle all pending bets for this round
           if (r.round_uuid) {
             await supabase.from("bets")
               .update({ status: "lost", resolved_at: new Date().toISOString() })
               .eq("status", "pending")
               .filter("bet_details->>round_uuid", "eq", r.round_uuid);
           }
+          // Save to aviator_rounds history
+          await supabase.from("aviator_rounds").insert({
+            round_uuid: r.round_uuid,
+            bust_point: Number(r.crash_point),
+            phase_started_at: r.phase_started_at,
+          }).catch(() => {});
           return json({ phase: "crashed", elapsed_ms: 0, crash_point: r.crash_point, last_crash_point: r.crash_point, round_uuid: r.round_uuid, just_transitioned: true });
         }
       }
@@ -344,6 +344,7 @@ Deno.serve(async (req: Request) => {
         return json({ phase: "flying", elapsed_ms: 0, crash_point: null, round_uuid: r.round_uuid });
       }
 
+      // CRASHED → WAITING: generate a fresh UUID for the new betting round
       if (r.phase === "crashed" && elapsed >= AV_CRASH_HOLD_MS) {
         const newUuid = crypto.randomUUID();
         await supabase.from("aviator_current_round").update({
@@ -372,15 +373,22 @@ Deno.serve(async (req: Request) => {
       if (!round || round.phase !== "waiting") return json({ error: "Round not accepting bets" }, 400);
       await supabase.from("profiles").update({ balance: profile.balance - (bet_amount as number) }).eq("id", user_id);
       const { data: gameRow } = await supabase.from("games").select("id").eq("slug", "aviator").single();
+      const activeUuid = round_uuid ?? round.round_uuid;
       const { data: bet } = await supabase.from("bets").insert({
-        user_id, game_id: gameRow?.id, round_id: round.round_uuid, bet_amount,
-        bet_details: { round_uuid: round_uuid ?? round.round_uuid }, status: "pending",
+        user_id, game_id: gameRow?.id, round_id: activeUuid, bet_amount,
+        bet_details: { round_uuid: activeUuid }, status: "pending",
       }).select().single();
-      return json({ success: true, bet_id: bet?.id });
+      return json({ success: true, bet_id: bet?.id, round_uuid: activeUuid });
     }
 
     // ====================================================================
     // AVIATOR: Cash out
+    //
+    // Search order:
+    //  1. bet_id (if provided)
+    //  2. bet_details->>round_uuid = round_uuid from client (current round UUID)
+    //  3. round_id = current aviator_current_round.round_uuid (same UUID, belt-and-suspenders)
+    //  4. round_id from client param
     // ====================================================================
     if (action === "aviator_cashout") {
       const { user_id, bet_id, cashout_multiplier, round_uuid, round_id } = body;
@@ -390,21 +398,33 @@ Deno.serve(async (req: Request) => {
       const canCashout = round && (round.phase === "flying" || (round.phase === "crashed" && phaseElapsed < AV_CASHOUT_GRACE_MS));
       if (!canCashout) return json({ error: "Cannot cashout now", phase: round?.phase }, 400);
       if (round.crash_point && (cashout_multiplier as number) > Number(round.crash_point)) return json({ error: "Crashed before cashout", bustPoint: round.crash_point }, 400);
+
       let betData: Record<string, unknown> | null = null;
+
+      // 1. By bet_id
       if (bet_id) {
         const { data } = await supabase.from("bets").select("*").eq("id", bet_id as string).eq("user_id", user_id as string).eq("status", "pending").single();
         betData = data;
       }
+      // 2. By round_uuid from client (should match bet_details->>round_uuid)
       if (!betData) {
-        const rv = round_uuid ?? round.round_uuid;
+        const rv = (round_uuid as string) ?? round.round_uuid;
         const { data } = await supabase.from("bets").select("*").eq("user_id", user_id as string).eq("status", "pending").filter("bet_details->>round_uuid", "eq", rv).maybeSingle();
         betData = data;
       }
+      // 3. By current round's UUID stored in round_id column
+      if (!betData) {
+        const { data } = await supabase.from("bets").select("*").eq("user_id", user_id as string).eq("status", "pending").eq("round_id", round.round_uuid).maybeSingle();
+        betData = data;
+      }
+      // 4. By round_id from client param
       if (!betData && round_id) {
         const { data } = await supabase.from("bets").select("*").eq("user_id", user_id as string).eq("status", "pending").eq("round_id", String(round_id)).maybeSingle();
         betData = data;
       }
+
       if (!betData) return json({ error: "Bet not found or already settled" }, 400);
+
       const bet = betData;
       const win_amount = Math.floor((bet.bet_amount as number) * (cashout_multiplier as number));
       await supabase.from("bets").update({
