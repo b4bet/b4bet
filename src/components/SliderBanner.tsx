@@ -68,7 +68,7 @@ export default function SliderBanner({ onSlideClick }: { onSlideClick: (i: numbe
 
   return (
     <div
-      className="relative w-full overflow-hidden bg-slatepanel-900"
+      className="relative w-full overflow-hidden"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -86,10 +86,11 @@ export default function SliderBanner({ onSlideClick }: { onSlideClick: (i: numbe
                 onClick={(e) => { if (!b.linkUrl) e.preventDefault(); }}
                 className="min-w-full h-40 sm:h-48 relative block bg-slatepanel-900 shrink-0"
               >
+                {/* object-contain so full banner image is visible without cutting */}
                 <img
                   src={b.imageUrl}
                   alt={b.title || ''}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-contain"
                 />
               </a>
             ))
