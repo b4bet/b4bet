@@ -161,8 +161,12 @@ export function BettingPanel({
   const canCashOut = phase === 'flying' && bet.placed && bet.cashedOutAt === null;
   const canCancel = phase === 'waiting' && bet.placed && bet.cashedOutAt === null;
   const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
+  // Queue for next round when not yet bet this round (no active bet)
   const canQueueNextRound = phase === 'flying' && !bet.placed && bet.cashedOutAt === null;
   const canCancelQueue = phase === 'flying' && !bet.placed && bet.pendingNextRound;
+  // Queue for next round AFTER cashing out mid-flight
+  const canQueueAfterCashout = phase === 'flying' && bet.cashedOutAt !== null && !bet.pendingNextRound;
+  const canCancelQueueAfterCashout = phase === 'flying' && bet.cashedOutAt !== null && bet.pendingNextRound;
 
   function adjustAmount(delta: number) {
     setBet((b) => ({
@@ -202,6 +206,7 @@ export function BettingPanel({
     if (!auth.getSession()) { bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login'); return; }
     if (canCashOut) { void doCashOut(); return; }
     if (canCancelQueue) { setBet((b) => ({ ...b, pendingNextRound: false })); return; }
+    if (canCancelQueueAfterCashout) { setBet((b) => ({ ...b, pendingNextRound: false })); return; }
     if (canCancel) { doCancel(); return; }
     if (isInsufficientBalance) { onInsufficientBalance?.(); return; }
     if (canPlace) {
@@ -219,7 +224,7 @@ export function BettingPanel({
       });
       return;
     }
-    if (canQueueNextRound) {
+    if (canQueueNextRound || canQueueAfterCashout) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
         return;
@@ -277,7 +282,7 @@ export function BettingPanel({
     );
     betShade = 'bg-aviator-orange hover:bg-aviator-orange-bright';
     betShadow = 'shadow-btn-orange';
-  } else if (canCancelQueue) {
+  } else if (canCancelQueue || canCancelQueueAfterCashout) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-xl font-extrabold tracking-wide">CANCEL</span>
@@ -290,16 +295,16 @@ export function BettingPanel({
     betLabel = 'CANCEL';
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
     betShadow = 'shadow-btn-red';
-  } else if (phase === 'flying' && bet.placed && bet.cashedOutAt !== null) {
-    betShade = 'bg-aviator-green/40';
-    betShadow = '';
-  } else if (canQueueNextRound) {
+  } else if (canQueueNextRound || canQueueAfterCashout) {
+    // Show green BET button — queues for next round
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
-        <span>BET</span>
+        <span className="text-xl font-extrabold tracking-wide">BET</span>
         <span className="text-xs opacity-80">Next round</span>
       </span>
     );
+    betShade = 'bg-aviator-green hover:bg-aviator-green-bright';
+    betShadow = 'shadow-btn-green';
   } else if (phase === 'crashed') {
     betShade = 'bg-ink-600 opacity-50';
     betShadow = '';
@@ -308,7 +313,15 @@ export function BettingPanel({
     betShadow = '';
   }
 
-  const isButtonDisabled = !canPlace && !canCashOut && !canCancel && !isInsufficientBalance && !canQueueNextRound && !canCancelQueue;
+  const isButtonDisabled =
+    !canPlace &&
+    !canCashOut &&
+    !canCancel &&
+    !isInsufficientBalance &&
+    !canQueueNextRound &&
+    !canCancelQueue &&
+    !canQueueAfterCashout &&
+    !canCancelQueueAfterCashout;
 
   return (
     <div className="flex flex-col gap-2.5 rounded-2xl bg-ink-700 border border-ink-500/60 p-3 select-none">
@@ -396,10 +409,8 @@ export function BettingPanel({
                 disabled={bet.placed}
                 onClick={() => {
                   if (lastQuickBet === value) {
-                    // Same chip — add to current amount
                     setAmount(bet.amount + value);
                   } else {
-                    // Different chip — set to that value
                     setLastQuickBet(value);
                     setAmount(value);
                   }
