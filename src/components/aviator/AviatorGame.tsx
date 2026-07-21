@@ -11,7 +11,7 @@ import { useBalance } from '../../lib/hooks';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
 import { auth } from '../../lib/auth';
-import { GameService } from '../../lib/game-service';
+import { GameService, type AviatorCashoutResult } from '../../lib/game-service';
 import { aviatorLoop } from '../../lib/persistentGameEngine';
 
 const PLAYER_NAME = 'You';
@@ -75,31 +75,28 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, [roundId]);
 
   /**
-   * Serialization queue — ensures server bet-place calls never run concurrently.
+   * Place-bet serialization queue.
    *
-   * Problem: When both panels call handlePlaceBet at the same moment, both
-   * hit Supabase in parallel. The server reads balance=1000 for both, subtracts
-   * 100 each, and both write balance=900 — effectively only one deduction happens.
+   * Problem: Both panels hit aviator_place_bet in parallel → server reads the
+   * same balance for both → only one deduction actually happens in Supabase.
    *
-   * Fix: Chain every server call onto a shared promise. The second call waits for
-   * the first to finish (and for Supabase to have committed the updated balance)
-   * before it starts. That way each call sees the correct reduced balance.
+   * Fix: Chain every server call. Panel 1 waits for Panel 0 to finish so
+   * Supabase has already committed the first deduction before the second read.
    */
   const placeBetQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   /**
-   * Called by BettingPanel when the player clicks BET.
+   * Cash-out serialization queue.
    *
-   * Returns { ok, betId } — betId is the server-assigned ID for this specific
-   * panel's bet. Each panel gets its OWN betId directly from the return value.
+   * Same race condition as place-bet, but at cashout time:
+   * Panel 0 and Panel 1 both call aviator_cashout simultaneously.
+   * Server reads old balance for both → one win gets overwritten.
    *
-   * Uses debitLocalOnly() to avoid double-deduction: the server also
-   * deducts from Supabase in aviator_place_bet.
-   *
-   * Server calls are serialized via placeBetQueueRef to prevent the race
-   * condition where two simultaneous Supabase writes both read the same
-   * balance and only subtract once.
+   * Fix: Same promise-chain pattern — Panel 1 waits for Panel 0's cashout
+   * to complete before hitting Supabase, so each balance_after is correct.
    */
+  const cashoutQueueRef = useRef<Promise<void>>(Promise.resolve());
+
   const handlePlaceBet = useCallback(async (amount: number): Promise<{ ok: boolean; betId: string | null }> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
@@ -111,7 +108,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       return { ok: false, betId: null };
     }
 
-    // Debit locally immediately so the UI shows the reduced balance at once
     const ok = store.debitLocalOnly(amount);
     if (!ok) return { ok: false, betId: null };
 
@@ -121,15 +117,11 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       return { ok: false, betId: null };
     }
 
-    // Serialize: wait for any in-flight place-bet to finish before hitting server.
-    // This prevents both panels from reading the same Supabase balance simultaneously
-    // and only deducting once.
     let resolveQueue!: () => void;
     const myTurn = new Promise<void>((res) => { resolveQueue = res; });
     const prevQueue = placeBetQueueRef.current;
     placeBetQueueRef.current = myTurn;
 
-    // Wait for previous bet to finish
     await prevQueue;
 
     try {
@@ -140,11 +132,40 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       );
       return { ok: true, betId: result.success ? (result.bet_id ?? null) : null };
     } catch {
-      // Server rejected — refund local debit
       store.credit(amount);
       return { ok: false, betId: null };
     } finally {
-      // Unblock the next queued bet (if any)
+      resolveQueue();
+    }
+  }, []);
+
+  /**
+   * Serialized server cashout — called by BettingPanel via onServerCashOut prop.
+   *
+   * Both panels share this single function. The cashoutQueueRef ensures they
+   * never run concurrently against Supabase, so both balance_after values are
+   * computed from the correct sequential balances.
+   */
+  const handleServerCashOut = useCallback(async (
+    amount: number,
+    placedAtMs: number,
+    at: number,
+    betId: string | null,
+  ): Promise<AviatorCashoutResult> => {
+    const session = auth.getSession();
+    if (!session) throw new Error('Not authenticated');
+
+    let resolveQueue!: () => void;
+    const myTurn = new Promise<void>((res) => { resolveQueue = res; });
+    const prevQueue = cashoutQueueRef.current;
+    cashoutQueueRef.current = myTurn;
+
+    // Wait for any concurrent cashout to finish first
+    await prevQueue;
+
+    try {
+      return await aviatorLoop.cashoutBet(amount, placedAtMs, at, betId);
+    } finally {
       resolveQueue();
     }
   }, []);
@@ -167,8 +188,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, [showCashoutNotice]);
 
   /**
-   * Balance is already updated server-side via store.setBalance(res.balance_after)
-   * inside doCashOut in BettingPanel. Do NOT call store.credit here.
+   * Balance is already set via store.setBalance(res.balance_after) inside
+   * BettingPanel's doCashOut. Do NOT call store.credit here.
    */
   const handleWin = useCallback((_win: number) => {
     // intentionally empty — balance synced from server in doCashOut
@@ -286,6 +307,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               balance={balance}
               onPlaceBet={handlePlaceBet}
               onCancelBet={(amount) => handleCancelBet(0, amount)}
+              onServerCashOut={handleServerCashOut}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
@@ -301,6 +323,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               balance={balance}
               onPlaceBet={handlePlaceBet}
               onCancelBet={(amount) => handleCancelBet(1, amount)}
+              onServerCashOut={handleServerCashOut}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
