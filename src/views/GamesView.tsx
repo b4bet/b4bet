@@ -3,6 +3,7 @@ import { Rocket, Bomb, Plane, Dices, Hash, Grid3X3, Sun, TrendingUp } from 'luci
 import { useGameLogos } from '../lib/hooks';
 import type { GameKey } from '../lib/gameLogos';
 import { startAviatorBackgroundMusic } from '../components/aviator/game/useGameAudio';
+import React from 'react';
 
 interface Props { onNavigate: (r: Route) => void; }
 
