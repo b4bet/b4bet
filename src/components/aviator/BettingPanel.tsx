@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import type { Phase } from './game/useAviatorGame';
 import { formatMoney } from './game/format';
@@ -56,9 +56,6 @@ interface BettingPanelProps {
   onTimeout?: () => void;
 }
 
-// Quick-bet buttons
-// First click on a chip → set amount to that value
-// Same chip clicked again → add that value to current amount
 const QUICK_ADDS: { label: string; value: number }[] = [
   { label: '200', value: 200 },
   { label: '500', value: 500 },
@@ -84,6 +81,10 @@ export function BettingPanel({
   const [amountInput, setAmountInput] = useState<string>(String(bet.amount));
   const [autoCashoutInput, setAutoCashoutInput] = useState<string>(String(bet.autoCashoutValue));
   const [lastQuickBet, setLastQuickBet] = useState<number | null>(null);
+
+  // Keep a ref to latest bet so async functions never use stale closure values
+  const betRef = useRef(bet);
+  betRef.current = bet;
 
   useEffect(() => { setAmountInput(String(bet.amount)); }, [bet.amount]);
   useEffect(() => { setAutoCashoutInput(String(bet.autoCashoutValue)); }, [bet.autoCashoutValue]);
@@ -118,16 +119,17 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  // Auto cash-out trigger — calls server-validated cashout.
+  // Auto cash-out trigger — uses betRef so never stale
   useEffect(() => {
+    const b = betRef.current;
     if (
-      bet.placed &&
-      bet.cashedOutAt === null &&
-      bet.autoCashoutEnabled &&
+      b.placed &&
+      b.cashedOutAt === null &&
+      b.autoCashoutEnabled &&
       phase === 'flying' &&
-      multiplier >= bet.autoCashoutValue
+      multiplier >= b.autoCashoutValue
     ) {
-      void doCashOut(bet.autoCashoutValue);
+      void doCashOut(b.autoCashoutValue);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multiplier, phase]);
@@ -157,20 +159,26 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  const canPlace = phase === 'waiting' && !bet.placed && bet.amount <= balance && countdown > 0;
-  const canCashOut = phase === 'flying' && bet.placed && bet.cashedOutAt === null;
-  const canCancel = phase === 'waiting' && bet.placed && bet.cashedOutAt === null;
+  // ── Derived states ────────────────────────────────────────────────────────
+  const canPlace    = phase === 'waiting' && !bet.placed && bet.amount <= balance && countdown > 0;
+  const canCashOut  = phase === 'flying'  && bet.placed  && bet.cashedOutAt === null;
+  const canCancel   = phase === 'waiting' && bet.placed  && bet.cashedOutAt === null;
   const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
-  // Queue for next round when not yet bet this round (no active bet, flying phase)
-  const canQueueNextRound = phase === 'flying' && !bet.placed && bet.cashedOutAt === null && !bet.pendingNextRound;
-  const canCancelQueue = phase === 'flying' && !bet.placed && bet.cashedOutAt === null && bet.pendingNextRound;
-  // Queue for next round AFTER cashing out mid-flight
-  const canQueueAfterCashout = phase === 'flying' && bet.cashedOutAt !== null && !bet.pendingNextRound;
-  const canCancelQueueAfterCashout = phase === 'flying' && bet.cashedOutAt !== null && bet.pendingNextRound;
-  // After crash — allow queuing for next round (green button, not disabled)
-  const canQueueAfterCrash = phase === 'crashed' && !bet.pendingNextRound;
-  const canCancelQueueAfterCrash = phase === 'crashed' && bet.pendingNextRound;
 
+  // "BET / Next round" — visible whenever there is no active cashout-able bet
+  // Covers: flying (never bet this round), flying (already cashed out), crashed phase
+  const canQueueNextRound =
+    (phase === 'flying' || phase === 'crashed') &&
+    !canCashOut &&
+    !bet.pendingNextRound;
+
+  // "CANCEL / Next round" — already queued, let user cancel
+  const canCancelQueue =
+    (phase === 'flying' || phase === 'crashed') &&
+    !canCashOut &&
+    bet.pendingNextRound;
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
   function adjustAmount(delta: number) {
     setBet((b) => ({
       ...b,
@@ -207,13 +215,20 @@ export function BettingPanel({
 
   function handleBetClick() {
     if (!auth.getSession()) { bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login'); return; }
+
+    // 1. Active bet during flight → CASH OUT (highest priority)
     if (canCashOut) { void doCashOut(); return; }
-    if (canCancelQueue || canCancelQueueAfterCashout || canCancelQueueAfterCrash) {
-      setBet((b) => ({ ...b, pendingNextRound: false }));
-      return;
-    }
+
+    // 2. Already queued → cancel queue
+    if (canCancelQueue) { setBet((b) => ({ ...b, pendingNextRound: false })); return; }
+
+    // 3. Waiting: cancel placed bet
     if (canCancel) { doCancel(); return; }
+
+    // 4. Waiting: insufficient balance notice
     if (isInsufficientBalance) { onInsufficientBalance?.(); return; }
+
+    // 5. Waiting: place bet now
     if (canPlace) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
@@ -229,7 +244,9 @@ export function BettingPanel({
       });
       return;
     }
-    if (canQueueNextRound || canQueueAfterCashout || canQueueAfterCrash) {
+
+    // 6. Flying/crashed without active bet → queue for next round
+    if (canQueueNextRound) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
         return;
@@ -248,19 +265,21 @@ export function BettingPanel({
 
   /**
    * Server-validated cash out.
-   * Passes bet_id (if known) so the server can find the bet directly by ID,
-   * eliminating the round_uuid race condition that caused intermittent errors.
+   * Uses betRef so it NEVER reads stale closure values even from async useEffect.
    */
   async function doCashOut(atOverride?: number) {
-    if (!canCashOut) return;
+    const b = betRef.current;
+    // Guard: only cash out if there is an active placed bet in flying phase
+    if (!(phase === 'flying' && b.placed && b.cashedOutAt === null)) return;
+
     const at = atOverride ?? multiplier;
-    setBet((b) => ({ ...b, cashedOutAt: at }));
+    setBet((prev) => ({ ...prev, cashedOutAt: at }));
 
     try {
-      const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs, at, bet.betId);
+      const res = await aviatorLoop.cashoutBet(b.amount, b.placedAtMs, at, b.betId);
       if (res.won && res.win > 0) {
         store.setBalance(res.balance_after);
-        onCashOut(bet.amount, res.cashout_at ?? at);
+        onCashOut(b.amount, res.cashout_at ?? at);
         onWin(res.win);
       } else {
         if (res.crash_point !== null) {
@@ -287,7 +306,7 @@ export function BettingPanel({
     );
     betShade = 'bg-aviator-orange hover:bg-aviator-orange-bright';
     betShadow = 'shadow-btn-orange';
-  } else if (canCancelQueue || canCancelQueueAfterCashout || canCancelQueueAfterCrash) {
+  } else if (canCancelQueue) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-xl font-extrabold tracking-wide">CANCEL</span>
@@ -300,18 +319,16 @@ export function BettingPanel({
     betLabel = 'CANCEL';
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
     betShadow = 'shadow-btn-red';
-  } else if (canQueueNextRound || canQueueAfterCashout || canQueueAfterCrash) {
-    // Green BET button — queues for next round (fly away / after cashout / after crash)
+  } else if (canQueueNextRound) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-xl font-extrabold tracking-wide">BET</span>
         <span className="text-xs opacity-80">Next round</span>
       </span>
     );
-    betShade = 'bg-aviator-green hover:bg-aviator-green-bright';
-    betShadow = 'shadow-btn-green';
+    // green — already set as default
   }
-  // Default: waiting phase green BET — already set above
+  // canPlace: default green BET — already set
 
   const isButtonDisabled =
     !canPlace &&
@@ -319,11 +336,7 @@ export function BettingPanel({
     !canCancel &&
     !isInsufficientBalance &&
     !canQueueNextRound &&
-    !canCancelQueue &&
-    !canQueueAfterCashout &&
-    !canCancelQueueAfterCashout &&
-    !canQueueAfterCrash &&
-    !canCancelQueueAfterCrash;
+    !canCancelQueue;
 
   return (
     <div className="flex flex-col gap-2.5 rounded-2xl bg-ink-700 border border-ink-500/60 p-3 select-none">
