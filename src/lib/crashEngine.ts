@@ -6,6 +6,7 @@
 import { bus, Topics } from './bus';
 import { store } from './store';
 import { GameService } from './game-service';
+import type { CrashRoundDetail } from './game-service';
 import { auth } from './auth';
 
 import { sfx, startHum, updateHum, stopHum } from './crashAudio';
@@ -46,6 +47,8 @@ interface EngineState {
   roundSeq: number;
   bustPoint: number;
   history: number[];
+  // Full provably-fair detail for the feed popup
+  historyDetail: CrashRoundDetail[];
   bets: { A: BetSlot; B: BetSlot };
   startedAt: number;
   win: number | null;
@@ -54,9 +57,6 @@ interface EngineState {
 }
 
 const POLL_MS = 300;
-// SessionStorage key — survives page refresh within the same browser tab.
-// We store the last known round_uuid so that on refresh the first poll does
-// NOT incorrectly treat the current (unchanged) round as a "new" round.
 const SESSION_ROUND_KEY = 'b4bet.crash.lastRoundId';
 const SESSION_PHASE_KEY = 'b4bet.crash.lastPhase';
 
@@ -86,7 +86,7 @@ class CrashEngine {
   private state: EngineState = {
     phase: 'countdown', multiplier: 1.0, countdown: 6,
     roundId: '', roundSeq: 0,
-    bustPoint: 0, history: [],
+    bustPoint: 0, history: [], historyDetail: [],
     bets: { A: freshBet('A'), B: freshBet('B') },
     startedAt: Date.now(), win: null,
     serverElapsedAtConnect: 0, connectTime: Date.now(),
@@ -94,7 +94,6 @@ class CrashEngine {
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private rafId: number = 0;
-  // Restored from sessionStorage so refresh doesn't look like a new round
   private lastKnownRoundId: string = sessionStorage.getItem(SESSION_ROUND_KEY) ?? '';
   private lastKnownPhase: 'waiting' | 'flying' | 'crashed' | '' =
     (sessionStorage.getItem(SESSION_PHASE_KEY) as 'waiting' | 'flying' | 'crashed' | '') ?? '';
@@ -119,13 +118,21 @@ class CrashEngine {
     try {
       const r = await GameService.crashGetHistory();
       if (r.history && r.history.length > 0) {
-        this.state.history = r.history;
+        // Store full detail for feed popup
+        this.state.historyDetail = r.history;
+        // Extract bust_point numbers for the history bar
+        this.state.history = r.history.map((d) => d.bust_point);
         this.publishHistory();
         this.publish();
       }
     } catch (err) {
       console.warn('[CrashEngine] loadHistory failed:', (err as Error)?.message ?? err);
     }
+  }
+
+  /** Called by CrashFeedPopup to get full provably-fair history */
+  getHistoryDetail(): CrashRoundDetail[] {
+    return [...this.state.historyDetail];
   }
 
   private async poll() {
@@ -136,7 +143,6 @@ class CrashEngine {
 
       if (newRound) {
         this.lastKnownRoundId = r.round_uuid ?? '';
-        // Persist so next refresh doesn't re-trigger this
         try { sessionStorage.setItem(SESSION_ROUND_KEY, this.lastKnownRoundId); } catch { /* ignore */ }
         this.state.bets = { A: freshBet('A'), B: freshBet('B') };
         this.state.win = null;
@@ -168,16 +174,12 @@ class CrashEngine {
       }
 
       if (r.phase === 'flying') {
-        // On refresh into a mid-flight round: prevPhase restored from sessionStorage
-        // will already be 'flying', so we skip the re-init and just sync time.
         if (prevPhase !== 'flying') {
           this.state.phase = 'flying';
           this.state.serverElapsedAtConnect = r.elapsed_ms;
           this.state.connectTime = Date.now();
-          // Sync multiplier to server elapsed so animation starts from correct position
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.bustPoint = 0;
-          // Don't play start sound on refresh — only on genuine new round start
           if (!this.didPlayStart && !this.lastKnownRoundId) {
             playStartSound();
             this.didPlayStart = true;
@@ -297,31 +299,30 @@ class CrashEngine {
     return { ok: true };
   }
 
-  setAutoCashAt(id: 'A' | 'B', at: number | null) { this.state.bets[id].autoCashAt = at; this.broadcastBets(); }
-
-  setAuto(id: 'A' | 'B', enabled: boolean, target: number) {
-    this.state.bets[id].autoCashAt = enabled ? Math.max(1.01, target) : null;
-    this.broadcastBets();
+  setAutoCashAt(id: 'A' | 'B', at: number | null) {
+    this.state.bets[id].autoCashAt = at;
   }
 
   cashOut(id: 'A' | 'B'): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
-    if (this.state.phase !== 'flying') return { ok: false, reason: 'Round not in flight' };
-    if (!slot.placed || slot.cashedOutAt !== null) return { ok: false, reason: 'Cannot cash out' };
+    if (this.state.phase !== 'flying') return { ok: false, reason: 'Not in flight' };
+    if (!slot.placed) return { ok: false, reason: 'No bet placed' };
+    if (slot.cashedOut) return { ok: false, reason: 'Already cashed out' };
     this.performCashOut(id, this.state.multiplier);
     return { ok: true };
   }
 
-  getBets(): Record<'A' | 'B', BetSlot> {
-    return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
-  }
-
   getState(): CrashState {
-    const { phase, multiplier, countdown, roundId, roundSeq, bustPoint, history, startedAt } = this.state;
     return {
-      phase, multiplier, countdown, roundId, roundSeq, bustPoint, history,
+      phase: this.state.phase,
+      multiplier: this.state.multiplier,
+      countdown: this.state.countdown,
+      roundId: this.state.roundId,
+      roundSeq: this.state.roundSeq,
+      bustPoint: this.state.bustPoint,
+      history: [...this.state.history],
       bets: { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } },
-      startedAt,
+      startedAt: this.state.startedAt,
     };
   }
 }
