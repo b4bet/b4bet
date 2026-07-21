@@ -45,6 +45,10 @@ export interface AviatorCurrentRoundResult {
   last_crash_point: number | null;
 }
 
+export interface AviatorHistoryResult {
+  history: number[];
+}
+
 export interface CrashBustResult { bust_point: number; }
 export interface CrashSettleResult { success: boolean; win: number; verified_bust: number | null; balance_after: number; }
 export interface MinesStartResult { success: boolean; session_id: string; balance_after: number; grid_size: number; mine_count: number; }
@@ -166,6 +170,23 @@ export const GameService = {
       crash_point:      d.crash_point      != null ? Number(d.crash_point)      : null,
       last_crash_point: d.last_crash_point != null ? Number(d.last_crash_point) : null,
     };
+  },
+
+  /**
+   * Fetch the last 20 completed Aviator rounds for history bar pre-fill.
+   * Used on startup so new users see history immediately without waiting
+   * for a live crash to occur.
+   */
+  async aviatorGetHistory(): Promise<AviatorHistoryResult> {
+    const { data } = await supabase
+      .from('aviator_rounds')
+      .select('bust_point')
+      .order('created_at', { ascending: false })
+      .limit(20);
+    const history = (data ?? []).map((r: { bust_point: number | string }) =>
+      parseFloat(String(r.bust_point))
+    );
+    return { history };
   },
 
   aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {

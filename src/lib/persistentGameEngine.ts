@@ -274,6 +274,17 @@ class FiveDLoop extends BaseLoop<number[]> {
 //   • When the server returns phase='crashed', the loop snaps to the real
 //     crash_point and queues the hold period — no more 200x fallback.
 //
+// MULTIPLIER FORMULA:
+//   m = e^(0.12 * t_seconds)  — MUST match the Postgres RPC formula:
+//     exp(0.12 * (elapsed_ms / 1000)) >= crash_point
+//   Using a different coefficient causes the displayed value to diverge from
+//   the actual crash point (e.g. client showed ~6.5x when crash_point was 5x).
+//
+// HISTORY PRE-FILL:
+//   On first server sync the engine fetches the last 20 completed rounds from
+//   aviator_rounds so new users see the history bar immediately — not "No
+//   rounds yet" until they watch a live crash.
+//
 // SECURITY:
 //   • crash_point is NEVER returned by the server while phase='flying'.
 //   • During flight, devtools will show crash_point: null — the real value
@@ -295,10 +306,23 @@ const AV_WAIT_MS = 6_000;
 const AV_CRASH_HOLD_MS = 3_000;
 const AV_MAX_MULTIPLIER = 200;
 const AV_POLL_INTERVAL_MS = 300;
+// Number of recent rounds shown in the history bar.
+const AV_HISTORY_CAP = 20;
 
+/**
+ * Multiplier at a given elapsed time in milliseconds.
+ *
+ * Formula: m = e^(0.12 * t)
+ *
+ * This MUST match the server-side Postgres RPC (aviator_get_current_round):
+ *   exp(0.12 * (v_elapsed_ms / 1000)) >= v_crash_pt
+ *
+ * Previously this used 0.14 which caused the displayed multiplier to exceed
+ * the admin-set manual crash point before the crash fired.
+ */
 function aviatorMultiplierAt(msElapsed: number): number {
   const t = msElapsed / 1000;
-  return Math.max(1.0, Math.floor(Math.pow(Math.E, 0.14 * t) * 100) / 100);
+  return Math.max(1.0, Math.floor(Math.pow(Math.E, 0.12 * t) * 100) / 100);
 }
 
 class AviatorLoop {
@@ -331,6 +355,21 @@ class AviatorLoop {
     try {
       const res = await GameService.aviatorGetCurrentRound();
       this.applyServerState(res);
+
+      // On first successful sync, pre-fill history from the last 20 completed
+      // rounds so new users see the history bar immediately without waiting for
+      // a live crash to occur in front of them.
+      if (!this.bootstrapped) {
+        this.bootstrapped = true;
+        try {
+          const histRes = await GameService.aviatorGetHistory();
+          if (histRes.history.length > 0 && this.history.length === 0) {
+            this.history = histRes.history.slice(0, AV_HISTORY_CAP);
+          }
+        } catch {
+          // Non-fatal — history bar will populate as rounds complete.
+        }
+      }
     } catch {
       // Non-fatal — keep running from local state until next poll.
     }
@@ -382,7 +421,7 @@ class AviatorLoop {
         // Crash hold ended on server — advance local round.
         const cp = res.last_crash_point;
         if (cp !== null && cp !== undefined && cp !== this.lastCrash) {
-          this.history = [cp, ...this.history].slice(0, 18);
+          this.history = [cp, ...this.history].slice(0, AV_HISTORY_CAP);
           this.lastCrash = cp;
         }
         this.phase = 'waiting';
@@ -483,7 +522,7 @@ class AviatorLoop {
     this.multiplier = crashAt;
     this.lastCrash = crashAt;
     this.crashPoint = crashAt;
-    this.history = [crashAt, ...this.history].slice(0, 18);
+    this.history = [crashAt, ...this.history].slice(0, AV_HISTORY_CAP);
     bus.emit('engine:aviator:state', this.getState());
   }
 
