@@ -53,7 +53,6 @@ export default function App() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
 
-  // Session persistence
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
       if (event === 'SIGNED_OUT') auth.logout();
@@ -100,8 +99,8 @@ export default function App() {
         />
       )}
 
-      {/* pt-[70px] matches new header height */}
-      <div className={showHeader ? 'pb-16 pt-[70px]' : ''}>
+      {/* pt-[62px] matches new header height */}
+      <div className={showHeader ? 'pb-16 pt-[62px]' : ''}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView onNavigate={navigate} />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
