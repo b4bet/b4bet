@@ -37,6 +37,14 @@ export interface CrashHistoryDetailResult {
   history: CrashRoundDetail[];
 }
 
+export interface AviatorCurrentRoundResult {
+  round_uuid: string;
+  phase: 'waiting' | 'flying' | 'crashed';
+  elapsed_ms: number;
+  crash_point: number | null;
+  last_crash_point: number | null;
+}
+
 export interface CrashBustResult { bust_point: number; }
 export interface CrashSettleResult { success: boolean; win: number; verified_bust: number | null; balance_after: number; }
 export interface MinesStartResult { success: boolean; session_id: string; balance_after: number; grid_size: number; mine_count: number; }
@@ -144,6 +152,60 @@ export const GameService = {
     });
   },
 
+  // ── Aviator ────────────────────────────────────────────────────────────────
+
+  /** Poll every 300ms — mirrors crash_get_current_round for the aviator table */
+  async aviatorGetCurrentRound(): Promise<AviatorCurrentRoundResult> {
+    const { data, error } = await supabase.rpc('aviator_get_current_round');
+    if (error) throw new Error(error.message);
+    const d = data as AviatorCurrentRoundResult;
+    return {
+      round_uuid:       d.round_uuid       ?? '',
+      phase:            (d.phase           ?? 'waiting') as AviatorCurrentRoundResult['phase'],
+      elapsed_ms:       Number(d.elapsed_ms ?? 0),
+      crash_point:      d.crash_point      != null ? Number(d.crash_point)      : null,
+      last_crash_point: d.last_crash_point != null ? Number(d.last_crash_point) : null,
+    };
+  },
+
+  aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
+    return post<AviatorRoundStartResult>({
+      game_type: "aviator_round_start",
+      user_id: userId,
+      round_id: roundId,
+    });
+  },
+
+  aviatorCashout(
+    userId: string,
+    roundUuid: string | null,
+    roundId: number,
+    betAmount: number,
+    placedAtMs: number,
+  ): Promise<AviatorCashoutResult> {
+    return post<AviatorCashoutResult>({
+      game_type: "aviator_cashout",
+      user_id: userId,
+      round_uuid: roundUuid,
+      round_id: roundId,
+      bet_amount: betAmount,
+      placed_at_ms: placedAtMs,
+    });
+  },
+
+  aviatorSettle(userId: string, roundId: number, betAmount: number): Promise<AviatorSettleResult> {
+    return post<AviatorSettleResult>({
+      game_type: "aviator_settle",
+      user_id: userId,
+      round_id: roundId,
+      bet_amount: betAmount,
+    });
+  },
+
+  aviatorRoundStatus(roundId: number): Promise<AviatorRoundStatusResult> {
+    return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: String(roundId) });
+  },
+
   // ── Mines ──────────────────────────────────────────────────────────────────
   minesStart(userId: string, mineCount: number, stake: number): Promise<MinesStartResult> {
     return post<MinesStartResult>({ game_type: "mines_start", user_id: userId, mine_count: mineCount, stake });
@@ -186,42 +248,5 @@ export const GameService = {
       exit_price: exitPrice,
       payout_pct: payoutPct,
     });
-  },
-
-  // ── Aviator ────────────────────────────────────────────────────────────────
-  aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
-    return post<AviatorRoundStartResult>({
-      game_type: "aviator_round_start",
-      user_id: userId,
-      round_id: roundId,
-    });
-  },
-
-  aviatorCashout(
-    userId: string,
-    roundId: number,
-    betAmount: number,
-    placedAtMs: number,
-  ): Promise<AviatorCashoutResult> {
-    return post<AviatorCashoutResult>({
-      game_type: "aviator_cashout",
-      user_id: userId,
-      round_id: roundId,
-      bet_amount: betAmount,
-      placed_at_ms: placedAtMs,
-    });
-  },
-
-  aviatorSettle(userId: string, roundId: number, betAmount: number): Promise<AviatorSettleResult> {
-    return post<AviatorSettleResult>({
-      game_type: "aviator_settle",
-      user_id: userId,
-      round_id: roundId,
-      bet_amount: betAmount,
-    });
-  },
-
-  aviatorRoundStatus(roundId: number): Promise<AviatorRoundStatusResult> {
-    return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: String(roundId) });
   },
 };
