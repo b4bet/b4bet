@@ -47,7 +47,6 @@ interface EngineState {
   roundSeq: number;
   bustPoint: number;
   history: number[];
-  // Full provably-fair detail for the feed popup
   historyDetail: CrashRoundDetail[];
   bets: { A: BetSlot; B: BetSlot };
   startedAt: number;
@@ -118,9 +117,7 @@ class CrashEngine {
     try {
       const r = await GameService.crashGetHistory();
       if (r.history && r.history.length > 0) {
-        // Store full detail for feed popup
         this.state.historyDetail = r.history;
-        // Extract bust_point numbers for the history bar
         this.state.history = r.history.map((d) => d.bust_point);
         this.publishHistory();
         this.publish();
@@ -130,7 +127,7 @@ class CrashEngine {
     }
   }
 
-  /** Called by CrashFeedPopup to get full provably-fair history */
+  /** Full provably-fair detail for CrashFeedPopup */
   getHistoryDetail(): CrashRoundDetail[] {
     return [...this.state.historyDetail];
   }
@@ -310,6 +307,11 @@ class CrashEngine {
     if (slot.cashedOut) return { ok: false, reason: 'Already cashed out' };
     this.performCashOut(id, this.state.multiplier);
     return { ok: true };
+  }
+
+  /** Used by useCrashBets() hook */
+  getBets(): Record<'A' | 'B', BetSlot> {
+    return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
   }
 
   getState(): CrashState {
