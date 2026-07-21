@@ -67,7 +67,6 @@ function useSupabaseMinesHistory() {
     let cancelled = false;
 
     async function fetchHistory() {
-      // Wait until user is logged in
       const localSession = auth.getSession();
       if (!localSession?.userId) {
         if (!cancelled) { setRows([]); setError(null); }
@@ -78,8 +77,6 @@ function useSupabaseMinesHistory() {
       setError(null);
 
       try {
-        // Use the RPC function which runs as SECURITY DEFINER with auth.uid()
-        // This bypasses any header/JWT issues with the anon client.
         const { data, error: rpcError } = await supabase.rpc('get_my_mines_bets');
 
         if (rpcError) {
@@ -101,7 +98,6 @@ function useSupabaseMinesHistory() {
     return () => { cancelled = true; };
   }, [refreshKey]);
 
-  // Re-fetch when user logs in or out
   useEffect(() => {
     const unsub = bus.on(Topics.AuthState, () => setRefreshKey((k) => k + 1));
     return unsub;
@@ -268,7 +264,8 @@ export default function MinesView() {
 
   return (
     <div className="space-y-4 animate-fade-in">
-      <div className="flex items-center gap-2">
+      {/* pt-4 gives breathing room from the main app header */}
+      <div className="flex items-center gap-2 pt-4">
         <div className="w-9 h-9 rounded-xl bg-coral-500/20 border border-coral-500/40 grid place-items-center">
           <Bomb className="w-5 h-5 text-coral-400" />
         </div>
@@ -381,7 +378,6 @@ function MinesHistoryPanel({
 
   return (
     <div className="panel p-0 overflow-hidden">
-      {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-borderline-900">
         <span className="text-xs font-semibold text-coral-300">My History</span>
         <button
@@ -405,7 +401,6 @@ function MinesHistoryPanel({
           <p className="text-xs text-slate-600 text-center py-4">No rounds yet. Play to build your history.</p>
         ) : (
           <>
-            {/* Fixed column headers */}
             <div className="grid grid-cols-[1.8rem_1.6rem_3.2rem_1fr_1fr] gap-x-2 pb-1 mb-1 border-b border-borderline-900 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
               <span>💣</span>
               <span>💎</span>
@@ -439,7 +434,6 @@ function MinesHistoryPanel({
               })}
             </div>
 
-            {/* Summary footer */}
             <div className="mt-2 pt-2 border-t border-borderline-900 flex items-center justify-between text-[10px] text-slate-500">
               <span>{rows.length} rounds</span>
               <span>
