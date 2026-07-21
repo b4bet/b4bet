@@ -140,8 +140,8 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
   return (
     <div className="flex flex-col h-full w-full bg-slatepanel-950 select-none">
 
-      {/* ── Top header row ── */}
-      <div className="flex items-center justify-between px-3 pt-2 pb-1 flex-shrink-0">
+      {/* ── Top header row — pt-5 gives breathing room from main app header ── */}
+      <div className="flex items-center justify-between px-3 pt-5 pb-1 flex-shrink-0">
 
         {/* Left: JetX brand name */}
         <div className="flex items-center gap-2 min-w-0">
@@ -152,12 +152,10 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
 
         {/* Right: Balance + Provably Fair + Settings */}
         <div className="flex items-center gap-1.5 flex-shrink-0">
-          {/* Balance — compact, no label */}
           <div className="px-2 py-1 rounded-lg bg-slatepanel-800 border border-borderline-900">
             <span className="text-xs font-bold text-white tabular-nums">{displayBalance}</span>
           </div>
 
-          {/* Provably Fair badge */}
           <button
             className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emeraldwin-500/10 border border-emeraldwin-500/30 cursor-default"
             aria-label="Provably fair"
