@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { bus, Topics } from '../lib/bus';
 import { store } from '../lib/store';
 import { useBalance, useNotifications } from '../lib/hooks';
-import { useLogo, useTextLogo, useHasUnreadAgentMessage } from '../lib/cmsHooks';
+import { useLogo, useTextLogo, useHasUnreadAgentMessage, useFavicon } from '../lib/cmsHooks';
 import { Bell, ChevronLeft, AlertCircle, X, LogIn, UserPlus, ArrowDownCircle, Menu } from 'lucide-react';
 import { auth } from '../lib/auth';
 import type { AuthSession } from '../lib/auth';
@@ -67,6 +67,20 @@ function InsufficientBalancePopup({ visible, onClose }: { visible: boolean; onCl
   );
 }
 
+// Dynamically updates the browser tab favicon from admin-uploaded URL
+function useDynamicFavicon(faviconUrl: string | null) {
+  useEffect(() => {
+    if (!faviconUrl) return;
+    let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = faviconUrl;
+  }, [faviconUrl]);
+}
+
 export default function Header({
   onOpenNotifications,
   onOpenWallet,
@@ -84,11 +98,15 @@ export default function Header({
   const notifications = useNotifications();
   const logo = useLogo();
   const textLogo = useTextLogo();
+  const favicon = useFavicon();
   const unread = notifications.filter((n) => !n.read).length;
   const hasUnreadChat = useHasUnreadAgentMessage();
   const [pulse, setPulse] = useState(false);
   const [showInsufficientBal, setShowInsufficientBal] = useState(false);
   const [session, setSession] = useState<AuthSession | null>(auth.getSession());
+
+  // Swap favicon dynamically when admin uploads one
+  useDynamicFavicon(favicon ?? null);
 
   useEffect(() => {
     const off = bus.on(Topics.Balance, () => { setPulse(true); setTimeout(() => setPulse(false), 400); });
@@ -109,26 +127,29 @@ export default function Header({
 
   return (
     <>
-      <header className="fixed top-0 left-0 right-0 z-30 bg-midnight-900/95 backdrop-blur border-b border-borderline-900" style={{ height: '56px' }}>
-        <div className="flex items-center gap-2 h-full px-3">
-          {/* Hamburger — ALWAYS visible (guest + logged in) */}
-          <button onClick={onOpenWallet} className="relative w-9 h-9 rounded-xl grid place-items-center hover:bg-slatepanel-800 transition-colors">
-            <Menu className="w-5 h-5 text-slate-300" />
-            {hasUnreadChat && isLoggedIn && (
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-coral-500 rounded-full" />
-            )}
-          </button>
+      {/* Header height 70px to fit 60px logo */}
+      <header className="fixed top-0 left-0 right-0 z-30 bg-midnight-900/95 backdrop-blur border-b border-borderline-900" style={{ height: '70px' }}>
+        <div className="flex items-center gap-3 h-full px-3">
 
-          {/* Logo */}
+          {/* LEFT: Hamburger + Logo together */}
           <div className="flex items-center gap-2">
+            <button onClick={onOpenWallet} className="relative w-9 h-9 rounded-xl grid place-items-center hover:bg-slatepanel-800 transition-colors shrink-0">
+              <Menu className="w-5 h-5 text-slate-300" />
+              {hasUnreadChat && isLoggedIn && (
+                <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-coral-500 rounded-full" />
+              )}
+            </button>
+
             {logo ? (
               <img src={logo} alt="logo" style={{ height: '60px', width: 'auto', maxWidth: '66px', objectFit: 'contain' }} />
             ) : (
-              <div className="rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center" style={{ width: '60px', height: '60px' }}>
+              <div className="rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center shrink-0" style={{ width: '60px', height: '60px' }}>
                 <span className="text-white font-black text-base">M</span>
               </div>
             )}
+
             {textLogo && <img src={textLogo} alt="" className="h-7 w-auto max-w-[110px] object-contain" />}
+
             {onBack && (
               <button onClick={onBack} className="flex items-center gap-1 text-slate-400 hover:text-white text-xs ml-1">
                 <ChevronLeft className="w-4 h-4" /> Back
@@ -138,7 +159,7 @@ export default function Header({
 
           <div className="flex-1" />
 
-          {/* Right cluster */}
+          {/* RIGHT cluster */}
           <div className="flex items-center gap-1.5">
             {isLoggedIn ? (
               <>
