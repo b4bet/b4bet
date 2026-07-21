@@ -33,6 +33,10 @@ const CRASH_CRASH_HOLD_MS = 3_000;  // 3s show crash result
 const AV_WAIT_MS          = 6_000;
 const AV_CRASH_HOLD_MS    = 3_000;
 const AV_CASHOUT_GRACE_MS = 800;
+// Grace window: bets that arrive up to this many ms after flying starts are
+// still accepted. Handles the common race where the player places a bet at
+// the last second but network latency pushes the request past the transition.
+const AV_BET_LATE_GRACE_MS = 1_500;
 
 // Flight duration: how long the plane flies before hitting crash_point
 // Uses same formula as client: m = e^(0.12*t)  =>  t = ln(m)/0.12
@@ -364,19 +368,36 @@ Deno.serve(async (req: Request) => {
     // ====================================================================
     // AVIATOR: Place bet
     //
-    // FIX: The bets table has round_id FK → game_rounds(id). Aviator does
-    // NOT use game_rounds, so we must set round_id = NULL and store the
-    // aviator round UUID only in bet_details.round_uuid. This prevents an
-    // FK violation that silently blocked the insert, causing bets to be
-    // missing at cashout time → "Bet not found" → cashout error.
+    // FIX (round_id): The bets table has round_id FK → game_rounds(id).
+    // Aviator does NOT use game_rounds, so we must set round_id = NULL and
+    // store the aviator round UUID only in bet_details.round_uuid. This
+    // prevents an FK violation that silently blocked the insert, causing
+    // bets to be missing at cashout time → "Bet not found" → cashout error.
+    //
+    // FIX (late-bet grace): Players who place a bet in the last ~1s of the
+    // waiting window sometimes see "Round not accepting bets" because their
+    // request arrives at the server a few hundred ms after the phase
+    // transitions to "flying" due to network latency. We now accept bets
+    // for up to AV_BET_LATE_GRACE_MS (1500ms) after flying starts so these
+    // late-arriving bets are still stored and can be cashed out normally.
     // ====================================================================
     if (action === "aviator_place_bet") {
       const { user_id, bet_amount, round_uuid } = body;
       if (!user_id || !bet_amount || (bet_amount as number) <= 0) return json({ error: "Invalid bet" }, 400);
       const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
       if (!profile || profile.balance < (bet_amount as number)) return json({ error: "Insufficient balance" }, 400);
-      const { data: round } = await supabase.from("aviator_current_round").select("round_uuid, phase").eq("id", 1).single();
-      if (!round || round.phase !== "waiting") return json({ error: "Round not accepting bets" }, 400);
+      const { data: round } = await supabase.from("aviator_current_round").select("round_uuid, phase, phase_started_at").eq("id", 1).single();
+
+      // Accept bets during waiting phase OR during the early grace window of flying
+      // (handles race where bet is placed in last second of countdown but arrives
+      // at server just after the phase flips to "flying" due to network latency).
+      const roundElapsed = round ? Date.now() - new Date(round.phase_started_at).getTime() : Infinity;
+      const isAcceptingBets = round && (
+        round.phase === "waiting" ||
+        (round.phase === "flying" && roundElapsed <= AV_BET_LATE_GRACE_MS)
+      );
+      if (!isAcceptingBets) return json({ error: "Round not accepting bets" }, 400);
+
       await supabase.from("profiles").update({ balance: profile.balance - (bet_amount as number) }).eq("id", user_id);
       const { data: gameRow } = await supabase.from("games").select("id").eq("slug", "aviator").single();
       const activeUuid = round_uuid ?? round.round_uuid;
