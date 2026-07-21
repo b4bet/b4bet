@@ -16,15 +16,15 @@ export interface CrashCurrentRoundResult {
   round_uuid: string;
   phase: 'waiting' | 'flying' | 'crashed';
   elapsed_ms: number;
-  crash_point: number | null;       // only non-null when phase === 'crashed'
-  last_crash_point: number | null;  // bust point of the previous completed round
+  crash_point: number | null;
+  last_crash_point: number | null;
 }
 
 export interface CrashHistoryResult {
   history: number[];
 }
 
-/** Full round detail for provably fair verification panel */
+/** Full round detail used by CrashFeedPopup for provably fair verification */
 export interface CrashRoundDetail {
   bust_point: number;
   round_uuid: string;
@@ -97,11 +97,7 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
 export const GameService = {
   // ── Crash ──────────────────────────────────────────────────────────────────
 
-  /**
-   * Get current round state. Called every 300ms by the crash engine.
-   * Uses crash_get_current_round() Postgres RPC which handles all phase
-   * transitions (waiting→flying→crashed→waiting) server-side.
-   */
+  /** Poll every 300ms — DB function handles all phase transitions server-side */
   async crashGetCurrentRound(): Promise<CrashCurrentRoundResult> {
     const { data, error } = await supabase.rpc('crash_get_current_round');
     if (error) throw new Error(error.message);
@@ -115,9 +111,7 @@ export const GameService = {
     };
   },
 
-  /**
-   * Get last 20 completed rounds (bust points only) for the history bar.
-   */
+  /** Last 20 bust points for history bar */
   async crashGetHistory(): Promise<CrashHistoryResult> {
     const { data, error } = await supabase.rpc('crash_get_history');
     if (error) throw new Error(error.message);
@@ -125,10 +119,7 @@ export const GameService = {
     return { history: d?.history ?? [] };
   },
 
-  /**
-   * Get last 20 completed rounds with server_seed + hash for the
-   * provably fair verification panel (CrashFeedPopup).
-   */
+  /** Last 20 rounds with seeds for provably fair panel */
   async crashGetHistoryDetail(): Promise<CrashHistoryDetailResult> {
     const { data, error } = await supabase.rpc('crash_get_history_detail');
     if (error) throw new Error(error.message);
