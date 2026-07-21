@@ -20,8 +20,6 @@ export interface BetState {
   roundId: number;
   /** Timestamp (ms) when the bet was placed — sent to server for timing validation */
   placedAtMs: number;
-  /** Server-assigned bet ID returned by aviator_place_bet. Used for direct cashout lookup. */
-  betId: string | null;
 }
 
 export function createInitialBet(roundId: number): BetState {
@@ -36,7 +34,6 @@ export function createInitialBet(roundId: number): BetState {
     pendingNextRound: false,
     roundId,
     placedAtMs: 0,
-    betId: null,
   };
 }
 
@@ -48,7 +45,7 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
-  onPlaceBet: (amount: number) => Promise<boolean>;
+  onPlaceBet: (amount: number) => boolean;
   onCancelBet: (amount: number) => void;
   onCashOut: (amount: number, at: number) => void;
   onWin: (amount: number) => void;
@@ -92,7 +89,7 @@ export function BettingPanel({
   useEffect(() => {
     if (bet.roundId !== roundId) {
       setBet((b) => {
-        const nextRound = { ...b, roundId, placed: false, cashedOutAt: null, pendingNextRound: false, betId: null };
+        const nextRound = { ...b, roundId, placed: false, cashedOutAt: null, pendingNextRound: false };
         const shouldPlace = b.autoBetEnabled || b.pendingNextRound;
         if (shouldPlace) {
           if (b.amount < limits.min || b.amount > limits.max) {
@@ -100,14 +97,15 @@ export function BettingPanel({
             nextRound.pendingNextRound = false;
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
-            void onPlaceBet(b.amount).then((ok) => {
-              if (!ok) {
-                setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
-                onInsufficientBalance?.();
-              }
-            });
-            nextRound.placed = true;
-            nextRound.placedAtMs = Date.now();
+            const ok = onPlaceBet(b.amount);
+            if (ok) {
+              nextRound.placed = true;
+              nextRound.placedAtMs = Date.now();
+            } else {
+              nextRound.autoBetEnabled = false;
+              nextRound.pendingNextRound = false;
+              onInsufficientBalance?.();
+            }
           }
         }
         return nextRound;
@@ -150,7 +148,7 @@ export function BettingPanel({
             .catch(() => { /* non-fatal */ });
         });
       }
-      setBet((b) => ({ ...b, placed: false, betId: null }));
+      setBet((b) => ({ ...b, placed: false }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
@@ -181,13 +179,10 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
-        void onPlaceBet(bet.amount).then((ok) => {
-          if (ok) {
-            setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
-          } else {
-            onInsufficientBalance?.();
-          }
-        });
+        const ok = onPlaceBet(bet.amount);
+        if (ok) {
+          setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
+        } else { onInsufficientBalance?.(); }
       } else {
         setBet((b) => ({ ...b, autoBetEnabled: true }));
       }
@@ -208,13 +203,10 @@ export function BettingPanel({
         return;
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
-      void onPlaceBet(bet.amount).then((ok) => {
-        if (ok) {
-          setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
-        } else {
-          onInsufficientBalance?.();
-        }
-      });
+      const ok = onPlaceBet(bet.amount);
+      if (ok) {
+        setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
+      } else { onInsufficientBalance?.(); }
       return;
     }
     if (canQueueNextRound) {
@@ -230,22 +222,18 @@ export function BettingPanel({
   function doCancel() {
     if (!canCancel) return;
     const amt = bet.amount;
-    setBet((b) => ({ ...b, placed: false, betId: null }));
+    setBet((b) => ({ ...b, placed: false }));
     onCancelBet(amt);
   }
 
-  /**
-   * Server-validated cash out.
-   * Passes bet_id (if known) so the server can find the bet directly by ID,
-   * eliminating the round_uuid race condition that caused intermittent errors.
-   */
+  /** Server-validated cash out. Uses round_uuid from the engine for accurate server validation. */
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
     const at = atOverride ?? multiplier;
     setBet((b) => ({ ...b, cashedOutAt: at }));
 
     try {
-      const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs, at, bet.betId);
+      const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs);
       if (res.won && res.win > 0) {
         store.setBalance(res.balance_after);
         onCashOut(bet.amount, res.cashout_at ?? at);
@@ -279,7 +267,7 @@ export function BettingPanel({
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-xl font-extrabold tracking-wide">CANCEL</span>
-        <span className="text-xs opacity-80">Next round</span>
+        <span className="text-xs font-semibold opacity-70">Next round</span>
       </span>
     );
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
@@ -294,8 +282,8 @@ export function BettingPanel({
   } else if (canQueueNextRound) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
-        <span>BET</span>
-        <span className="text-xs opacity-80">Next round</span>
+        <span className="text-xl font-extrabold tracking-wide">BET</span>
+        <span className="text-xs font-semibold opacity-70">Next round</span>
       </span>
     );
   } else if (phase === 'crashed') {
@@ -309,110 +297,104 @@ export function BettingPanel({
   const isButtonDisabled = !canPlace && !canCashOut && !canCancel && !isInsufficientBalance && !canQueueNextRound && !canCancelQueue;
 
   return (
-    <div className="flex flex-col gap-2 rounded-xl bg-ink-800 p-3 select-none">
-      {/* Top row: Autobet + Autowithdrawal checkboxes */}
-      <div className="flex items-center gap-4 text-xs text-gray-400">
-        <label className="flex items-center gap-1.5 cursor-pointer">
+    <div className="flex flex-col gap-2.5 rounded-2xl bg-ink-700 border border-ink-500/60 p-3 select-none">
+      {/* Top row: checkboxes + auto-withdraw multiplier input */}
+      <div className="flex items-center gap-2">
+        <CheckboxRow
+          label="Autobet"
+          checked={bet.autoBetEnabled}
+          onChange={handleAutoBetToggle}
+        />
+        <CheckboxRow
+          label="Autowithdrawal"
+          checked={bet.autoCashoutEnabled}
+          disabled={phase === 'flying'}
+          onChange={(v) => setBet((b) => ({ ...b, autoCashoutEnabled: v }))}
+        />
+        <div
+          className={`ml-auto flex items-center gap-1 rounded-lg bg-ink-850 border border-ink-500/70 px-2 py-1.5 shrink-0 ${
+            phase === 'flying' ? 'opacity-50 pointer-events-none' : ''
+          }`}
+        >
+          <span className="text-xs font-semibold text-gray-400">x</span>
           <input
-            type="checkbox"
-            className="accent-aviator-green"
-            checked={bet.autoBetEnabled}
-            onChange={(e) => handleAutoBetToggle(e.target.checked)}
+            type="number"
+            step="0.1"
+            min="1.01"
+            disabled={phase === 'flying'}
+            value={autoCashoutInput}
+            onChange={(e) => setAutoCashoutInput(e.target.value)}
+            onBlur={() => {
+              const parsed = parseFloat(autoCashoutInput);
+              const safe = isNaN(parsed) || parsed < 1.01 ? 1.01 : parsed;
+              const rounded = Math.round(safe * 100) / 100;
+              setBet((b) => ({ ...b, autoCashoutValue: rounded }));
+              setAutoCashoutInput(String(rounded));
+            }}
+            className="w-10 bg-transparent text-center font-mono text-sm font-bold text-white tabular-nums outline-none"
           />
-          Autobet
-        </label>
-        <label className="flex items-center gap-1.5 cursor-pointer">
-          <input
-            type="checkbox"
-            className="accent-aviator-green"
-            checked={bet.autoCashoutEnabled}
-            onChange={(e) => setBet((b) => ({ ...b, autoCashoutEnabled: e.target.checked }))}
-          />
-          Autowithdrawal
-        </label>
-        {bet.autoCashoutEnabled && (
-          <div className="flex items-center gap-1 ml-auto">
-            <span>x</span>
-            <input
-              type="number"
-              className="w-10 bg-transparent text-center font-mono text-sm font-bold text-white tabular-nums outline-none"
-              value={autoCashoutInput}
-              min={1.01}
-              step={0.1}
-              onChange={(e) => setAutoCashoutInput(e.target.value)}
-              onBlur={() => {
-                const parsed = parseFloat(autoCashoutInput);
-                const safe = isNaN(parsed) || parsed < 1.01 ? 1.01 : parsed;
-                const rounded = Math.round(safe * 100) / 100;
-                setBet((b) => ({ ...b, autoCashoutValue: rounded }));
-                setAutoCashoutInput(String(rounded));
-              }}
-            />
-          </div>
-        )}
+        </div>
       </div>
 
-      {/* Bottom row: amount controls (left) + BET button (right) */}
-      <div className="grid grid-cols-[1fr_auto] gap-2">
-        {/* Left: amount stepper + quick chips */}
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center gap-1.5">
+      {/* Bottom row: bet amount controls + BET button */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="flex flex-col gap-1.5 rounded-xl bg-ink-850 border border-ink-500/60 p-1.5">
+          <div className="flex items-center">
             <button
-              className="grid h-9 w-9 place-items-center rounded bg-ink-700 text-white hover:bg-ink-600 cursor-pointer disabled:opacity-40"
               onClick={() => adjustAmount(-10)}
               disabled={bet.placed}
+              className="grid h-9 w-9 place-items-center rounded-md bg-ink-700 text-gray-300 hover:bg-ink-650 disabled:opacity-40 cursor-pointer"
+              aria-label="Decrease bet"
             >
-              <Minus size={14} />
+              <Minus className="h-4 w-4" />
             </button>
             <input
               type="number"
-              className="min-w-0 flex-1 rounded bg-ink-700 px-2 py-1.5 text-center text-sm font-semibold text-white outline-none"
               value={amountInput}
-              min={limits.min}
-              max={limits.max}
-              disabled={bet.placed}
-              onChange={(e) => {
-                setAmountInput(e.target.value);
-                const v = parseFloat(e.target.value);
-                if (isFinite(v)) setAmount(v);
+              onChange={(e) => setAmountInput(e.target.value)}
+              onBlur={() => {
+                const parsed = parseFloat(amountInput);
+                const safe = isNaN(parsed) || parsed < 10 ? 10 : Math.min(100000, parsed);
+                const rounded = Math.round(safe * 100) / 100;
+                setAmount(rounded);
+                setAmountInput(String(rounded));
               }}
-              onBlur={() => setAmountInput(String(bet.amount))}
+              disabled={bet.placed}
+              className="h-9 w-full min-w-0 bg-transparent text-center font-mono text-base font-bold text-white tabular-nums outline-none disabled:opacity-60"
             />
             <button
-              className="grid h-9 w-9 place-items-center rounded bg-ink-700 text-white hover:bg-ink-600 cursor-pointer disabled:opacity-40"
-              onClick={() => adjustAmount(+10)}
+              onClick={() => adjustAmount(10)}
               disabled={bet.placed}
+              className="grid h-9 w-9 place-items-center rounded-md bg-ink-700 text-gray-300 hover:bg-ink-650 disabled:opacity-40 cursor-pointer"
+              aria-label="Increase bet"
             >
-              <Plus size={14} />
+              <Plus className="h-4 w-4" />
             </button>
           </div>
           {/* Quick-bet chips */}
-          <div className="flex gap-1">
-            {QUICK_ADDS.map(({ label, value }) => (
+          <div className="grid grid-cols-4 gap-1">
+            {QUICK_ADDS.map((q) => (
               <button
-                key={value}
-                className={`flex-1 rounded py-1 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-40 ${
-                  lastQuickBet === value
-                    ? 'bg-aviator-green text-black'
-                    : 'bg-ink-700 text-gray-300 hover:bg-ink-600'
-                }`}
+                key={q.value}
                 disabled={bet.placed}
                 onClick={() => {
-                  setLastQuickBet(value);
-                  setAmount(value);
+                  const next = Math.min(100000, lastQuickBet === q.value ? bet.amount + q.value : q.value);
+                  setLastQuickBet(q.value);
+                  setAmount(next);
+                  setAmountInput(String(next));
                 }}
+                className="rounded-md bg-ink-700 border border-ink-500/60 py-1 text-[11px] font-semibold text-gray-300 hover:bg-ink-650 hover:text-white disabled:opacity-40 transition-colors cursor-pointer"
               >
-                {label}
+                {q.label}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Right: BET / CASH OUT button */}
         <button
-          className={`w-28 rounded-lg font-bold text-black transition-all duration-150 cursor-pointer ${betShade} ${betShadow}`}
-          onClick={handleBetClick}
+          onClick={() => { void handleBetClick(); }}
           disabled={isButtonDisabled}
+          className={`rounded-xl text-white font-extrabold text-2xl tracking-wide ${betShadow} active:translate-y-0.5 transition-colors cursor-pointer ${betShade}`}
         >
           {betLabel}
         </button>
@@ -425,5 +407,45 @@ export function BettingPanel({
         </div>
       )}
     </div>
+  );
+}
+
+function CheckboxRow({
+  label,
+  checked,
+  onChange,
+  disabled = false,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label
+      className={`flex shrink-0 items-center gap-1.5 select-none ${
+        disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'
+      }`}
+    >
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => !disabled && onChange(!checked)}
+        className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border transition-colors ${
+          checked
+            ? 'bg-aviator-green-bright border-aviator-green-bright'
+            : 'bg-ink-850 border-ink-500'
+        } ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+      >
+        {checked && (
+          <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 text-black" fill="none" stroke="currentColor" strokeWidth="3">
+            <path d="M3 8l3.5 3.5L13 5" />
+          </svg>
+        )}
+      </button>
+      <span className="whitespace-nowrap text-[11px] sm:text-sm font-semibold text-gray-200">{label}</span>
+    </label>
   );
 }
