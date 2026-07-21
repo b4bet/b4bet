@@ -15,18 +15,53 @@ export function HistoryBar({ history }: HistoryBarProps) {
     }
   }, [history]);
 
-  // Allow horizontal scrolling with mouse wheel on desktop.
+  // Mouse wheel scroll — horizontal
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
-      // Use deltaX for trackpad horizontal swipe, deltaY for vertical mouse wheel
-      const delta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
       e.preventDefault();
-      el.scrollLeft += delta;
+      // Prefer horizontal delta (trackpad), fall back to vertical (mouse wheel)
+      el.scrollLeft += e.deltaX !== 0 ? e.deltaX : e.deltaY;
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
+  // Mouse drag-to-scroll (click + drag left/right)
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let isDragging = false;
+    let startX = 0;
+    let scrollStart = 0;
+
+    const onMouseDown = (e: MouseEvent) => {
+      isDragging = true;
+      startX = e.pageX;
+      scrollStart = el.scrollLeft;
+      el.style.cursor = 'grabbing';
+      el.style.userSelect = 'none';
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      if (!isDragging) return;
+      const dx = e.pageX - startX;
+      el.scrollLeft = scrollStart - dx;
+    };
+    const onMouseUp = () => {
+      isDragging = false;
+      el.style.cursor = 'grab';
+      el.style.userSelect = '';
+    };
+
+    el.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+    return () => {
+      el.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
   }, []);
 
   return (
@@ -38,9 +73,10 @@ export function HistoryBar({ history }: HistoryBarProps) {
 
       <div
         ref={scrollRef}
-        className="flex items-center gap-2 overflow-x-auto px-4 sm:px-5 py-2 cursor-grab active:cursor-grabbing"
+        className="flex items-center gap-2 overflow-x-auto px-4 sm:px-5 py-2"
         style={{
           scrollbarWidth: 'none',
+          cursor: 'grab',
           touchAction: 'pan-x',
           WebkitOverflowScrolling: 'touch',
         } as React.CSSProperties}
@@ -51,7 +87,7 @@ export function HistoryBar({ history }: HistoryBarProps) {
         {history.map((m, i) => (
           <span
             key={`${m.toFixed(2)}-${i}`}
-            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-bold tabular-nums cursor-default select-none ${multiplierBadgeClass(m)}`}
+            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-bold tabular-nums select-none ${multiplierBadgeClass(m)}`}
           >
             {m.toFixed(2)}x
           </span>
