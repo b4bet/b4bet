@@ -29,7 +29,7 @@ const promoSlides = [
   },
 ];
 
-export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) {
+export default function SliderBanner({ onSlideClick }: { onSlideClick: (i: number) => void }) {
   const banners = useBanners();
   const useAdmin = banners.length > 0;
   const count = useAdmin ? banners.length : promoSlides.length;
@@ -67,52 +67,61 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
   };
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-borderline-900" onTouchStart={handleTouchStart} onTouchMove={handleTouchMove} onTouchEnd={handleTouchEnd}>
-
-      <div className="flex transition-transform duration-500 ease-out" style={{ transform: `translateX(-${idx * 100}%)` }}>
+    <div
+      className="relative w-full overflow-hidden bg-slatepanel-900"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+    >
+      {/* Slides track */}
+      <div
+        className="flex transition-transform duration-300 ease-in-out"
+        style={{ transform: `translateX(-${idx * 100}%)` }}
+      >
         {useAdmin
-          ? banners.map((b) => (
+          ? banners.map((b, i) => (
               <a
-                key={b.id}
+                key={i}
                 href={b.linkUrl || '#'}
-                target={b.linkUrl ? '_blank' : undefined}
-                rel="noreferrer"
                 onClick={(e) => { if (!b.linkUrl) e.preventDefault(); }}
-                className="min-w-full h-40 sm:h-48 relative block bg-slatepanel-900"
+                className="min-w-full h-40 sm:h-48 relative block bg-slatepanel-900 shrink-0"
               >
-                <img src={b.imageDataUrl} alt="Banner" className="w-full h-full object-cover" />
+                <img
+                  src={b.imageUrl}
+                  alt={b.title || ''}
+                  className="w-full h-full object-cover"
+                />
               </a>
             ))
           : promoSlides.map((s, i) => {
               const Icon = s.icon;
               return (
-                <div key={i} className="min-w-full h-40 sm:h-48 relative">
-                  <div className={`absolute inset-0 bg-gradient-to-br ${s.gradient}`} />
-                  <div className="absolute inset-0 bg-slatepanel-900" />
-                  <div className={`absolute inset-0 bg-gradient-to-br ${s.gradient}`} />
-                  <div className="absolute -right-6 -top-6 w-32 h-32 rounded-full bg-neon-500/10 blur-2xl" />
-                  <div className="relative h-full flex items-center justify-between px-5 sm:px-7">
-                    <div className="max-w-[70%]">
-                      <div className={`inline-flex items-center gap-1.5 chip bg-midnight-900/60 border border-borderline-900 ${s.accent} mb-2`}>
-                        <Icon className="w-3.5 h-3.5" />
-                        <span className="uppercase tracking-wider text-[10px]">Promo</span>
-                      </div>
-                      <h2 className="font-display font-extrabold text-2xl sm:text-3xl text-white leading-tight">{s.title}</h2>
-                      <p className="text-sm text-slate-300 mt-1">{s.subtitle}</p>
-                      <button onClick={() => onCta(i)} className="btn-primary mt-3 px-4 py-2 text-sm">
-                        {s.cta} <ArrowRight className="w-4 h-4" />
-                      </button>
+                <div
+                  key={i}
+                  className="min-w-full h-40 sm:h-48 relative overflow-hidden bg-slatepanel-900 shrink-0"
+                >
+                  <div className={`absolute inset-0 bg-gradient-to-r ${s.gradient}`} />
+                  <div className="relative z-10 h-full flex flex-col justify-center px-5 gap-1">
+                    <div className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest ${s.accent}`}>
+                      <Icon className="w-3 h-3" />
+                      Promo
                     </div>
-                    <div className={`hidden sm:grid place-items-center w-20 h-20 rounded-2xl bg-midnight-900/60 border border-borderline-900 ${s.accent}`}>
-                      <Icon className="w-10 h-10" strokeWidth={1.5} />
-                    </div>
+                    <div className="text-xl font-black text-white leading-tight">{s.title}</div>
+                    <div className="text-xs text-slate-400 max-w-[220px]">{s.subtitle}</div>
+                    <button
+                      onClick={() => onSlideClick(i)}
+                      className="btn-primary mt-3 px-4 py-2 text-sm self-start flex items-center gap-1"
+                    >
+                      {s.cta} <ArrowRight className="w-3 h-3" />
+                    </button>
                   </div>
                 </div>
               );
             })}
       </div>
 
-      <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex gap-1.5">
+      {/* Dots */}
+      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5">
         {Array.from({ length: count }).map((_, i) => (
           <button
             key={i}
