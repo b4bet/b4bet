@@ -4,9 +4,9 @@ import { HistoryBar } from './HistoryBar';
 import { FlightCanvas, type CashoutNotice, type InsufficientBalanceNotice, type TimeoutNotice } from './FlightCanvas';
 import { useGameAudio } from './game/useGameAudio';
 import { BettingPanel, createInitialBet, type BetState } from './BettingPanel';
-import { Sidebar, makeSimBet, type BetRecord, type ChatMessage } from './Sidebar';
+import { Sidebar, type BetRecord, type ChatMessage } from './Sidebar';
 import { useAviatorGame } from './game/useAviatorGame';
-import { formatMoney, randomAvatarColor, randomName } from './game/format';
+import { formatMoney } from './game/format';
 import { useBalance } from '../../lib/hooks';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
@@ -74,29 +74,18 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  useEffect(() => {
-    if (phase !== 'flying') return;
-    // No fake bets added during flight
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, roundId]);
-
-  useEffect(() => {
-    if (phase !== 'flying') return;
-    // No fake cashouts processed
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multiplier, phase]);
-
   /**
    * Called by BettingPanel when the player clicks BET.
    *
-   * Returns a Promise<boolean> — true if bet was accepted locally.
-   * Also registers bet on server and stores bet_id in BetState so cashout
-   * can use direct ID lookup instead of fragile round_uuid matching.
+   * Returns { ok, betId } — betId is the server-assigned ID for this specific
+   * panel's bet. Each panel gets its OWN betId directly from the return value,
+   * eliminating the cross-panel contamination that occurred with the old
+   * broadcast event approach.
    *
    * Uses debitLocalOnly() to avoid double-deduction: the server also
    * deducts from Supabase in aviator_place_bet.
    */
-  const handlePlaceBet = useCallback(async (amount: number): Promise<boolean> => {
+  const handlePlaceBet = useCallback(async (amount: number): Promise<{ ok: boolean; betId: string | null }> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
       cms.toast({
@@ -104,18 +93,18 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`,
         kind: 'alert',
       });
-      return false;
+      return { ok: false, betId: null };
     }
+
     // Use debitLocalOnly: the server (aviator_place_bet) deducts from Supabase.
     // debit() would also write to Supabase causing a double deduction.
     const ok = store.debitLocalOnly(amount);
-    if (!ok) return false;
+    if (!ok) return { ok: false, betId: null };
 
     const session = auth.getSession();
     if (!session) {
-      // Refund local debit if no session
       store.credit(amount);
-      return false;
+      return { ok: false, betId: null };
     }
 
     try {
@@ -124,20 +113,11 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         amount,
         aviatorLoop.getRoundUuid(),
       );
-      if (result.success && result.bet_id) {
-        // Store bet_id in both panels' state — wrapSetBet will apply to the
-        // calling panel. We use a panel-specific setter exposed via the
-        // setBet0/setBet1 refs captured in closure.
-        // Signal success back; the panel will call setBet to store betId.
-        // We return the betId via a custom event so wrapSetBet can capture it.
-        const event = new CustomEvent('aviator:bet_registered', { detail: { betId: result.bet_id } });
-        window.dispatchEvent(event);
-      }
-      return true;
+      return { ok: true, betId: result.success ? (result.bet_id ?? null) : null };
     } catch {
       // Server rejected bet — refund local debit so UI balance is correct.
       store.credit(amount);
-      return false;
+      return { ok: false, betId: null };
     }
   }, []);
 
@@ -160,8 +140,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   /**
    * Balance is already updated server-side via store.setBalance(res.balance_after)
-   * inside doCashOut in BettingPanel. Do NOT call store.credit here — that would
-   * double-add the winnings and inflate the displayed balance.
+   * inside doCashOut in BettingPanel. Do NOT call store.credit here.
    */
   const handleWin = useCallback((_win: number) => {
     // intentionally empty — balance synced from server in doCashOut
@@ -192,16 +171,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         const next = updater(prev);
         if (!prev.placed && next.placed && prev.roundId === roundId) {
           recordPlayerBet(panel, next.amount);
-          // Listen for server bet_id and store it in this panel's state
-          const handler = (e: Event) => {
-            const detail = (e as CustomEvent<{ betId: string }>).detail;
-            const setter2 = panel === 0 ? setBet0 : setBet1;
-            setter2((b) => ({ ...b, betId: detail.betId }));
-            window.removeEventListener('aviator:bet_registered', handler);
-          };
-          window.addEventListener('aviator:bet_registered', handler);
-          // Auto-cleanup after 10s to avoid leaks
-          setTimeout(() => window.removeEventListener('aviator:bet_registered', handler), 10_000);
         }
         if (prev.cashedOutAt === null && next.cashedOutAt !== null) {
           setAllBets((ab) =>
