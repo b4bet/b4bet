@@ -56,7 +56,9 @@ interface BettingPanelProps {
   onTimeout?: () => void;
 }
 
-// Quick-bet buttons — replace amount
+// Quick-bet buttons
+// First click on a chip → set amount to that value
+// Same chip clicked again → add that value to current amount
 const QUICK_ADDS: { label: string; value: number }[] = [
   { label: '200', value: 200 },
   { label: '500', value: 500 },
@@ -381,7 +383,7 @@ export function BettingPanel({
               <Plus className="h-4 w-4" />
             </button>
           </div>
-          {/* Quick-bet chips */}
+          {/* Quick-bet chips: first click = set, repeat click = add */}
           <div className="grid grid-cols-4 gap-1">
             {QUICK_ADDS.map(({ label, value }) => (
               <button
@@ -393,8 +395,14 @@ export function BettingPanel({
                 }`}
                 disabled={bet.placed}
                 onClick={() => {
-                  setLastQuickBet(value);
-                  setAmount(value);
+                  if (lastQuickBet === value) {
+                    // Same chip — add to current amount
+                    setAmount(bet.amount + value);
+                  } else {
+                    // Different chip — set to that value
+                    setLastQuickBet(value);
+                    setAmount(value);
+                  }
                 }}
               >
                 {label}
@@ -412,13 +420,6 @@ export function BettingPanel({
           {betLabel}
         </button>
       </div>
-
-      {/* Cashed out confirmation */}
-      {bet.placed && bet.cashedOutAt !== null && (
-        <div className="text-center text-xs text-aviator-green font-semibold tabular-nums">
-          Cashed out at {bet.cashedOutAt.toFixed(2)}x — Won {formatMoney(bet.amount * bet.cashedOutAt)}
-        </div>
-      )}
     </div>
   );
 }
