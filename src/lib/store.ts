@@ -438,6 +438,31 @@ class Store {
     }).catch(() => {});
   }
 
+  /**
+   * setGameHandlerAsync — same as setGameHandler but AWAITS the Supabase write.
+   * Use this in admin UI where you need to confirm the write succeeded before
+   * showing a success state.
+   */
+  async setGameHandlerAsync(gameKey: string, patch: Partial<GameHandlerConfig>): Promise<void> {
+    const current = this.getGameHandler(gameKey);
+    const updated = { ...current, ...patch };
+    const nextHandlers = { ...this.admin.gameHandlers, [gameKey]: updated };
+    this.admin = { ...this.admin, gameHandlers: nextHandlers };
+    if (gameKey === 'crash') {
+      if (patch.mode !== undefined) this.admin.mode = patch.mode;
+      if (patch.manualCrashPoint !== undefined) this.admin.manualCrashPoint = patch.manualCrashPoint;
+      if (patch.houseEdge !== undefined) this.admin.houseEdge = patch.houseEdge;
+      if (patch.targetWinProbability !== undefined) this.admin.targetWinProbability = patch.targetWinProbability;
+    }
+    bus.emit(Topics.AdminConfig, this.admin);
+    // Await actual Supabase write — throws if it fails
+    const { error } = await supabase.rpc('admin_update_setting', {
+      p_key: 'admin_config',
+      p_value: this._buildDbPayload() as unknown as string,
+    });
+    if (error) throw new Error(error.message);
+  }
+
   getGameLimits(gameKey: string): { min: number; max: number } {
     const override = this.admin.perGameLimits[gameKey];
     if (override) return { min: override.min, max: override.max };
