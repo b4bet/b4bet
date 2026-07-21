@@ -1,15 +1,12 @@
 /**
- * CrashHistoryTabs — spec §7
- * "My Bets" table gets a Net P/L column and every column header uses an explicit
- * minWidth style so wider labels (e.g. "Net P/L") are never clipped on narrow screens.
- *
- * Round number column removed from "My Bets" — the local roundId counter is
- * per-tab and not synced with the server, so displaying it was misleading.
- * The time column still gives users enough context to identify their bets.
+ * CrashHistoryTabs — All Bets shows real bets from Supabase (no fake players).
+ * My Bets shows the current user's own crash bets.
+ * Top shows the leaderboard seeded from the store.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useCrashMyBets } from '../lib/hooks';
 import { store } from '../lib/store';
+import { supabase } from '../integrations/supabase/client';
 
 type Tab = 'all' | 'mine' | 'top';
 type Range = 'day' | 'week' | 'month' | 'year';
@@ -25,20 +22,58 @@ function fmtTime(ts: number) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+interface RealBet {
+  id: string;
+  user: string;
+  stake: number;
+  multiplier: number | null;
+  win: number;
+  ts: number;
+}
+
+const CRASH_GAME_ID = 'ee8ae2ab-d62c-4378-a377-55b3f7be4b3e';
+
 export default function CrashHistoryTabs() {
   const [tab, setTab] = useState<Tab>('all');
   const [range, setRange] = useState<Range>('day');
   const mine = useCrashMyBets();
 
-  // Mock "All Bets" feed — deterministic peers so global ticker always has rows.
-  const allBets = useMemo(() => {
-    const mockUsers = ['NeonHawk', 'CyberLynx', 'AstroBee', 'QuantumOwl', 'NovaWolf', 'PixelFox', 'TurboKoi', 'EchoFalcon'];
-    return Array.from({ length: 12 }, (_, i) => {
-      const m = +(1 + Math.random() * 12).toFixed(2);
-      const stake = Math.round(50 + Math.random() * 4000);
-      return { user: mockUsers[i % mockUsers.length], stake, multiplier: m, win: +(stake * m).toFixed(2), ts: Date.now() - i * 60_000 };
-    });
-  }, [mine.length]);
+  // Real bets from Supabase
+  const [allBets, setAllBets] = useState<RealBet[]>([]);
+  const [loadingAll, setLoadingAll] = useState(false);
+
+  useEffect(() => {
+    if (tab !== 'all') return;
+    setLoadingAll(true);
+    supabase
+      .from('bets')
+      .select('id, user_id, bet_amount, win_amount, multiplier, placed_at, profiles(username)')
+      .eq('game_id', CRASH_GAME_ID)
+      .order('placed_at', { ascending: false })
+      .limit(30)
+      .then(({ data }) => {
+        if (data) {
+          const rows: RealBet[] = (data as Array<{
+            id: string;
+            user_id: string;
+            bet_amount: number;
+            win_amount: number | null;
+            multiplier: number | null;
+            placed_at: string | null;
+            profiles: { username: string } | null;
+          }>).map((b) => ({
+            id: b.id,
+            user: b.profiles?.username ?? b.user_id.slice(0, 8) + '…',
+            stake: Number(b.bet_amount),
+            multiplier: b.multiplier != null ? Number(b.multiplier) : null,
+            win: Number(b.win_amount ?? 0),
+            ts: b.placed_at ? new Date(b.placed_at).getTime() : Date.now(),
+          }));
+          setAllBets(rows);
+        }
+      })
+      .finally(() => setLoadingAll(false));
+  }, [tab]);
 
   const topRows = useMemo(() => {
     const cutoff = Date.now() - RANGE_MS[range];
@@ -92,7 +127,7 @@ export default function CrashHistoryTabs() {
       {/* Body */}
       <div className="max-h-72 overflow-y-auto scrollbar-thin overflow-x-auto">
 
-        {/* ── ALL BETS ─────────────────────────────────────────── */}
+        {/* ── ALL BETS — real data from Supabase ─────────────────── */}
         {tab === 'all' && (
           <table className="w-full text-[11px]">
             <thead className="text-slate-500 uppercase tracking-wider sticky top-0 bg-slatepanel-900">
@@ -104,31 +139,37 @@ export default function CrashHistoryTabs() {
               </tr>
             </thead>
             <tbody className="tabular">
-              {allBets.map((b, i) => (
-                <tr key={i} className="border-t border-borderline-900/60">
+              {loadingAll && (
+                <tr><td colSpan={4} className="py-4 text-center text-slate-500">Loading…</td></tr>
+              )}
+              {!loadingAll && allBets.length === 0 && (
+                <tr><td colSpan={4} className="py-4 text-center text-slate-500">No bets yet.</td></tr>
+              )}
+              {allBets.map((b) => (
+                <tr key={b.id} className="border-t border-borderline-900/60">
                   <td className="py-1.5 px-1 text-slate-200 font-semibold">{b.user}</td>
                   <td className="px-1 text-right text-slate-300">{store.currency}{b.stake}</td>
-                  <td className={`px-1 text-right font-bold ${b.multiplier >= 2 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
-                    {b.multiplier.toFixed(2)}×
+                  <td className={`px-1 text-right font-bold ${b.multiplier != null && b.multiplier >= 2 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
+                    {b.multiplier != null ? `${b.multiplier.toFixed(2)}×` : '—'}
                   </td>
-                  <td className="px-1 text-right text-white font-semibold">{store.currency}{b.win.toFixed(2)}</td>
+                  <td className="px-1 text-right text-white font-semibold">
+                    {b.win > 0 ? `${store.currency}${b.win.toFixed(2)}` : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
 
-        {/* ── MY BETS — spec §7: Net P/L column + explicit minWidths ── */}
+        {/* ── MY BETS ── */}
         {tab === 'mine' && (
           <table className="w-full text-[11px]">
             <thead className="text-slate-500 uppercase tracking-wider sticky top-0 bg-slatepanel-900">
               <tr>
-                {/* Round column removed — local roundId counter is per-tab and misleading */}
                 <th className="text-left  py-1.5 px-1" style={{ minWidth: '3rem'  }}>Time</th>
                 <th className="text-right py-1.5 px-1" style={{ minWidth: '3.5rem' }}>Stake</th>
                 <th className="text-right py-1.5 px-1" style={{ minWidth: '2.5rem' }}>×</th>
                 <th className="text-right py-1.5 px-1" style={{ minWidth: '3.5rem' }}>Win</th>
-                {/* spec §7: column header must never be clipped — uses whitespace-nowrap + minWidth */}
                 <th className="text-right py-1.5 px-1 whitespace-nowrap" style={{ minWidth: '4rem' }}>Net P/L</th>
               </tr>
             </thead>
@@ -148,7 +189,6 @@ export default function CrashHistoryTabs() {
                     <td className={`px-1 text-right font-semibold ${b.win > 0 ? 'text-emeraldwin-300' : 'text-slate-500'}`}>
                       {b.win > 0 ? `${store.currency}${b.win.toFixed(2)}` : '—'}
                     </td>
-                    {/* Net P/L cell — green if positive, red if negative */}
                     <td
                       className={`px-1 text-right font-bold whitespace-nowrap ${netpl >= 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}
                     >
