@@ -8,28 +8,47 @@ interface HistoryBarProps {
 export function HistoryBar({ history }: HistoryBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Keep the most recent (leftmost) badge in view as new rounds land.
+  // Auto-scroll to leftmost (most recent) badge when history updates.
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTo({ left: 0, behavior: 'smooth' });
     }
   }, [history]);
 
+  // Allow horizontal scrolling with the mouse wheel on desktop.
+  // Without this, no-scrollbar means desktop users have no way to scroll.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      // Only hijack if the scroll is more vertical than horizontal (normal wheel)
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+        e.preventDefault();
+        el.scrollLeft += e.deltaY;
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
   return (
-    <div className="relative bg-ink-800 border-b border-ink-600/60">
+    <div className="relative bg-ink-800 border-b border-ink-600/60 overflow-hidden">
+      {/* Gradient fade on left — visually hints there's more content to scroll back to */}
+      <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-ink-800 to-transparent z-10" />
+      {/* Gradient fade on right — hints there's more history to scroll through */}
+      <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-ink-800 to-transparent z-10" />
+
       <div
         ref={scrollRef}
-        className="no-scrollbar flex items-center gap-2 overflow-x-auto px-3 sm:px-4 py-2"
+        className="no-scrollbar flex items-center gap-2 overflow-x-auto px-4 sm:px-5 py-2 scroll-smooth"
       >
         {history.length === 0 && (
           <span className="text-xs text-gray-600 italic px-1">No rounds yet — first flight incoming…</span>
         )}
         {history.map((m, i) => (
           <span
-            key={i}
-            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-bold tabular-nums ${multiplierBadgeClass(
-              m,
-            )}`}
+            key={`${m.toFixed(2)}-${i}`}
+            className={`shrink-0 rounded-full border px-3 py-1 text-xs font-bold tabular-nums ${multiplierBadgeClass(m)}`}
           >
             {m.toFixed(2)}x
           </span>
