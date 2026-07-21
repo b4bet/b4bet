@@ -3,7 +3,6 @@
  *
  * Thin client wrapper around the process-bet Edge Function.
  * ALL game outcomes are determined server-side.
- * The browser is a pure display layer — it NEVER computes win/loss locally.
  */
 
 const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
@@ -18,27 +17,12 @@ export interface MinesCashoutResult { success: boolean; payout: number; multipli
 export interface SunMoonResult { result: "sun" | "moon" | "tie"; }
 export interface SunMoonSettleResult { success: boolean; result: string; won: boolean; payout: number; profit: number; balance_after: number; }
 export interface TradingSettleResult { success: boolean; won: boolean; payout: number; profit: number; balance_after: number; }
-export interface AviatorRoundStartResult {
-  success: boolean;
-  round_id: number;
-  started_at?: string;
-  already_exists?: boolean;
-}
-export interface AviatorCashoutResult {
-  success: boolean;
-  won: boolean;
-  cashout_at: number | null;
-  win: number;
-  balance_after: number;
-  crash_point: number | null;
-}
+export interface AviatorRoundStartResult { success: boolean; round_id: number; started_at?: string; already_exists?: boolean; }
+export interface AviatorCashoutResult { success: boolean; won: boolean; cashout_at: number | null; win: number; balance_after: number; crash_point: number | null; }
 export interface AviatorSettleResult { success: boolean; crash_point: number; }
-export interface AviatorRoundStatusResult {
-  crashed: boolean;
-  crash_point: number | null;
-}
+export interface AviatorRoundStatusResult { crashed: boolean; crash_point: number | null; }
 
-// Crash history detail (provably fair)
+/** Full provably-fair round detail — returned by crash_get_history */
 export interface CrashRoundDetail {
   bust_point: number;
   round_uuid: string;
@@ -47,7 +31,15 @@ export interface CrashRoundDetail {
   created_at: string;
 }
 
-// ── Helper ───────────────────────────────────────────────────────────────────
+export interface CrashCurrentRoundResult {
+  phase: 'waiting' | 'flying' | 'crashed';
+  elapsed_ms: number;
+  crash_point: number | null;
+  last_crash_point?: number | null;
+  round_uuid?: string;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function get<T>(params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams(params).toString();
@@ -79,23 +71,18 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
 export const GameService = {
   // ── Crash ──────────────────────────────────────────────────────────────────
 
-  /** Load last 20 crash rounds with provably fair data (server_seed, hash, uuid) */
+  /** Load last 20 crash rounds with full provably-fair detail */
   crashGetHistory(): Promise<{ history: CrashRoundDetail[] }> {
     return get<{ history: CrashRoundDetail[] }>({ action: "crash_get_history" });
   },
 
-  crashGetBustPoint(roundId: number): Promise<CrashBustResult> {
-    return get<CrashBustResult>({ action: "crash_get_bust", round_id: String(roundId) });
+  /** Poll every 300ms — returns current phase, elapsed_ms, crash_point (only when crashed) */
+  crashGetCurrentRound(): Promise<CrashCurrentRoundResult> {
+    return get<CrashCurrentRoundResult>({ action: "crash_get_current_round" });
   },
 
-  crashGetCurrentRound(): Promise<{
-    phase: 'waiting' | 'flying' | 'crashed';
-    elapsed_ms: number;
-    crash_point: number | null;
-    last_crash_point?: number | null;
-    round_uuid?: string;
-  }> {
-    return get({ action: "crash_get_current_round" });
+  crashGetBustPoint(roundId: number): Promise<CrashBustResult> {
+    return get<CrashBustResult>({ action: "crash_get_bust", round_id: String(roundId) });
   },
 
   crashSettle(userId: string, roundId: number, amount: number, cashOutAt: number | null, bustPoint: number): Promise<CrashSettleResult> {
@@ -115,11 +102,9 @@ export const GameService = {
   minesStart(userId: string, mineCount: number, stake: number): Promise<MinesStartResult> {
     return post<MinesStartResult>({ game_type: "mines_start", user_id: userId, mine_count: mineCount, stake });
   },
-
   minesReveal(userId: string, sessionId: string, tileIndex: number): Promise<MinesRevealResult> {
     return post<MinesRevealResult>({ game_type: "mines_reveal", user_id: userId, session_id: sessionId, tile_index: tileIndex });
   },
-
   minesCashout(userId: string, sessionId: string): Promise<MinesCashoutResult> {
     return post<MinesCashoutResult>({ game_type: "mines_cashout", user_id: userId, session_id: sessionId });
   },
@@ -128,21 +113,12 @@ export const GameService = {
   sunMoonGetResult(roundId: number): Promise<SunMoonResult> {
     return get<SunMoonResult>({ action: "sunvsmoon_result", round_id: String(roundId) });
   },
-
   sunMoonSettle(userId: string, roundId: number, bet: "sun" | "moon" | "tie", stake: number): Promise<SunMoonSettleResult> {
     return post<SunMoonSettleResult>({ game_type: "sunvsmoon_settle", user_id: userId, round_id: roundId, bet, stake });
   },
 
   // ── Trading ────────────────────────────────────────────────────────────────
-  tradingSettle(
-    userId: string,
-    symbol: string,
-    direction: "UP" | "DOWN",
-    stake: number,
-    entryPrice: number,
-    exitPrice: number,
-    payoutPct: number,
-  ): Promise<TradingSettleResult> {
+  tradingSettle(userId: string, symbol: string, direction: "UP" | "DOWN", stake: number, entryPrice: number, exitPrice: number, payoutPct: number): Promise<TradingSettleResult> {
     return post<TradingSettleResult>({
       game_type: "trading_settle",
       user_id: userId,
@@ -157,37 +133,14 @@ export const GameService = {
 
   // ── Aviator ────────────────────────────────────────────────────────────────
   aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
-    return post<AviatorRoundStartResult>({
-      game_type: "aviator_round_start",
-      user_id: userId,
-      round_id: roundId,
-    });
+    return post<AviatorRoundStartResult>({ game_type: "aviator_round_start", user_id: userId, round_id: roundId });
   },
-
-  aviatorCashout(
-    userId: string,
-    roundId: number,
-    betAmount: number,
-    placedAtMs: number,
-  ): Promise<AviatorCashoutResult> {
-    return post<AviatorCashoutResult>({
-      game_type: "aviator_cashout",
-      user_id: userId,
-      round_id: roundId,
-      bet_amount: betAmount,
-      placed_at_ms: placedAtMs,
-    });
+  aviatorCashout(userId: string, roundId: number, betAmount: number, placedAtMs: number): Promise<AviatorCashoutResult> {
+    return post<AviatorCashoutResult>({ game_type: "aviator_cashout", user_id: userId, round_id: roundId, bet_amount: betAmount, placed_at_ms: placedAtMs });
   },
-
   aviatorSettle(userId: string, roundId: number, betAmount: number): Promise<AviatorSettleResult> {
-    return post<AviatorSettleResult>({
-      game_type: "aviator_settle",
-      user_id: userId,
-      round_id: roundId,
-      bet_amount: betAmount,
-    });
+    return post<AviatorSettleResult>({ game_type: "aviator_settle", user_id: userId, round_id: roundId, bet_amount: betAmount });
   },
-
   aviatorRoundStatus(roundId: number): Promise<AviatorRoundStatusResult> {
     return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: String(roundId) });
   },
