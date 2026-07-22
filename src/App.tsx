@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Header from './components/Header';
 import BottomNav, { type Route } from './components/BottomNav';
 import HomeView from './views/HomeView';
@@ -44,6 +44,23 @@ interface MaintenanceConfig {
   estimated_time: string;
 }
 
+async function fetchMaintenanceConfig(): Promise<MaintenanceConfig | null> {
+  try {
+    const { data } = await supabase
+      .from('settings')
+      .select('value')
+      .eq('key', 'maintenance_mode')
+      .single();
+    if (data?.value) {
+      const val = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+      return val as MaintenanceConfig;
+    }
+  } catch {
+    // settings table may not have this key yet — ignore
+  }
+  return null;
+}
+
 export default function App() {
   const staffSession = useStaffSession();
   const [route, setRoute] = useState<Route>(() => {
@@ -63,9 +80,9 @@ export default function App() {
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    // Initialize login state from current session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsLoggedIn(!!session);
     });
@@ -81,27 +98,12 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Load maintenance mode from Supabase and subscribe to realtime changes
+  // Load maintenance mode + realtime + polling so cache never causes a stale state
   useEffect(() => {
-    const loadMaintenance = async () => {
-      try {
-        const { data } = await supabase
-          .from('settings')
-          .select('value')
-          .eq('key', 'maintenance_mode')
-          .single();
-        if (data?.value) {
-          const val = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
-          setMaintenance(val as MaintenanceConfig);
-        }
-      } catch {
-        // settings table may not have this key yet — ignore
-      }
-    };
+    // Initial load
+    void fetchMaintenanceConfig().then(cfg => { if (cfg !== null) setMaintenance(cfg); });
 
-    void loadMaintenance();
-
-    // Realtime subscription — updates maintenance state when admin toggles it
+    // Realtime subscription — fires instantly when admin toggles maintenance
     const channel = supabase
       .channel('maintenance_mode_watch')
       .on(
@@ -110,7 +112,7 @@ export default function App() {
         (payload) => {
           if (payload.new?.value) {
             const val = typeof payload.new.value === 'string'
-              ? JSON.parse(payload.new.value)
+              ? JSON.parse(payload.new.value as string)
               : payload.new.value;
             setMaintenance(val as MaintenanceConfig);
           }
@@ -118,7 +120,24 @@ export default function App() {
       )
       .subscribe();
 
-    return () => { void supabase.removeChannel(channel); };
+    // Polling fallback every 10s — catches cache/network misses
+    pollTimerRef.current = setInterval(() => {
+      void fetchMaintenanceConfig().then(cfg => { if (cfg !== null) setMaintenance(cfg); });
+    }, 10_000);
+
+    // Re-fetch when the tab becomes visible (user switches back from another tab)
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void fetchMaintenanceConfig().then(cfg => { if (cfg !== null) setMaintenance(cfg); });
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      void supabase.removeChannel(channel);
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -145,7 +164,6 @@ export default function App() {
   const showHeader = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
   const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
 
-  // Show maintenance page to non-admin users when maintenance mode is enabled
   const isAdminRoute = route === 'admin';
   const isStaffLoggedIn = !!staffSession;
   const showMaintenance = maintenance?.enabled && !isAdminRoute && !isStaffLoggedIn;
@@ -175,7 +193,6 @@ export default function App() {
         />
       )}
 
-      {/* pt-[62px] matches new header height */}
       <div className={showHeader ? 'pb-16 pt-[62px]' : ''}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView onNavigate={navigate} />}
@@ -220,7 +237,6 @@ export default function App() {
       <AuthModal open={authModalOpen} initialMode={authModalMode} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
 
-      {/* Ban popup — shown only to logged-in users whose account has been banned */}
       {isLoggedIn && <BanPopup />}
     </div>
   );
