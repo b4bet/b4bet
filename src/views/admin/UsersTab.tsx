@@ -1,52 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Users, Search, RefreshCw, X, Save, Loader2 } from 'lucide-react';
-import {
-  supabaseGetUsers,
-  supabaseUpdateUserFull,
-  type SupabaseProfile,
-  type UserUpdatePayload,
-} from '../../lib/supabaseIntegration';
+import { Users, Plus, Minus, ShieldAlert, Search, Eye, RefreshCw } from 'lucide-react';
+import { supabaseGetUsers, supabaseUpdateBalance, type SupabaseProfile } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
   return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// ---- Edit panel state ----
-interface EditState {
-  username: string;
-  display_name: string;
-  phone: string;
-  email: string;
-  balance: string;
-  vip_level: string;
-  is_active: boolean;
-  is_banned: boolean;
-  account_id: string;
-}
-
-function profileToEdit(u: SupabaseProfile): EditState {
-  return {
-    username:     u.username     ?? '',
-    display_name: u.display_name ?? '',
-    phone:        u.phone        ?? '',
-    email:        u.email        ?? '',
-    balance:      String(u.balance),
-    vip_level:    String(u.vip_level),
-    is_active:    u.is_active,
-    is_banned:    u.is_banned,
-    account_id:   u.account_id   ?? '',
-  };
-}
-
-// ---- Main component ----
-export default function UsersTab({ currentStaffEmail }: { currentStaffEmail?: string }) {
-  const [users, setUsers]     = useState<SupabaseProfile[]>([]);
+export default function UsersTab() {
+  const [users, setUsers] = useState<SupabaseProfile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [q, setQ]             = useState('');
-  const [editUser, setEditUser] = useState<SupabaseProfile | null>(null);
-  const [form, setForm]        = useState<EditState | null>(null);
-  const [saving, setSaving]    = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [q, setQ] = useState('');
+  const [adjustId, setAdjustId] = useState<string | null>(null);
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [viewingId, setViewingId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,271 +29,199 @@ export default function UsersTab({ currentStaffEmail }: { currentStaffEmail?: st
 
   useEffect(() => { void load(); }, [load]);
 
-  // Exclude the currently logged-in staff member's own player account (matched by email)
-  const visibleUsers = currentStaffEmail
-    ? users.filter((u) => u.email !== currentStaffEmail)
-    : users;
-
-  const filtered = visibleUsers.filter((u) => {
+  const filtered = users.filter((u) => {
     const query = q.toLowerCase();
     return (
-      (u.username     ?? '').toLowerCase().includes(query) ||
+      (u.username ?? '').toLowerCase().includes(query) ||
       (u.display_name ?? '').toLowerCase().includes(query) ||
-      (u.account_id   ?? '').toLowerCase().includes(query) ||
-      u.id.toLowerCase().includes(query)
+      u.id.toLowerCase().includes(query) ||
+      (u.account_id ?? '').toLowerCase().includes(query)
     );
   });
 
-  const openEdit = (u: SupabaseProfile) => {
-    setEditUser(u);
-    setForm(profileToEdit(u));
-    setSaveError(null);
-  };
-
-  const closeEdit = () => {
-    setEditUser(null);
-    setForm(null);
-    setSaveError(null);
-  };
-
-  const handleSave = async () => {
-    if (!editUser || !form) return;
-    setSaving(true);
-    setSaveError(null);
+  const adjust = async (id: string, dir: 'credit' | 'debit') => {
+    const amt = parseFloat(amount) || 0;
+    if (amt <= 0) return;
+    const user = users.find((u) => u.id === id);
+    if (!user) return;
+    const newBalance = dir === 'credit'
+      ? user.balance + amt
+      : Math.max(0, user.balance - amt);
     try {
-      const payload: UserUpdatePayload = {
-        username:     form.username     || undefined,
-        display_name: form.display_name || undefined,
-        phone:        form.phone        || undefined,
-        email:        form.email        || undefined,
-        balance:      parseFloat(form.balance)   || 0,
-        vip_level:    parseInt(form.vip_level, 10) || 0,
-        is_active:    form.is_active,
-        is_banned:    form.is_banned,
-        account_id:   form.account_id   || undefined,
-      };
-      await supabaseUpdateUserFull(editUser.id, payload);
-      // Update local state so table reflects change without full reload
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === editUser.id
-            ? {
-                ...u,
-                username:     payload.username     ?? u.username,
-                display_name: payload.display_name ?? u.display_name,
-                phone:        payload.phone        ?? u.phone,
-                email:        payload.email        ?? u.email,
-                balance:      payload.balance      ?? u.balance,
-                vip_level:    payload.vip_level    ?? u.vip_level,
-                is_active:    payload.is_active    ?? u.is_active,
-                is_banned:    payload.is_banned    ?? u.is_banned,
-                account_id:   payload.account_id   ?? u.account_id,
-              }
-            : u,
-        ),
-      );
-      closeEdit();
+      await supabaseUpdateBalance(id, newBalance);
+      setUsers((prev) => prev.map((u) => u.id === id ? { ...u, balance: newBalance } : u));
+      setAdjustId(null); setAmount(''); setReason('');
     } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Save failed');
-    } finally {
-      setSaving(false);
+      console.error('Balance update error:', e);
+      alert('Balance update failed');
     }
   };
 
+  const viewing = viewingId ? users.find((u) => u.id === viewingId) ?? null : null;
+
   return (
-    <div className="p-4 space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Users className="w-5 h-5 text-blue-400" />
-        <h2 className="text-lg font-semibold text-white">Users</h2>
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <Users className="w-5 h-5 text-neon-400" />
+          <div>
+            <h2 className="font-display font-bold text-lg text-white">User Profiles</h2>
+            <p className="text-xs text-slate-500">Live data from Supabase database.</p>
+          </div>
+        </div>
         <button
           onClick={() => void load()}
-          className="ml-auto flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+          disabled={loading}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white text-xs font-semibold disabled:opacity-50"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           Refresh
         </button>
       </div>
 
-      {/* Search */}
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
         <input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search by username, display name, account ID or user ID…"
-          className="w-full pl-9 pr-4 py-2 bg-slate-800 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-400 focus:outline-none focus:border-blue-500"
+          placeholder="Search by username, display name, user ID or account ID…"
+          className="input pl-10"
         />
       </div>
 
-      {/* Table */}
-      {loading ? (
-        <div className="text-center py-12 text-slate-400">Loading…</div>
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-slate-700">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-slate-800 text-slate-400 text-left">
-                <th className="px-3 py-2">Account ID</th>
-                <th className="px-3 py-2">Username</th>
-                <th className="px-3 py-2">Display Name</th>
-                <th className="px-3 py-2">Email</th>
-                <th className="px-3 py-2">Balance</th>
-                <th className="px-3 py-2">VIP</th>
-                <th className="px-3 py-2">Active</th>
-                <th className="px-3 py-2">Banned</th>
-                <th className="px-3 py-2">Joined</th>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-wider text-slate-500 border-b border-borderline-900">
+              <th className="text-left py-2 px-3">Username</th>
+              <th className="text-left py-2 px-3">Acct ID</th>
+              <th className="text-left py-2 px-3">Email</th>
+              <th className="text-left py-2 px-3">Phone</th>
+              <th className="text-left py-2 px-3">Balance</th>
+              <th className="text-left py-2 px-3">Deposit</th>
+              <th className="text-left py-2 px-3">Withdraw</th>
+              <th className="text-left py-2 px-3">VIP</th>
+              <th className="text-left py-2 px-3">Joined</th>
+              <th className="text-left py-2 px-3">Status</th>
+              <th className="text-left py-2 px-3">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-borderline-900/50">
+            {loading ? (
+              <tr>
+                <td colSpan={11} className="text-center text-xs text-slate-500 py-8">
+                  Loading from Supabase…
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={9} className="text-center py-8 text-slate-400">No users found</td>
+            ) : filtered.length === 0 ? (
+              <tr>
+                <td colSpan={11} className="text-center text-xs text-slate-500 py-8">
+                  {users.length === 0 ? 'No users found in database.' : 'No users match your search.'}
+                </td>
+              </tr>
+            ) : (
+              filtered.map((u) => (
+                <tr key={u.id} className="hover:bg-slatepanel-800/30 transition-colors">
+                  <td className="py-2 px-3">
+                    <div className="font-semibold text-white truncate max-w-[120px]">
+                      {u.display_name ?? u.username ?? '—'}
+                    </div>
+                    {u.is_banned && (
+                      <span className="text-[9px] text-coral-400">Banned</span>
+                    )}
+                  </td>
+                  <td className="py-2 px-3 font-mono text-slate-400 text-xs">{u.account_id || '—'}</td>
+                  <td className="py-2 px-3 text-slate-400 text-xs truncate max-w-[140px]">{u.email ?? '—'}</td>
+                  <td className="py-2 px-3 text-slate-400 text-xs">{u.phone ?? '—'}</td>
+                  <td className="py-2 px-3 text-neon-300 tabular-nums">{fmt(u.balance)}</td>
+                  <td className="py-2 px-3 text-emeraldwin-300 tabular-nums">{fmt(u.total_deposit)}</td>
+                  <td className="py-2 px-3 text-coral-300 tabular-nums">{fmt(u.total_withdrawal)}</td>
+                  <td className="py-2 px-3 text-slate-300">{u.vip_level}</td>
+                  <td className="py-2 px-3 text-slate-400 text-xs">
+                    {new Date(u.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </td>
+                  <td className="py-2 px-3">
+                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold ${
+                      u.is_banned
+                        ? 'bg-coral-500/15 border-coral-500/30 text-coral-300'
+                        : u.is_active
+                        ? 'bg-emeraldwin-500/10 border-emeraldwin-500/20 text-emeraldwin-400'
+                        : 'bg-slate-500/15 border-slate-500/30 text-slate-400'
+                    }`}>
+                      {u.is_banned ? 'Banned' : u.is_active ? 'Active' : 'Inactive'}
+                    </span>
+                  </td>
+                  <td className="py-2 px-3">
+                    {adjustId === u.id ? (
+                      <div className="flex flex-wrap items-center gap-1">
+                        <input
+                          value={amount}
+                          onChange={(e) => setAmount(e.target.value)}
+                          placeholder="Amt"
+                          className="w-20 input py-1 text-xs tabular-nums"
+                        />
+                        <button onClick={() => void adjust(u.id, 'credit')} className="w-7 h-7 rounded-lg bg-emeraldwin-500/20 border border-emeraldwin-500/40 grid place-items-center">
+                          <Plus className="w-3 h-3 text-emeraldwin-300" />
+                        </button>
+                        <button onClick={() => void adjust(u.id, 'debit')} className="w-7 h-7 rounded-lg bg-coral-500/20 border border-coral-500/40 grid place-items-center">
+                          <Minus className="w-3 h-3 text-coral-300" />
+                        </button>
+                        <button onClick={() => { setAdjustId(null); setAmount(''); setReason(''); }} className="text-[10px] text-slate-400 hover:text-white px-1">✕</button>
+                        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason…" className="input py-1 text-xs w-full mt-1" />
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => setAdjustId(u.id)}
+                          className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slatepanel-700 border border-borderline-900 text-slate-300 hover:text-white text-xs font-semibold"
+                        >
+                          <ShieldAlert className="w-3 h-3" /> Adjust
+                        </button>
+                        <button
+                          onClick={() => setViewingId(u.id)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-neon-500/15 border border-neon-500/40 text-neon-300 hover:text-neon-200 text-xs font-semibold"
+                        >
+                          <Eye className="w-3 h-3" /> View
+                        </button>
+                      </div>
+                    )}
+                  </td>
                 </tr>
-              ) : (
-                filtered.map((u) => (
-                  <tr
-                    key={u.id}
-                    onClick={() => openEdit(u)}
-                    className="border-t border-slate-700 hover:bg-slate-800 cursor-pointer transition-colors"
-                  >
-                    <td className="px-3 py-2 font-mono text-xs text-slate-300">{u.account_id || '—'}</td>
-                    <td className="px-3 py-2 text-white">{u.username || '—'}</td>
-                    <td className="px-3 py-2 text-slate-300">{u.display_name || '—'}</td>
-                    <td className="px-3 py-2 text-slate-400 text-xs">{u.email || '—'}</td>
-                    <td className="px-3 py-2 text-green-400 font-mono">{fmt(u.balance)}</td>
-                    <td className="px-3 py-2 text-center">{u.vip_level}</td>
-                    <td className="px-3 py-2 text-center">
-                      <span className={u.is_active ? 'text-green-400' : 'text-slate-500'}>
-                        {u.is_active ? '✓' : '✗'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-center">
-                      <span className={u.is_banned ? 'text-red-400' : 'text-slate-500'}>
-                        {u.is_banned ? 'Yes' : 'No'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 text-slate-400 text-xs">
-                      {new Date(u.created_at).toLocaleDateString()}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      )}
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
 
-      {/* Floating edit panel — no is_admin field (intentional security decision) */}
-      {editUser && form && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0,0,0,0.7)' }}
-          onClick={(e) => { if (e.target === e.currentTarget) closeEdit(); }}
-        >
-          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            {/* Panel header */}
-            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-700">
-              <div>
-                <h3 className="text-white font-semibold text-base">Edit User</h3>
-                <p className="text-slate-400 text-xs mt-0.5 font-mono">{editUser.id}</p>
-              </div>
-              <button
-                onClick={closeEdit}
-                className="text-slate-400 hover:text-white transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
+      <div className="panel p-3 flex items-center gap-2">
+        <Users className="w-4 h-4 text-slate-500" />
+        <span className="text-xs text-slate-500">Total Registered Users</span>
+        <span className="text-white font-bold ml-auto">{users.length}</span>
+      </div>
+
+      {/* User detail modal */}
+      {viewing && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setViewingId(null)}>
+          <div className="panel p-6 w-full max-w-md space-y-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="font-display font-bold text-white">{viewing.display_name ?? viewing.username}</h3>
+              <button onClick={() => setViewingId(null)} className="text-slate-400 hover:text-white text-sm">✕ Close</button>
             </div>
-
-            {/* Fields */}
-            <div className="px-5 py-4 space-y-4">
-              <Field
-                label="Account ID"
-                value={form.account_id}
-                onChange={(v) => setForm((f) => f ? { ...f, account_id: v } : f)}
-              />
-              <Field
-                label="Username"
-                value={form.username}
-                onChange={(v) => setForm((f) => f ? { ...f, username: v } : f)}
-              />
-              <Field
-                label="Display Name"
-                value={form.display_name}
-                onChange={(v) => setForm((f) => f ? { ...f, display_name: v } : f)}
-              />
-              <Field
-                label="Phone"
-                value={form.phone}
-                onChange={(v) => setForm((f) => f ? { ...f, phone: v } : f)}
-              />
-              <Field
-                label="Email"
-                type="email"
-                value={form.email}
-                onChange={(v) => setForm((f) => f ? { ...f, email: v } : f)}
-              />
-              <Field
-                label="Balance (₹)"
-                type="number"
-                value={form.balance}
-                onChange={(v) => setForm((f) => f ? { ...f, balance: v } : f)}
-              />
-              <Field
-                label="VIP Level"
-                type="number"
-                value={form.vip_level}
-                onChange={(v) => setForm((f) => f ? { ...f, vip_level: v } : f)}
-              />
-
-              {/* Boolean toggles */}
-              <div className="grid grid-cols-2 gap-4">
-                <Toggle
-                  label="Active"
-                  value={form.is_active}
-                  onChange={(v) => setForm((f) => f ? { ...f, is_active: v } : f)}
-                />
-                <Toggle
-                  label="Banned"
-                  value={form.is_banned}
-                  onChange={(v) => setForm((f) => f ? { ...f, is_banned: v } : f)}
-                  danger
-                />
-              </div>
-
-              {/* Read-only info */}
-              <div className="bg-slate-800 rounded-lg p-3 space-y-1 text-xs text-slate-400">
-                <InfoRow label="Total Deposit"  value={fmt(editUser.total_deposit)} />
-                <InfoRow label="Total Withdrawn" value={fmt(editUser.total_withdrawal)} />
-                <InfoRow label="Referral Code"  value={editUser.referral_code ?? '—'} />
-                <InfoRow label="Joined"         value={new Date(editUser.created_at).toLocaleString()} />
-              </div>
-
-              {saveError && (
-                <p className="text-red-400 text-sm">{saveError}</p>
-              )}
-            </div>
-
-            {/* Actions */}
-            <div className="px-5 py-4 border-t border-slate-700 flex justify-end gap-3">
-              <button
-                onClick={closeEdit}
-                className="px-4 py-2 rounded-lg text-sm text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => void handleSave()}
-                disabled={saving}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-medium transition-colors"
-              >
-                {saving ? (
-                  <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</>
-                ) : (
-                  <><Save className="w-4 h-4" /> Save Changes</>
-                )}
-              </button>
+            <div className="grid grid-cols-2 gap-2">
+              <Row label="Username" value={viewing.username ?? '—'} />
+              <Row label="Account ID" value={viewing.account_id || '—'} mono />
+              <Row label="Email" value={viewing.email ?? '—'} />
+              <Row label="Phone" value={viewing.phone ?? '—'} />
+              <Row label="Balance" value={fmt(viewing.balance)} />
+              <Row label="Total Deposit" value={fmt(viewing.total_deposit)} />
+              <Row label="Total Withdrawal" value={fmt(viewing.total_withdrawal)} />
+              <Row label="VIP Level" value={String(viewing.vip_level)} />
+              <Row label="Status" value={viewing.is_banned ? 'Banned' : viewing.is_active ? 'Active' : 'Inactive'} />
+              <Row label="Admin" value={viewing.is_admin ? 'Yes' : 'No'} />
+              <Row label="Reg. IP" value={viewing.registration_ip ?? '—'} mono />
+              <Row label="Referral Code" value={viewing.referral_code ?? '—'} mono />
+              <Row label="Signup Bonus" value={viewing.signup_bonus_granted ? 'Granted' : 'Not granted'} />
+              <Row label="Joined" value={new Date(viewing.created_at).toLocaleString()} />
             </div>
           </div>
         </div>
@@ -335,67 +230,11 @@ export default function UsersTab({ currentStaffEmail }: { currentStaffEmail?: st
   );
 }
 
-// ---- Sub-components ----
-function Field({
-  label, value, onChange, type = 'text',
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  type?: string;
-}) {
+function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div>
-      <label className="block text-xs text-slate-400 mb-1">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-sm text-white focus:outline-none focus:border-blue-500"
-      />
-    </div>
-  );
-}
-
-function Toggle({
-  label, value, onChange, danger = false,
-}: {
-  label: string;
-  value: boolean;
-  onChange: (v: boolean) => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!value)}
-      className={[
-        'flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-colors',
-        value
-          ? danger
-            ? 'bg-red-900/40 border-red-600 text-red-300'
-            : 'bg-green-900/40 border-green-600 text-green-300'
-          : 'bg-slate-800 border-slate-600 text-slate-400',
-      ].join(' ')}
-    >
-      <span
-        className={[
-          'w-2.5 h-2.5 rounded-full',
-          value
-            ? danger ? 'bg-red-400' : 'bg-green-400'
-            : 'bg-slate-500',
-        ].join(' ')}
-      />
-      {label}: {value ? 'Yes' : 'No'}
-    </button>
-  );
-}
-
-function InfoRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between">
-      <span>{label}</span>
-      <span className="text-slate-300 font-mono">{value}</span>
+    <div className="bg-slatepanel-800 rounded-lg p-2">
+      <p className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">{label}</p>
+      <p className={`text-xs text-white mt-0.5 truncate ${mono ? 'font-mono' : ''}`}>{value}</p>
     </div>
   );
 }
