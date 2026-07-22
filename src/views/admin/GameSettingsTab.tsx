@@ -46,12 +46,9 @@ export default function GameSettingsTab() {
     // Keep only the 8 known slugs, sorted in canonical GAME_SLUGS order
     const bySlug = Object.fromEntries(rows.map(r => [r.slug, r]));
     const ordered = GAME_SLUGS
-      .map(({ slug, label }) => bySlug[slug] ?? null)
+      .filter(({ slug }) => SLUG_SET.has(slug))
+      .map(({ slug }) => bySlug[slug] ?? null)
       .filter((r): r is GameRow => r !== null);
-
-    // Also include any DB rows not in SLUG_SET filtered out — they won't show
-    const others = rows.filter(r => !SLUG_SET.has(r.slug));
-    _ = others; // intentionally ignored — only show the 8
 
     setGames(ordered);
     setLoading(false);
@@ -72,10 +69,10 @@ export default function GameSettingsTab() {
 
       if (error) throw new Error(error.message);
 
-      // 2. Sync limits to store (admin_config.perGameLimits → Supabase)
+      // 2. Sync limits into store.perGameLimits → also persists to admin_config in Supabase
       store.setGameLimit(game.slug, { min: game.min_bet, max: game.max_bet });
 
-      // 3. Wait for store to persist
+      // 3. Reload to confirm round-trip
       await store.loadAdminConfigFromSupabase();
 
       setSaveStatus(s => ({ ...s, [game.id]: 'saved' }));
@@ -90,7 +87,7 @@ export default function GameSettingsTab() {
 
   function update(id: string, patch: Partial<GameRow>) {
     setGames(gs => gs.map(g => g.id === id ? { ...g, ...patch } : g));
-    // Reset save status when field changes
+    // Reset save status when any field changes
     setSaveStatus(s => ({ ...s, [id]: 'idle' }));
   }
 
@@ -107,7 +104,7 @@ export default function GameSettingsTab() {
       <div className="flex items-center gap-2">
         <Settings className="w-5 h-5 text-neon-400" />
         <h2 className="text-lg font-bold">Game Settings</h2>
-        <span className="text-xs text-slate-500 ml-1">({games.length} games)</span>
+        <span className="text-xs text-slate-500 ml-1">({games.length} / 8 games)</span>
         <button
           onClick={() => { void loadGames(); }}
           className="ml-auto p-2 bg-slatepanel-700 rounded-lg hover:bg-slatepanel-600 transition"
@@ -134,7 +131,7 @@ export default function GameSettingsTab() {
                   </span>
                   <button
                     onClick={() => update(g.id, { is_active: !g.is_active })}
-                    className={`w-12 h-6 rounded-full transition-colors ${g.is_active ? 'bg-neon-500' : 'bg-slatepanel-600'}`}
+                    className={`w-12 h-6 rounded-full transition-colors cursor-pointer ${g.is_active ? 'bg-neon-500' : 'bg-slatepanel-600'}`}
                   >
                     <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${g.is_active ? 'translate-x-7' : 'translate-x-0.5'}`} />
                   </button>
@@ -175,7 +172,7 @@ export default function GameSettingsTab() {
 
               {/* Footer row */}
               <div className="flex items-center justify-between">
-                <div className="text-xs">
+                <div className="text-xs min-h-[1.25rem]">
                   {status === 'saved' && (
                     <span className="flex items-center gap-1 text-neon-400">
                       <CheckCircle2 className="w-3.5 h-3.5" />
@@ -211,6 +208,3 @@ export default function GameSettingsTab() {
     </div>
   );
 }
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-declare const _: unknown;
