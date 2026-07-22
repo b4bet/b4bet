@@ -67,12 +67,14 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
   };
 
   return (
-    <div className="relative w-full overflow-hidden rounded-2xl bg-slatepanel-900">
-
-      {/* Slides track */}
+    <div
+      className="relative w-full rounded-2xl bg-slatepanel-900"
+      style={{ overflow: 'hidden' }}
+    >
+      {/* Slides track — each slide is exactly 100% width of this container */}
       <div
-        className="flex transition-transform duration-500 ease-in-out"
-        style={{ transform: `translateX(-${idx * 100}%)` }}
+        className="flex h-40 sm:h-48 transition-transform duration-500 ease-in-out"
+        style={{ transform: `translateX(-${idx * 100}%)`, width: '100%' }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
@@ -83,9 +85,9 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
                 key={b.id}
                 href={b.linkUrl || '#'}
                 onClick={(e) => { if (!b.linkUrl) e.preventDefault(); }}
-                className="min-w-full h-40 sm:h-48 relative block bg-slatepanel-900 flex-shrink-0"
+                style={{ minWidth: '100%', maxWidth: '100%' }}
+                className="relative block bg-slatepanel-900 flex-shrink-0"
               >
-                {/* Full image — object-contain so nothing is cut off */}
                 <img
                   src={b.imageUrl}
                   alt={b.title || 'Banner'}
@@ -98,15 +100,12 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
               return (
                 <div
                   key={i}
-                  className="min-w-full h-40 sm:h-48 relative overflow-hidden flex-shrink-0"
+                  style={{ minWidth: '100%', maxWidth: '100%' }}
+                  className="relative overflow-hidden flex-shrink-0"
                 >
-                  {/* Background gradient */}
                   <div className={`absolute inset-0 bg-gradient-to-r ${s.gradient}`} />
-                  {/* Decorative circle */}
                   <div className="absolute -right-8 -top-8 w-40 h-40 rounded-full bg-white/5" />
                   <div className="absolute -right-4 -bottom-4 w-24 h-24 rounded-full bg-white/3" />
-
-                  {/* Content */}
                   <div className="relative h-full flex flex-col justify-center px-5 py-4">
                     <div className={`flex items-center gap-1.5 mb-2 ${s.accent}`}>
                       <Icon className="w-4 h-4" />
