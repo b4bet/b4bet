@@ -61,6 +61,23 @@ async function fetchMaintenanceConfig(): Promise<MaintenanceConfig | null> {
   return null;
 }
 
+// Check if current page was loaded while maintenance was OFF.
+// If maintenance is now ON and JS is from old cache, force a hard reload
+// so the browser fetches fresh JS bundle and shows the maintenance page.
+const MAINTENANCE_FLAG = 'b4bet_maint_v1';
+
+function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdmin: boolean) {
+  if (!cfg?.enabled || isStaff || isAdmin) return false;
+
+  // If the maintenance flag is already set this session, no reload needed
+  if (sessionStorage.getItem(MAINTENANCE_FLAG) === '1') return true;
+
+  // Set flag and hard-reload to bust JS cache
+  sessionStorage.setItem(MAINTENANCE_FLAG, '1');
+  window.location.reload();
+  return true;
+}
+
 export default function App() {
   const staffSession = useStaffSession();
   const [route, setRoute] = useState<Route>(() => {
@@ -82,6 +99,13 @@ export default function App() {
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Clear the reload flag when maintenance is turned OFF so future ON triggers reload again
+  useEffect(() => {
+    if (maintenance && !maintenance.enabled) {
+      sessionStorage.removeItem(MAINTENANCE_FLAG);
+    }
+  }, [maintenance?.enabled]);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsLoggedIn(!!session);
@@ -100,8 +124,19 @@ export default function App() {
 
   // Load maintenance mode + realtime + polling so cache never causes a stale state
   useEffect(() => {
+    const isAdminRoute = window.location.pathname === '/aryan' ||
+      window.location.hash === '#aryan' || window.location.hash === '#/aryan';
+
+    const handleConfig = (cfg: MaintenanceConfig | null) => {
+      if (cfg !== null) {
+        setMaintenance(cfg);
+        // If we just loaded and maintenance is ON — force hard reload to bust JS cache
+        applyMaintenance(cfg, !!staffSession, isAdminRoute);
+      }
+    };
+
     // Initial load
-    void fetchMaintenanceConfig().then(cfg => { if (cfg !== null) setMaintenance(cfg); });
+    void fetchMaintenanceConfig().then(handleConfig);
 
     // Realtime subscription — fires instantly when admin toggles maintenance
     const channel = supabase
@@ -114,7 +149,10 @@ export default function App() {
             const val = typeof payload.new.value === 'string'
               ? JSON.parse(payload.new.value as string)
               : payload.new.value;
-            setMaintenance(val as MaintenanceConfig);
+            const cfg = val as MaintenanceConfig;
+            setMaintenance(cfg);
+            // Hard reload so cached JS is replaced with fresh bundle
+            applyMaintenance(cfg, !!staffSession, isAdminRoute);
           }
         },
       )
@@ -122,13 +160,13 @@ export default function App() {
 
     // Polling fallback every 10s — catches cache/network misses
     pollTimerRef.current = setInterval(() => {
-      void fetchMaintenanceConfig().then(cfg => { if (cfg !== null) setMaintenance(cfg); });
+      void fetchMaintenanceConfig().then(handleConfig);
     }, 10_000);
 
     // Re-fetch when the tab becomes visible (user switches back from another tab)
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        void fetchMaintenanceConfig().then(cfg => { if (cfg !== null) setMaintenance(cfg); });
+        void fetchMaintenanceConfig().then(handleConfig);
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
@@ -138,6 +176,7 @@ export default function App() {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
