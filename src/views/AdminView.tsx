@@ -6,7 +6,7 @@ import {
   Cpu, Users, Mail, Coins, Megaphone, Headphones, ShieldCheck,
   Image as ImageIcon, TrendingUp, Wallet, UserCog, Bell, Banknote, MessageSquare, Zap, History,
   Ticket, Sliders, CreditCard, FileText, ShieldBan, BellRing, Gamepad2, Trophy, Gift,
-  User as UserIcon, KeyRound, LogOut, ChevronDown, LayoutDashboard, BarChart2,
+  User as UserIcon, KeyRound, LogOut, ChevronDown, LayoutDashboard,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -18,7 +18,6 @@ import DashboardOverviewTab from './admin/DashboardOverviewTab';
 import BannerLogoTab from './admin/BannerLogoTab';
 import FinanceTab from './admin/FinanceTab';
 import RequestsTab from './admin/RequestsTab';
-import StatsSettingsTab from './admin/StatsSettingsTab';
 
 import EmailManagerTab from './admin/EmailManagerTab';
 import StaffTab from './admin/StaffTab';
@@ -41,7 +40,7 @@ import BanSectionTab from './admin/BanSectionTab';
 import IntercomTab from './admin/IntercomTab';
 import BalanceHistoryTab from './admin/BalanceHistoryTab';
 
-type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager' | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory' | 'requests' | 'signupBonus' | 'dashboard' | 'statsSettings';
+type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager' | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory' | 'requests' | 'signupBonus' | 'dashboard';
 
 const tabs: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -54,7 +53,6 @@ const tabs: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'algos', label: 'Algos', icon: Cpu },
   { key: 'gameSettings', label: '8-Game Settings', icon: Sliders },
   { key: 'banner', label: 'Banners', icon: ImageIcon },
-  { key: 'statsSettings', label: 'Home Stats', icon: BarChart2 },
   { key: 'paymentMethods', label: 'Payment Methods', icon: CreditCard },
   { key: 'gateways', label: 'Auto Gateways', icon: Zap },
   { key: 'notifications', label: 'Notifications', icon: Bell },
@@ -270,7 +268,6 @@ export default function AdminView({ onNavigate, onOpenMenu }: { onNavigate: (r: 
           {tab === 'paymentMethods' && <PaymentMethodsTab />}
           {tab === 'dynamicPages' && <DynamicPagesTab />}
           {tab === 'banner' && <BannerLogoTab />}
-          {tab === 'statsSettings' && <StatsSettingsTab />}
           {tab === 'redeem' && <RedeemCodesTab />}
           {tab === 'signupBonus' && <SignupBonusTab />}
           {tab === 'gameSettings' && <GameSettingsTab />}
