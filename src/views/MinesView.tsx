@@ -9,6 +9,7 @@ import { auth } from '../lib/auth';
 import { GameService } from '../lib/game-service';
 import { bus, Topics } from '../lib/bus';
 import { supabase } from '../integrations/supabase/client';
+import { useAdminConfig } from '../lib/hooks';
 import { Bomb, Gem, Flag, Play, HandCoins, RefreshCw } from 'lucide-react';
 
 // ── Local UI state ────────────────────────────────────────────────────────────
@@ -166,6 +167,11 @@ export default function MinesView() {
 
   const { rows: myHistory, loading: histLoading, error: histError, refresh: refreshHistory } = useSupabaseMinesHistory();
 
+  const adminCfg = useAdminConfig();
+  const quickStakes = adminCfg.gameHandlers['mines']?.quickStakes?.length
+    ? adminCfg.gameHandlers['mines'].quickStakes
+    : [100, 500, 1000, 5000];
+
   const start = useCallback(async () => {
     const session = auth.getSession();
     if (!session) {
@@ -311,6 +317,24 @@ export default function MinesView() {
               />
             </div>
           </div>
+        </div>
+
+        {/* Quick stake chips */}
+        <div className="flex gap-2 mb-3">
+          {quickStakes.map((v) => {
+            const label = v >= 1000 ? `${v / 1000}K` : String(v);
+            return (
+              <button
+                key={v}
+                type="button"
+                disabled={game.active}
+                onClick={() => setStakeStr(String(v))}
+                className="flex-1 py-1.5 rounded-lg text-xs font-bold border border-borderline-800 bg-slatepanel-800 text-slate-300 active:scale-95 transition-transform disabled:opacity-40"
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
 
         <div className="flex items-center justify-between mb-3 px-1">
