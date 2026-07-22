@@ -168,6 +168,8 @@ export function WingoHandlingPanel() { return <GameHandlerPanel gameKey="wingo" 
 export function K3HandlingPanel() { return <GameHandlerPanel gameKey="k3" label="K3" icon={Dices} manualLabel="Dice Result (a,b,c)" manualPlaceholder="3,3,3" manualHint="Three comma-separated dice values (1-6 each)." />; }
 export function FiveDHandlingPanel() { return <GameHandlerPanel gameKey="fived" label="5D" icon={Dices} manualLabel="Result Digits (5)" manualPlaceholder="12345" manualHint="Five-digit outcome, one digit per column." />; }
 export function SunMoonHandlingPanel() { return <GameHandlerPanel gameKey="sunvsmoon" label="Sun vs Moon" icon={Sun} manualLabel="Winning Side" manualPlaceholder="sun / moon / eclipse" manualHint="Forces the round outcome to Sun, Eclipse, or Moon." />; }
+export function MinesHandlingPanel() { return <GameHandlerPanel gameKey="mines" label="Mines" icon={Bomb} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." />; }
+export function TradingHandlingPanel() { return <GameHandlerPanel gameKey="trading" label="Trading" icon={BarChart2} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." />; }
 
 export function AllGameHandlersSection() {
   return (
@@ -176,6 +178,8 @@ export function AllGameHandlersSection() {
       <K3HandlingPanel />
       <FiveDHandlingPanel />
       <SunMoonHandlingPanel />
+      <MinesHandlingPanel />
+      <TradingHandlingPanel />
     </div>
   );
 }
@@ -495,7 +499,7 @@ export default function GameAlgosTab() {
   return (
     <div className="space-y-4">
       <div>
-        <h2 className="font-display font-bold text-lg text-white">Game Algorithms & Assets</h2>
+        <h2 className="font-display font-bold text-lg text-white">Game Algorithms &amp; Assets</h2>
         <p className="text-xs text-slate-500">Crash &amp; Aviator handling panels are in Game Handlers tab. Manage game logos here.</p>
       </div>
       <div className="panel p-4">
