@@ -5,7 +5,7 @@ import {
   CreditCard, FileText, Image, Gift, Settings, History,
   ShieldBan, MessageSquare, Zap, BarChart2, LogOut, Menu, X,
   KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown, Link2, Share2,
-  WrenchIcon,
+  Wrench,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -87,7 +87,7 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'signupBonus',         label: 'Signup Bonus',     icon: Gift },
   { key: 'ban',                 label: 'Ban Section',      icon: ShieldBan },
   { key: 'intercom',            label: 'Intercom',         icon: MessageSquare },
-  { key: 'maintenance',         label: 'Maintenance',      icon: WrenchIcon },
+  { key: 'maintenance',         label: 'Maintenance',      icon: Wrench },
 ];
 
 // Maps tab keys that don't match a PermissionKey to the permission that gates them.
@@ -303,14 +303,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     return () => document.removeEventListener('mousedown', close);
   }, [profileOpen]);
 
-  /**
-   * Returns true if the current staff member has access to the given tab.
-   * - 'dashboard' and 'manageProfile' are always visible to all authenticated staff.
-   * - superadmin / isOwner sees everything.
-   * - Tab keys that don't directly match a PermissionKey are mapped via TAB_PERM_MAP.
-   */
   const hasPermission = (key: string): boolean => {
-    // Always-visible tabs
     if (key === 'dashboard' || key === 'manageProfile') return true;
     if (!me) return false;
     if (me.role === 'superadmin' || me.isOwner) return true;
@@ -318,8 +311,6 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
     return me.permissions?.[permKey as keyof typeof me.permissions] === true;
   };
 
-  // If the current tab is no longer permitted (e.g. permissions were revoked while
-  // the user was already on that tab), redirect to the first accessible tab.
   useEffect(() => {
     if (!me) return;
     if (!hasPermission(tab)) {
@@ -334,7 +325,6 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
   const navigate = (t: Tab) => { setTab(t); setSidebarOpen(false); };
   const ActiveGamePanel = GAME_HANDLER_TABS.find(g => g.key === gameHandlerTab)?.Panel ?? CrashHandlingPanel;
 
-  // Sidebar only shows tabs the current staff member can access
   const SidebarNav = () => (
     <nav className="flex-1 overflow-y-auto py-2">
       {TABS.filter(t => hasPermission(t.key)).map(t => (
