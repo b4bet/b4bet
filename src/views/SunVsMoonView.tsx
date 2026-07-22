@@ -83,8 +83,8 @@ function BetButton({
 }
 
 /**
- * Result overlay — covers ONLY the game card (absolute inset-0 inside relative parent).
- * History sections below remain fully visible.
+ * Result overlay — absolute, covers only the game card.
+ * min-h ensures it is tall even when card content is small.
  */
 function ResultOverlay({
   visible, result, won, payout, choice,
@@ -97,38 +97,37 @@ function ResultOverlay({
   const labels: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
 
   return (
-    /* absolute inset-0 — fills exactly the game card box, rounded to match card */
-    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-3xl overflow-hidden bg-black/80 backdrop-blur-sm">
-      <div className="flex flex-col items-center gap-4 px-6 py-8 w-full">
+    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-3xl overflow-hidden bg-black/80 backdrop-blur-sm min-h-[420px]">
+      <div className="flex flex-col items-center gap-6 px-6 py-12 w-full">
         <img
           src={images[result]}
           alt={labels[result]}
-          className="w-20 h-20 object-contain drop-shadow-2xl"
+          className="w-28 h-28 object-contain drop-shadow-2xl"
         />
         <div className="text-center">
-          <p className="text-slate-400 text-xs uppercase tracking-widest mb-1">Result</p>
-          <p className="text-3xl font-black text-white">{labels[result]}</p>
+          <p className="text-slate-400 text-xs uppercase tracking-widest mb-2">Result</p>
+          <p className="text-4xl font-black text-white">{labels[result]}</p>
         </div>
 
         {choice ? (
           won ? (
-            <div className="w-full max-w-[200px] bg-emeraldwin-500/20 border border-emeraldwin-500/40 rounded-2xl px-6 py-4 text-center">
-              <p className="text-emeraldwin-400 font-black text-2xl">+₹{payout.toLocaleString()}</p>
-              <p className="text-sm text-emeraldwin-300/80 mt-1">YOU WIN!</p>
+            <div className="w-full max-w-[220px] bg-emeraldwin-500/20 border border-emeraldwin-500/40 rounded-2xl px-6 py-5 text-center">
+              <p className="text-emeraldwin-400 font-black text-3xl">+₹{payout.toLocaleString()}</p>
+              <p className="text-sm text-emeraldwin-300/80 mt-2">YOU WIN!</p>
             </div>
           ) : (
-            <div className="w-full max-w-[200px] bg-coral-500/20 border border-coral-500/40 rounded-2xl px-6 py-4 text-center">
-              <p className="text-coral-400 font-black text-2xl">LOST</p>
-              <p className="text-sm text-coral-300/80 mt-1">Better luck next round</p>
+            <div className="w-full max-w-[220px] bg-coral-500/20 border border-coral-500/40 rounded-2xl px-6 py-5 text-center">
+              <p className="text-coral-400 font-black text-3xl">LOST</p>
+              <p className="text-sm text-coral-300/80 mt-2">Better luck next round</p>
             </div>
           )
         ) : (
-          <div className="w-full max-w-[200px] bg-slate-800/60 rounded-2xl px-6 py-4 text-center">
+          <div className="w-full max-w-[220px] bg-slate-800/60 rounded-2xl px-6 py-5 text-center">
             <p className="text-slate-400 text-sm">No bet placed</p>
           </div>
         )}
 
-        <p className="text-[10px] text-slate-500 animate-pulse">Next round starting soon…</p>
+        <p className="text-[11px] text-slate-500 animate-pulse mt-2">Next round starting soon…</p>
       </div>
     </div>
   );
@@ -349,7 +348,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         </div>
       </div>
 
-      {/* ── Game card — relative so overlay stays inside it ── */}
+      {/* ── Game card — relative so overlay stays inside ── */}
       <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden">
 
         {/* Result overlay — absolute, covers only this card */}
@@ -414,10 +413,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => adjustAmount(-50)}
-                  className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold"
-                >−</button>
+                <button onClick={() => adjustAmount(-50)} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">−</button>
                 <input
                   type="text"
                   inputMode="decimal"
@@ -425,10 +421,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   onChange={(e) => handleAmountInput(e.target.value)}
                   className="flex-1 bg-slatepanel-800 border border-borderline-900 rounded-xl px-3 py-2 text-center text-white font-bold text-sm focus:outline-none focus:border-neon-400/60"
                 />
-                <button
-                  onClick={() => adjustAmount(50)}
-                  className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold"
-                >+</button>
+                <button onClick={() => adjustAmount(50)} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">+</button>
               </div>
               <div className="flex gap-2">
                 {QUICK_STAKE_AMOUNTS.map((s) => (
@@ -476,7 +469,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         </div>
       </div>
 
-      {/* ── History — always visible, even during result overlay ── */}
+      {/* ── History — always visible ── */}
       <div className="rounded-2xl bg-slatepanel-900 border border-borderline-900 p-4 space-y-4">
         <div className="flex gap-1 bg-slatepanel-800/60 rounded-xl p-1">
           {(['rounds', 'my'] as const).map((tab) => (
