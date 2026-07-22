@@ -557,20 +557,28 @@ export function TopWinPaidOutPanel() {
 // Default export — Game Algos Tab content
 // ─────────────────────────────────────────────────────────────────────────────
 export default function GameAlgosTab() {
-  const logos   = useGameLogos();
+  const logos = useGameLogos();
   const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [uploading, setUploading] = useState<Record<string, boolean>>({});
 
-  const onUpload = (key: GameKey, file: File) => {
+  const onUpload = async (key: GameKey, file: File) => {
     if (!file.type.startsWith('image/')) {
       cms.toast({ title: 'Invalid file', body: 'Please upload an image file.', kind: 'warn' });
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      gameLogos.set(key, reader.result as string);
-      cms.toast({ title: 'Logo updated', body: `${key} logo uploaded successfully.`, kind: 'success' });
-    };
-    reader.readAsDataURL(file);
+    setUploading((prev) => ({ ...prev, [key]: true }));
+    try {
+      const url = await gameLogos.uploadAndSet(key, file);
+      if (url) {
+        cms.toast({ title: 'Logo updated', body: `${key} logo uploaded successfully.`, kind: 'success' });
+      } else {
+        cms.toast({ title: 'Upload failed', body: 'Could not save the logo. Try again.', kind: 'warn' });
+      }
+    } catch {
+      cms.toast({ title: 'Upload error', body: 'An error occurred. Please try again.', kind: 'warn' });
+    } finally {
+      setUploading((prev) => ({ ...prev, [key]: false }));
+    }
   };
 
   return (
@@ -588,6 +596,7 @@ export default function GameAlgosTab() {
           {gameMeta.map((g) => {
             const Icon = g.icon;
             const logo = logos[g.key];
+            const isUploading = uploading[g.key];
             return (
               <div key={g.key} className="panel-tight p-3 text-center">
                 <div className="w-14 h-14 mx-auto rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center overflow-hidden mb-2">
@@ -595,8 +604,12 @@ export default function GameAlgosTab() {
                 </div>
                 <p className="text-[10px] font-semibold text-white mb-2 truncate">{g.label}</p>
                 <div className="flex gap-1 justify-center">
-                  <button onClick={() => fileRefs.current[g.key]?.click()} className="btn-ghost px-2 py-1 text-[10px]">
-                    <Upload className="w-3 h-3" /> Upload
+                  <button
+                    onClick={() => fileRefs.current[g.key]?.click()}
+                    disabled={isUploading}
+                    className="btn-ghost px-2 py-1 text-[10px] disabled:opacity-50"
+                  >
+                    <Upload className="w-3 h-3" /> {isUploading ? '…' : 'Upload'}
                   </button>
                   {logo && (
                     <button onClick={() => gameLogos.remove(g.key)} className="w-7 h-7 rounded-lg bg-coral-500/15 border border-coral-500/40 grid place-items-center">
@@ -604,7 +617,13 @@ export default function GameAlgosTab() {
                     </button>
                   )}
                 </div>
-                <input ref={(el) => { fileRefs.current[g.key] = el; }} type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files?.[0] && onUpload(g.key, e.target.files[0])} />
+                <input
+                  ref={(el) => { fileRefs.current[g.key] = el; }}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => { if (e.target.files?.[0]) { void onUpload(g.key, e.target.files[0]); e.target.value = ''; } }}
+                />
               </div>
             );
           })}
