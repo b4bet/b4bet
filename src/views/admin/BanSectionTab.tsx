@@ -5,6 +5,8 @@ import {
   supabaseUnbanUser,
   supabaseGetIpMultiAccounts,
   supabaseGetBans,
+  supabaseGetSettings,
+  supabaseUpdateSetting,
   type SupabaseProfile,
   type IpMultiAccount,
   type SupabaseBan,
@@ -12,7 +14,7 @@ import {
 import {
   ShieldBan, Search, Unlock, AlertTriangle, Activity,
   ShieldAlert, ShieldCheck, RefreshCw, Mail, Phone, Clock, Zap,
-  History, ChevronDown, ChevronUp, User,
+  History, ChevronDown, ChevronUp, User, ToggleLeft, ToggleRight,
 } from 'lucide-react';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -68,8 +70,6 @@ function useBanHistory() {
   return { bans, loading, reload: load };
 }
 
-// ─── sub-tab types ────────────────────────────────────────────────────────────
-
 type SubTab = 'banned' | 'ip' | 'history';
 
 // ─── main component ───────────────────────────────────────────────────────────
@@ -92,6 +92,33 @@ export default function BanSectionTab() {
   const [expandedIp, setExpandedIp] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  // ── Auto-ban toggle ──────────────────────────────────────────────────────
+  const [autoBanEnabled, setAutoBanEnabled] = useState(true);
+  const [autoBanLoading, setAutoBanLoading] = useState(true);
+
+  // ── Support email ────────────────────────────────────────────────────────
+  const [supportEmail, setSupportEmail] = useState('support@b4bet.com');
+  const [supportEmailInput, setSupportEmailInput] = useState('support@b4bet.com');
+  const [supportEmailSaving, setSupportEmailSaving] = useState(false);
+
+  // Load settings
+  useEffect(() => {
+    void (async () => {
+      try {
+        const settings = await supabaseGetSettings();
+        const ab = settings.find((s) => s.key === 'auto_ban_enabled');
+        if (ab !== undefined) setAutoBanEnabled(String(ab.value) === 'true');
+        const se = settings.find((s) => s.key === 'support_email');
+        if (se) {
+          const email = String(se.value).replace(/^"|"$/g, '');
+          setSupportEmail(email);
+          setSupportEmailInput(email);
+        }
+      } catch (e) { console.error('settings load error:', e); }
+      finally { setAutoBanLoading(false); }
+    })();
+  }, []);
 
   const loading = usersLoading || ipLoading || bansLoading;
 
@@ -139,7 +166,36 @@ export default function BanSectionTab() {
     );
   });
 
-  // ── ban by ID ────────────────────────────────────────────────────────────────
+  // ── toggle auto-ban ──────────────────────────────────────────────────────
+  async function toggleAutoBan() {
+    const newVal = !autoBanEnabled;
+    setAutoBanEnabled(newVal);
+    try {
+      await supabaseUpdateSetting('auto_ban_enabled', String(newVal));
+      flash(true, `Auto-ban ${newVal ? 'enabled' : 'disabled'}.`);
+    } catch {
+      setAutoBanEnabled(!newVal);
+      flash(false, 'Failed to update auto-ban setting.');
+    }
+  }
+
+  // ── save support email ───────────────────────────────────────────────────
+  async function saveSupportEmail() {
+    const email = supportEmailInput.trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      flash(false, 'Please enter a valid email address.'); return;
+    }
+    setSupportEmailSaving(true);
+    try {
+      await supabaseUpdateSetting('support_email', `"${email}"`);
+      setSupportEmail(email);
+      flash(true, 'Support email updated.');
+    } catch {
+      flash(false, 'Failed to save support email.');
+    } finally { setSupportEmailSaving(false); }
+  }
+
+  // ── ban by ID ────────────────────────────────────────────────────────────
   async function handleBanById() {
     const id = banIdInput.trim();
     if (!id) { flash(false, 'Please enter a User ID, username, or Account ID.'); return; }
@@ -160,7 +216,7 @@ export default function BanSectionTab() {
     } catch { flash(false, 'Failed to ban user. Please try again.'); }
   }
 
-  // ── unban ────────────────────────────────────────────────────────────────────
+  // ── unban ────────────────────────────────────────────────────────────────
   async function handleUnban(user: SupabaseProfile, reason: string) {
     try {
       await supabaseUnbanUser(user.id, reason.trim() || 'Unbanned by admin');
@@ -171,7 +227,7 @@ export default function BanSectionTab() {
     } catch { flash(false, 'Failed to unban user. Please try again.'); }
   }
 
-  // ── IP action ────────────────────────────────────────────────────────────────
+  // ── IP action ────────────────────────────────────────────────────────────
   async function confirmIpAction() {
     if (!ipActionModal) return;
     const reason = ipActionReason.trim();
@@ -225,13 +281,57 @@ export default function BanSectionTab() {
         </div>
       )}
 
-      {/* ── Auto-ban notice ── */}
-      <div className="flex items-start gap-3 p-3 rounded-xl bg-violet-500/10 border border-violet-500/25 text-violet-300 text-xs">
-        <Zap className="w-4 h-4 flex-shrink-0 mt-0.5 text-violet-400" />
-        <span>
-          <span className="font-semibold text-violet-200">Auto-ban is active. </span>
-          Any new account that signs up from an IP already linked to an existing account is automatically banned.
-        </span>
+      {/* ── Settings panel (auto-ban + support email) ── */}
+      <div className="panel p-4 space-y-4">
+        <h2 className="font-display font-bold text-base text-white flex items-center gap-2">
+          <Zap className="w-4 h-4 text-violet-400" /> Settings
+        </h2>
+
+        {/* Auto-ban toggle */}
+        <div className="flex items-center justify-between gap-4 py-2 border-b border-borderline-900">
+          <div>
+            <p className="text-sm font-semibold text-white">Auto-Ban Duplicate IP</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Automatically ban new accounts that sign up from an IP already linked to another account.
+            </p>
+          </div>
+          <button
+            onClick={() => void toggleAutoBan()}
+            disabled={autoBanLoading}
+            className="flex-shrink-0 disabled:opacity-50"
+            title={autoBanEnabled ? 'Auto-ban is ON — click to disable' : 'Auto-ban is OFF — click to enable'}
+          >
+            {autoBanEnabled
+              ? <ToggleRight className="w-10 h-10 text-neon-400" />
+              : <ToggleLeft className="w-10 h-10 text-slate-600" />}
+          </button>
+        </div>
+
+        {/* Support email */}
+        <div>
+          <p className="text-sm font-semibold text-white mb-1">Support Email</p>
+          <p className="text-[11px] text-slate-500 mb-2">
+            Shown in the ban popup so banned users can contact support.
+          </p>
+          <div className="flex gap-2">
+            <input
+              type="email"
+              value={supportEmailInput}
+              onChange={(e) => setSupportEmailInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void saveSupportEmail(); }}
+              placeholder="support@example.com"
+              className="input flex-1"
+            />
+            <button
+              onClick={() => void saveSupportEmail()}
+              disabled={supportEmailSaving}
+              className="px-4 py-2 rounded-xl bg-neon-500/20 border border-neon-500/40 text-neon-300 text-sm font-semibold hover:bg-neon-500/30 disabled:opacity-50"
+            >
+              {supportEmailSaving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          <p className="text-[10px] text-slate-600 mt-1">Current: {supportEmail}</p>
+        </div>
       </div>
 
       {/* ── Quick ban form ── */}
@@ -279,9 +379,9 @@ export default function BanSectionTab() {
       </div>
 
       {/* ── Sub-tabs ── */}
-      <div className="flex gap-1 border-b border-borderline-900 pb-0">
+      <div className="flex gap-1 border-b border-borderline-900">
         {([
-          { key: 'banned' as SubTab, label: `Banned Users (${bannedUsers.length})`, icon: ShieldBan },
+          { key: 'banned' as SubTab, label: `Banned (${bannedUsers.length})`, icon: ShieldBan },
           { key: 'ip' as SubTab, label: `IP Tracker (${ipData.length})`, icon: Activity },
           { key: 'history' as SubTab, label: `Ban History (${banHistory.length})`, icon: History },
         ]).map(({ key, label, icon: Icon }) => (
@@ -299,9 +399,7 @@ export default function BanSectionTab() {
         ))}
       </div>
 
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* SUB-TAB: BANNED USERS                                                  */}
-      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* ══════════════════ SUB-TAB: BANNED USERS ══════════════════ */}
       {subTab === 'banned' && (
         <div className="panel p-4 space-y-3">
           <div className="relative">
@@ -334,12 +432,10 @@ export default function BanSectionTab() {
                     <span className="text-[10px] text-slate-500 font-mono flex-shrink-0">#{u.account_id ?? u.id.slice(0, 8)}</span>
                   </div>
                   <p className="text-[11px] text-slate-500 mt-0.5 truncate">
-                    {u.email ?? '—'}
-                    {u.phone ? ` · ${u.phone}` : ''}
+                    {u.email ?? '—'}{u.phone ? ` · ${u.phone}` : ''}
                   </p>
                   <p className="text-[10px] text-slate-600 mt-0.5">
-                    Joined {fmt(u.created_at)}
-                    {u.registration_ip ? ` · IP: ${u.registration_ip}` : ''}
+                    Joined {fmt(u.created_at)}{u.registration_ip ? ` · IP: ${u.registration_ip}` : ''}
                   </p>
                 </div>
                 <button
@@ -354,15 +450,12 @@ export default function BanSectionTab() {
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* SUB-TAB: IP TRACKER                                                    */}
-      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* ══════════════════ SUB-TAB: IP TRACKER ══════════════════ */}
       {subTab === 'ip' && (
         <div className="panel p-4 space-y-3">
           <p className="text-[11px] text-slate-500">
-            IPs with <span className="text-white font-semibold">2+ accounts</span> — shows username, email, phone, account ID (#6-digit), signup date/time per account.
+            IPs with <span className="text-white font-semibold">2+ accounts</span> — username, email, phone, account ID, signup date per account.
           </p>
-
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
             <input
@@ -373,10 +466,10 @@ export default function BanSectionTab() {
             />
           </div>
 
-          {ipLoading && <p className="text-xs text-slate-500 text-center py-6">Loading IP data…</p>}
+          {ipLoading && <p className="text-xs text-slate-500 text-center py-6">Loading…</p>}
           {!ipLoading && filteredIpGroups.length === 0 && (
             <p className="text-xs text-slate-500 text-center py-6">
-              {ipSearch ? 'No results match your search.' : 'No multi-account IPs detected yet.'}
+              {ipSearch ? 'No results.' : 'No multi-account IPs detected yet.'}
             </p>
           )}
 
@@ -386,7 +479,6 @@ export default function BanSectionTab() {
               const isExpanded = expandedIp === group.ip_address;
               return (
                 <div key={group.ip_address} className="bg-slatepanel-800 rounded-xl border border-borderline-800 overflow-hidden">
-                  {/* IP row header */}
                   <button
                     onClick={() => setExpandedIp(isExpanded ? null : group.ip_address)}
                     className="w-full flex items-center justify-between px-4 py-2.5 bg-slatepanel-700 border-b border-borderline-900 hover:bg-slatepanel-600 transition-colors text-left"
@@ -395,25 +487,18 @@ export default function BanSectionTab() {
                       <Activity className="w-4 h-4 text-neon-400 flex-shrink-0" />
                       <span className="font-mono text-sm text-white font-bold">{group.ip_address}</span>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${
-                        userCount >= 3
-                          ? 'bg-coral-500/20 border-coral-500/30 text-coral-300'
-                          : 'bg-amberx-500/20 border-amberx-500/30 text-amberx-300'
-                      }`}>
-                        {userCount} accounts
-                      </span>
+                        userCount >= 3 ? 'bg-coral-500/20 border-coral-500/30 text-coral-300' : 'bg-amberx-500/20 border-amberx-500/30 text-amberx-300'
+                      }`}>{userCount} accounts</span>
                     </div>
                     <div className="flex items-center gap-3">
                       <div className="hidden sm:block text-right">
                         <p className="text-[10px] text-slate-500">Last seen</p>
                         <p className="text-[10px] text-slate-300">{fmt(group.last_seen)}</p>
                       </div>
-                      {isExpanded
-                        ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
-                        : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
+                      {isExpanded ? <ChevronUp className="w-3.5 h-3.5 text-slate-500" /> : <ChevronDown className="w-3.5 h-3.5 text-slate-500" />}
                     </div>
                   </button>
 
-                  {/* Expanded per-user rows */}
                   {isExpanded && (
                     <div className="divide-y divide-borderline-900/50">
                       {group.user_ids.map((userId, idx) => {
@@ -423,67 +508,38 @@ export default function BanSectionTab() {
                         const phone      = group.phones?.[idx] ?? '';
                         const signupTime = group.signup_times?.[idx] ?? '';
                         const profile    = users.find((u) => u.id === userId);
-                        const isBanned   = profile
-                          ? (profile.is_banned === true || profile.is_active === false)
-                          : false;
-
+                        const isBanned   = profile ? (profile.is_banned === true || profile.is_active === false) : false;
                         return (
                           <div key={userId ?? idx} className="px-4 py-3 space-y-1.5">
-                            {/* Row 1: name + status + action */}
                             <div className="flex items-center gap-2 flex-wrap">
-                              <div className={`w-7 h-7 rounded-full grid place-items-center flex-shrink-0 ${
-                                isBanned ? 'bg-coral-500/20' : 'bg-emeraldwin-500/15'
-                              }`}>
-                                {isBanned
-                                  ? <ShieldBan className="w-3.5 h-3.5 text-coral-400" />
-                                  : <ShieldCheck className="w-3.5 h-3.5 text-emeraldwin-400" />}
+                              <div className={`w-7 h-7 rounded-full grid place-items-center flex-shrink-0 ${isBanned ? 'bg-coral-500/20' : 'bg-emeraldwin-500/15'}`}>
+                                {isBanned ? <ShieldBan className="w-3.5 h-3.5 text-coral-400" /> : <ShieldCheck className="w-3.5 h-3.5 text-emeraldwin-400" />}
                               </div>
                               <span className="text-sm font-semibold text-white">{username}</span>
                               <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold flex-shrink-0 ${
-                                isBanned
-                                  ? 'bg-coral-500/15 border-coral-500/30 text-coral-300'
-                                  : 'bg-emeraldwin-500/10 border-emeraldwin-500/20 text-emeraldwin-400'
-                              }`}>
-                                {isBanned ? 'Banned' : 'Active'}
-                              </span>
+                                isBanned ? 'bg-coral-500/15 border-coral-500/30 text-coral-300' : 'bg-emeraldwin-500/10 border-emeraldwin-500/20 text-emeraldwin-400'
+                              }`}>{isBanned ? 'Banned' : 'Active'}</span>
                               <span className="text-[10px] text-slate-500 font-mono">#{accountId}</span>
                               {userId && (
                                 <div className="ml-auto flex-shrink-0">
                                   {isBanned ? (
-                                    <button
-                                      onClick={() => { setIpActionModal({ userId, username, action: 'unban' }); setIpActionReason(''); }}
-                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-[11px] font-semibold hover:bg-emeraldwin-500/25 transition-colors"
-                                    >
+                                    <button onClick={() => { setIpActionModal({ userId, username, action: 'unban' }); setIpActionReason(''); }}
+                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-[11px] font-semibold hover:bg-emeraldwin-500/25 transition-colors">
                                       Unban
                                     </button>
                                   ) : (
-                                    <button
-                                      onClick={() => { setIpActionModal({ userId, username, action: 'ban' }); setIpActionReason(''); }}
-                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-coral-500/15 border border-coral-500/30 text-coral-300 text-[11px] font-semibold hover:bg-coral-500/25 transition-colors"
-                                    >
+                                    <button onClick={() => { setIpActionModal({ userId, username, action: 'ban' }); setIpActionReason(''); }}
+                                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-coral-500/15 border border-coral-500/30 text-coral-300 text-[11px] font-semibold hover:bg-coral-500/25 transition-colors">
                                       Ban
                                     </button>
                                   )}
                                 </div>
                               )}
                             </div>
-                            {/* Row 2: detail chips */}
                             <div className="flex flex-wrap gap-x-4 gap-y-1 pl-9">
-                              {email && (
-                                <span className="flex items-center gap-1 text-[10px] text-slate-400">
-                                  <Mail className="w-3 h-3 text-slate-500" />{email}
-                                </span>
-                              )}
-                              {phone && (
-                                <span className="flex items-center gap-1 text-[10px] text-slate-400">
-                                  <Phone className="w-3 h-3 text-slate-500" />{phone}
-                                </span>
-                              )}
-                              {signupTime && (
-                                <span className="flex items-center gap-1 text-[10px] text-slate-400">
-                                  <Clock className="w-3 h-3 text-slate-500" />{fmt(signupTime)}
-                                </span>
-                              )}
+                              {email && <span className="flex items-center gap-1 text-[10px] text-slate-400"><Mail className="w-3 h-3 text-slate-500" />{email}</span>}
+                              {phone && <span className="flex items-center gap-1 text-[10px] text-slate-400"><Phone className="w-3 h-3 text-slate-500" />{phone}</span>}
+                              {signupTime && <span className="flex items-center gap-1 text-[10px] text-slate-400"><Clock className="w-3 h-3 text-slate-500" />{fmt(signupTime)}</span>}
                             </div>
                           </div>
                         );
@@ -491,15 +547,12 @@ export default function BanSectionTab() {
                     </div>
                   )}
 
-                  {/* Collapsed: quick username preview */}
                   {!isExpanded && (
                     <div className="px-4 py-2 flex flex-wrap gap-x-3 gap-y-1">
                       {group.usernames.slice(0, 5).map((u, i) => (
                         <span key={i} className="text-[10px] text-slate-400 truncate max-w-[120px]">{u ?? '—'}</span>
                       ))}
-                      {group.usernames.length > 5 && (
-                        <span className="text-[10px] text-slate-500">+{group.usernames.length - 5} more</span>
-                      )}
+                      {group.usernames.length > 5 && <span className="text-[10px] text-slate-500">+{group.usernames.length - 5} more</span>}
                     </div>
                   )}
                 </div>
@@ -509,15 +562,12 @@ export default function BanSectionTab() {
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* SUB-TAB: BAN HISTORY                                                   */}
-      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* ══════════════════ SUB-TAB: BAN HISTORY ══════════════════ */}
       {subTab === 'history' && (
         <div className="panel p-4 space-y-3">
           <p className="text-[11px] text-slate-500">
-            Full ban/unban history from the <span className="text-white font-mono text-[10px]">bans</span> table — includes username, 6-digit account ID, date/time, email, phone, IP, reason.
+            Full ban/unban history — username, 6-digit account ID, date/time, email, phone, IP, reason.
           </p>
-
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
             <input
@@ -528,35 +578,26 @@ export default function BanSectionTab() {
             />
           </div>
 
-          {bansLoading && <p className="text-xs text-slate-500 text-center py-6">Loading ban history…</p>}
+          {bansLoading && <p className="text-xs text-slate-500 text-center py-6">Loading…</p>}
           {!bansLoading && filteredHistory.length === 0 && (
             <p className="text-xs text-slate-500 text-center py-6">
-              {historySearch ? 'No ban records match your search.' : 'No ban records yet.'}
+              {historySearch ? 'No records match your search.' : 'No ban records yet.'}
             </p>
           )}
 
           <div className="space-y-2">
             {filteredHistory.map((ban) => (
               <div key={ban.id} className="bg-slatepanel-800 rounded-xl border border-borderline-800 p-3 space-y-2">
-                {/* Row 1: identity */}
                 <div className="flex items-center gap-2 flex-wrap">
-                  <div className={`w-8 h-8 rounded-full grid place-items-center flex-shrink-0 ${
-                    ban.is_active_ban ? 'bg-coral-500/20' : 'bg-emeraldwin-500/15'
-                  }`}>
-                    {ban.is_active_ban
-                      ? <ShieldBan className="w-3.5 h-3.5 text-coral-400" />
-                      : <Unlock className="w-3.5 h-3.5 text-emeraldwin-400" />}
+                  <div className={`w-8 h-8 rounded-full grid place-items-center flex-shrink-0 ${ban.is_active_ban ? 'bg-coral-500/20' : 'bg-emeraldwin-500/15'}`}>
+                    {ban.is_active_ban ? <ShieldBan className="w-3.5 h-3.5 text-coral-400" /> : <Unlock className="w-3.5 h-3.5 text-emeraldwin-400" />}
                   </div>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-white text-sm">{ban.username || '—'}</span>
                       <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold ${
-                        ban.is_active_ban
-                          ? 'bg-coral-500/15 border-coral-500/30 text-coral-300'
-                          : 'bg-emeraldwin-500/10 border-emeraldwin-500/25 text-emeraldwin-400'
-                      }`}>
-                        {ban.is_active_ban ? 'Active Ban' : 'Unbanned'}
-                      </span>
+                        ban.is_active_ban ? 'bg-coral-500/15 border-coral-500/30 text-coral-300' : 'bg-emeraldwin-500/10 border-emeraldwin-500/25 text-emeraldwin-400'
+                      }`}>{ban.is_active_ban ? 'Active Ban' : 'Unbanned'}</span>
                       {ban.banned_by === 'system' && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded-full border bg-violet-500/15 border-violet-500/30 text-violet-300 font-semibold">Auto-Ban</span>
                       )}
@@ -564,17 +605,17 @@ export default function BanSectionTab() {
                   </div>
                 </div>
 
-                {/* Row 2: detail grid */}
+                {/* Detail grid — IP shown even if empty as '—' */}
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1 pl-10">
                   <BanDetail icon={User} label="Account ID" value={ban.account_id || '—'} mono />
                   <BanDetail icon={Mail} label="Email" value={ban.email || '—'} />
                   <BanDetail icon={Phone} label="Phone" value={ban.phone || '—'} />
-                  <BanDetail icon={Activity} label="IP" value={ban.ip || '—'} mono />
+                  {/* IP: always show, never show dash when value exists */}
+                  <BanDetail icon={Activity} label="IP Address" value={ban.ip && ban.ip.trim() ? ban.ip : 'Unknown'} mono />
                   <BanDetail icon={Clock} label="Banned" value={fmt(ban.ban_date)} />
                   {ban.unban_date && <BanDetail icon={Unlock} label="Unbanned" value={fmt(ban.unban_date)} />}
                 </div>
 
-                {/* Row 3: reasons */}
                 <div className="pl-10 space-y-0.5">
                   <p className="text-[10px] text-slate-400">
                     <span className="text-slate-600 uppercase tracking-wider font-semibold">Ban reason: </span>
@@ -586,9 +627,7 @@ export default function BanSectionTab() {
                       {ban.unban_reason}
                     </p>
                   )}
-                  <p className="text-[10px] text-slate-600">
-                    Banned by: {ban.banned_by || '—'}
-                  </p>
+                  <p className="text-[10px] text-slate-600">Banned by: {ban.banned_by || '—'}</p>
                 </div>
               </div>
             ))}
@@ -606,25 +645,15 @@ export default function BanSectionTab() {
             </div>
             <p className="text-sm text-slate-400">
               Unbanning <span className="text-white font-semibold">{unbanModal.username}</span>{' '}
-              (#{unbanModal.account_id || unbanModal.id.slice(0, 8)}). This restores their account access.
+              (#{unbanModal.account_id || unbanModal.id.slice(0, 8)}). This restores their access.
             </p>
             <div>
               <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Reason (optional)</p>
-              <input
-                type="text"
-                value={unbanReason}
-                onChange={(e) => setUnbanReason(e.target.value)}
-                placeholder="Unban reason…"
-                className="input"
-              />
+              <input type="text" value={unbanReason} onChange={(e) => setUnbanReason(e.target.value)} placeholder="Unban reason…" className="input" />
             </div>
             <div className="flex gap-2">
-              <button onClick={() => { setUnbanModal(null); setUnbanReason(''); }} className="flex-1 py-2 rounded-xl bg-slatepanel-700 text-slate-300 text-sm hover:bg-slatepanel-600">
-                Cancel
-              </button>
-              <button onClick={() => void handleUnban(unbanModal, unbanReason)} className="flex-1 py-2 rounded-xl bg-emeraldwin-500/20 border border-emeraldwin-500/40 text-emeraldwin-300 text-sm font-semibold">
-                Confirm Unban
-              </button>
+              <button onClick={() => { setUnbanModal(null); setUnbanReason(''); }} className="flex-1 py-2 rounded-xl bg-slatepanel-700 text-slate-300 text-sm hover:bg-slatepanel-600">Cancel</button>
+              <button onClick={() => void handleUnban(unbanModal, unbanReason)} className="flex-1 py-2 rounded-xl bg-emeraldwin-500/20 border border-emeraldwin-500/40 text-emeraldwin-300 text-sm font-semibold">Confirm Unban</button>
             </div>
           </div>
         </div>
@@ -635,40 +664,20 @@ export default function BanSectionTab() {
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className="panel p-6 w-full max-w-sm space-y-4">
             <div className="flex items-center gap-3">
-              {ipActionModal.action === 'ban'
-                ? <ShieldBan className="w-5 h-5 text-coral-400" />
-                : <Unlock className="w-5 h-5 text-emeraldwin-300" />}
+              {ipActionModal.action === 'ban' ? <ShieldBan className="w-5 h-5 text-coral-400" /> : <Unlock className="w-5 h-5 text-emeraldwin-300" />}
               <h3 className="font-display font-bold text-white capitalize">{ipActionModal.action} User</h3>
             </div>
             <p className="text-sm text-slate-400">
               You are {ipActionModal.action === 'ban' ? 'banning' : 'unbanning'}{' '}
               <span className="text-white font-semibold">{ipActionModal.username}</span>. Please provide a reason.
             </p>
-            <input
-              type="text"
-              value={ipActionReason}
-              onChange={(e) => setIpActionReason(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') void confirmIpAction(); }}
-              placeholder="Reason…"
-              className="input"
-            />
+            <input type="text" value={ipActionReason} onChange={(e) => setIpActionReason(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void confirmIpAction(); }} placeholder="Reason…" className="input" />
             <div className="flex gap-2">
-              <button
-                onClick={() => { setIpActionModal(null); setIpActionReason(''); }}
-                className="flex-1 py-2 rounded-xl bg-slatepanel-700 text-slate-300 text-sm hover:bg-slatepanel-600"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => void confirmIpAction()}
-                className={`flex-1 py-2 rounded-xl text-sm font-semibold ${
-                  ipActionModal.action === 'ban'
-                    ? 'bg-coral-500/20 border border-coral-500/40 text-coral-300'
-                    : 'bg-emeraldwin-500/20 border border-emeraldwin-500/40 text-emeraldwin-300'
-                }`}
-              >
-                Confirm {ipActionModal.action === 'ban' ? 'Ban' : 'Unban'}
-              </button>
+              <button onClick={() => { setIpActionModal(null); setIpActionReason(''); }} className="flex-1 py-2 rounded-xl bg-slatepanel-700 text-slate-300 text-sm hover:bg-slatepanel-600">Cancel</button>
+              <button onClick={() => void confirmIpAction()} className={`flex-1 py-2 rounded-xl text-sm font-semibold ${
+                ipActionModal.action === 'ban' ? 'bg-coral-500/20 border border-coral-500/40 text-coral-300' : 'bg-emeraldwin-500/20 border border-emeraldwin-500/40 text-emeraldwin-300'
+              }`}>Confirm {ipActionModal.action === 'ban' ? 'Ban' : 'Unban'}</button>
             </div>
           </div>
         </div>
@@ -676,8 +685,6 @@ export default function BanSectionTab() {
     </div>
   );
 }
-
-// ─── small detail chip ─────────────────────────────────────────────────────────
 
 function BanDetail({
   icon: Icon, label, value, mono,
