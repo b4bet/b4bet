@@ -12,6 +12,11 @@ export default function BanPopup() {
   const [supportEmail, setSupportEmail] = useState('support@b4bet.com');
   const [loggingOut, setLoggingOut] = useState(false);
 
+  // Strip any stray quotes or slashes the DB may include around the email
+  function cleanEmail(raw: string): string {
+    return raw.replace(/[/"\\]/g, '').trim();
+  }
+
   async function check() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -19,7 +24,7 @@ export default function BanPopup() {
       const { data } = await supabase.rpc('get_my_ban_status');
       if (data && data.length > 0) {
         setBanned(data[0].is_banned === true);
-        if (data[0].support_email) setSupportEmail(data[0].support_email);
+        if (data[0].support_email) setSupportEmail(cleanEmail(String(data[0].support_email)));
       }
     } catch {
       // silently ignore — don't block the app
