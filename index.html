@@ -3,6 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <!-- Prevent browsers from caching this HTML file -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+    <meta http-equiv="Pragma" content="no-cache" />
+    <meta http-equiv="Expires" content="0" />
     <title>B4BeT Gaming Platform</title>
     <meta name="description" content="B4BeT Gaming Platform — built on Replit. Update this description to reflect the app." />
     <meta name="robots" content="index, follow" />
@@ -18,72 +22,94 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 
     <!--
-      MAINTENANCE GUARD — runs before React bundle loads.
-      Fetches maintenance_mode from Supabase using plain fetch (no JS cache).
-      If enabled=true and this is not an admin route, forces a hard reload
-      so stale cached JS bundles cannot hide the maintenance page.
-      Uses sessionStorage to avoid infinite reload loops.
+      MAINTENANCE GUARD
+      - Runs before React, uses plain fetch (no JS cache)
+      - If maintenance is ON: injects maintenance HTML into #root and blocks React
+      - If maintenance is OFF: lets React load normally
+      - Polls every 8s and on tab-visible so long-lived tabs update instantly
+      - NO reload — avoids double-load slowness
     -->
     <script>
       (function () {
-        var SUPABASE_URL = 'https://qbuanfugtqiljlkenlqo.supabase.co';
-        var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFidWFuZnVndHFpbGpsa2VubHFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMjQwOTgsImV4cCI6MjA5OTgwMDA5OH0.UqcqncVJb2co0eRe_v6_GErB8u9FCYZxbzkZtTUKfmU';
-        var RELOAD_FLAG = 'b4bet_maint_reloaded';
-        var LAST_STATE_KEY = 'b4bet_maint_state';
+        var SUPA_URL = 'https://qbuanfugtqiljlkenlqo.supabase.co';
+        var SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFidWFuZnVndHFpbGpsa2VubHFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMjQwOTgsImV4cCI6MjA5OTgwMDA5OH0.UqcqncVJb2co0eRe_v6_GErB8u9FCYZxbzkZtTUKfmU';
 
-        // Never block admin panel
-        var h = window.location.pathname + window.location.hash;
-        var isAdmin = h.indexOf('/aryan') !== -1 || h.indexOf('#aryan') !== -1;
-        if (isAdmin) return;
+        // Never block admin route
+        var loc = window.location.pathname + window.location.hash;
+        if (loc.indexOf('aryan') !== -1) return;
 
-        function checkAndEnforce() {
+        var reactBlocked = false;
+        var maintenanceShown = false;
+
+        function showMaintenance(title, message, eta) {
+          if (maintenanceShown) return;
+          maintenanceShown = true;
+
+          // Stop React from mounting (clear root, block the module script)
+          var root = document.getElementById('root');
+          if (root) {
+            root.innerHTML = [
+              '<div style="min-height:100vh;background:#020617;display:flex;align-items:center;justify-content:center;font-family:Inter,sans-serif;padding:16px;">',
+              '  <div style="max-width:420px;width:100%;text-align:center;">',
+              '    <div style="width:80px;height:80px;border-radius:50%;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;">',
+              '      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">',
+              '        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+              '      </svg>',
+              '    </div>',
+              '    <h1 style="color:#fff;font-size:28px;font-weight:700;margin:0 0 12px;">' + (title || 'Under Maintenance') + '</h1>',
+              '    <p style="color:#94a3b8;font-size:15px;line-height:1.6;margin:0 0 20px;">' + (message || 'We are performing scheduled maintenance. We will be back shortly.') + '</p>',
+              eta ? '<div style="display:inline-flex;align-items:center;gap:8px;background:#1e293b;border:1px solid #334155;border-radius:999px;padding:8px 20px;color:#cbd5e1;font-size:13px;margin-bottom:20px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Estimated: <strong style="color:#fff">' + eta + '</strong></div>' : '',
+              '    <div style="display:flex;gap:6px;justify-content:center;margin-top:8px;">',
+              '      <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4bounce 1s infinite;animation-delay:0ms;display:inline-block;"></span>',
+              '      <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4bounce 1s infinite;animation-delay:150ms;display:inline-block;"></span>',
+              '      <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4bounce 1s infinite;animation-delay:300ms;display:inline-block;"></span>',
+              '    </div>',
+              '  </div>',
+              '</div>',
+              '<style>@keyframes b4bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}</style>',
+            ].join('');
+          }
+
+          // Prevent React module script from executing by removing it
+          var scripts = document.querySelectorAll('script[type="module"]');
+          for (var i = 0; i < scripts.length; i++) scripts[i].remove();
+          reactBlocked = true;
+        }
+
+        function hideMaintenance() {
+          if (!maintenanceShown) return;
+          // Maintenance turned OFF while tab was open — reload to restore full app
+          window.location.reload();
+        }
+
+        function check() {
           fetch(
-            SUPABASE_URL + '/rest/v1/settings?key=eq.maintenance_mode&select=value&limit=1',
-            {
-              headers: {
-                'apikey': SUPABASE_ANON_KEY,
-                'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
-                'Cache-Control': 'no-cache, no-store',
-              },
-            }
+            SUPA_URL + '/rest/v1/settings?key=eq.maintenance_mode&select=value&limit=1',
+            { headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY, 'Cache-Control': 'no-cache' } }
           )
-          .then(function (r) { return r.json(); })
-          .then(function (rows) {
+          .then(function(r) { return r.json(); })
+          .then(function(rows) {
             if (!rows || !rows.length) return;
             var raw = rows[0].value;
             var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
-            var isOn = !!(cfg && cfg.enabled);
-            var wasOn = sessionStorage.getItem(LAST_STATE_KEY) === 'on';
-
-            if (isOn) {
-              sessionStorage.setItem(LAST_STATE_KEY, 'on');
-              // If we haven't hard-reloaded yet for this maintenance window, do it now
-              if (sessionStorage.getItem(RELOAD_FLAG) !== '1') {
-                sessionStorage.setItem(RELOAD_FLAG, '1');
-                window.location.reload(true);
-              }
+            if (cfg && cfg.enabled) {
+              showMaintenance(cfg.title, cfg.message, cfg.estimated_time);
             } else {
-              // Maintenance is OFF — clear flags so next time it turns ON we reload again
-              sessionStorage.removeItem(RELOAD_FLAG);
-              sessionStorage.removeItem(LAST_STATE_KEY);
-              // If it just turned OFF and we were showing maint page, reload to restore app
-              if (wasOn) {
-                window.location.reload(true);
-              }
+              hideMaintenance();
             }
           })
-          .catch(function () { /* network error — fail open, app loads normally */ });
+          .catch(function() { /* fail open — let app load normally */ });
         }
 
-        // Run immediately on page load
-        checkAndEnforce();
+        // Run check immediately (before React mounts)
+        check();
 
-        // Also run every 8 seconds so long-lived tabs get updated
-        setInterval(checkAndEnforce, 8000);
+        // Poll every 8 seconds
+        setInterval(check, 8000);
 
-        // Run when tab becomes visible again
-        document.addEventListener('visibilitychange', function () {
-          if (document.visibilityState === 'visible') checkAndEnforce();
+        // Re-check when user switches back to this tab
+        document.addEventListener('visibilitychange', function() {
+          if (document.visibilityState === 'visible') check();
         });
       })();
     </script>
