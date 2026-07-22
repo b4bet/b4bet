@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import type { Phase } from './game/useAviatorGame';
 import { formatMoney } from './game/format';
@@ -6,7 +6,8 @@ import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
 import { auth } from '../../lib/auth';
 import { bus } from '../../lib/bus';
-import type { AviatorCashoutResult } from '../../lib/game-service';
+import { aviatorLoop } from '../../lib/persistentGameEngine';
+import { useAdminConfig } from '../../lib/hooks';
 
 export interface BetState {
   amount: number;
@@ -48,34 +49,13 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
-  /**
-   * Returns { ok, betId } — betId is this panel's own server-assigned ID.
-   * Serialized in AviatorGame to prevent Supabase race condition.
-   */
-  onPlaceBet: (amount: number) => Promise<{ ok: boolean; betId: string | null }>;
+  onPlaceBet: (amount: number) => Promise<boolean>;
   onCancelBet: (amount: number) => void;
-  /**
-   * Server cashout call — serialized in AviatorGame so both panels never
-   * hit Supabase at the same time, preventing balance overwrite race.
-   */
-  onServerCashOut: (
-    amount: number,
-    placedAtMs: number,
-    multiplier: number,
-    betId: string | null,
-  ) => Promise<AviatorCashoutResult>;
   onCashOut: (amount: number, at: number) => void;
   onWin: (amount: number) => void;
   onInsufficientBalance?: () => void;
   onTimeout?: () => void;
 }
-
-const QUICK_ADDS: { label: string; value: number }[] = [
-  { label: '200', value: 200 },
-  { label: '500', value: 500 },
-  { label: '1K', value: 1000 },
-  { label: '2K', value: 2000 },
-];
 
 export function BettingPanel({
   bet,
@@ -87,7 +67,6 @@ export function BettingPanel({
   balance,
   onPlaceBet,
   onCancelBet,
-  onServerCashOut,
   onCashOut,
   onWin,
   onInsufficientBalance,
@@ -97,56 +76,36 @@ export function BettingPanel({
   const [autoCashoutInput, setAutoCashoutInput] = useState<string>(String(bet.autoCashoutValue));
   const [lastQuickBet, setLastQuickBet] = useState<number | null>(null);
 
-  // Always-fresh refs — async doCashOut reads from here, never from stale closure
-  const betRef = useRef(bet);
-  betRef.current = bet;
-  const phaseRef = useRef(phase);
-  phaseRef.current = phase;
-  const multiplierRef = useRef(multiplier);
-  multiplierRef.current = multiplier;
-
   useEffect(() => { setAmountInput(String(bet.amount)); }, [bet.amount]);
   useEffect(() => { setAutoCashoutInput(String(bet.autoCashoutValue)); }, [bet.autoCashoutValue]);
 
   const limits = store.getGameLimits('aviator');
-
-  // ── Place bet helper — stores betId directly into this panel's state ──────
-  async function placeBetAndStore(amount: number): Promise<boolean> {
-    const { ok, betId } = await onPlaceBet(amount);
-    if (ok) {
-      setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
-    }
-    return ok;
-  }
+  const adminCfg = useAdminConfig();
+  const quickStakes = adminCfg.gameHandlers['aviator']?.quickStakes?.length
+    ? adminCfg.gameHandlers['aviator'].quickStakes
+    : [200, 500, 1000, 2000];
 
   // Round transition — fire pending/auto bets for next round.
   useEffect(() => {
     if (bet.roundId !== roundId) {
       setBet((b) => {
+        const nextRound = { ...b, roundId, placed: false, cashedOutAt: null, pendingNextRound: false, betId: null };
         const shouldPlace = b.autoBetEnabled || b.pendingNextRound;
-        const nextRound: BetState = {
-          ...b,
-          roundId,
-          placed: false,
-          cashedOutAt: null,
-          pendingNextRound: false,
-          betId: null,
-        };
         if (shouldPlace) {
           if (b.amount < limits.min || b.amount > limits.max) {
             nextRound.autoBetEnabled = false;
             nextRound.pendingNextRound = false;
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
-            void onPlaceBet(b.amount).then(({ ok, betId }) => {
-              if (ok) {
-                setBet((bb) => ({ ...bb, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
-              } else {
+            // Fire the async bet placement; update betId when server confirms
+            void onPlaceBet(b.amount).then((ok) => {
+              if (!ok) {
                 setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
                 onInsufficientBalance?.();
               }
             });
-            nextRound.placed = false;
+            nextRound.placed = true;
+            nextRound.placedAtMs = Date.now();
           }
         }
         return nextRound;
@@ -155,17 +114,16 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  // Auto cash-out trigger
+  // Auto cash-out trigger — calls server-validated cashout.
   useEffect(() => {
-    const b = betRef.current;
     if (
-      b.placed &&
-      b.cashedOutAt === null &&
-      b.autoCashoutEnabled &&
+      bet.placed &&
+      bet.cashedOutAt === null &&
+      bet.autoCashoutEnabled &&
       phase === 'flying' &&
-      multiplier >= b.autoCashoutValue
+      multiplier >= bet.autoCashoutValue
     ) {
-      void doCashOut(b.autoCashoutValue);
+      void doCashOut(bet.autoCashoutValue);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multiplier, phase]);
@@ -173,25 +131,22 @@ export function BettingPanel({
   // Round crashed without cash-out — bet is lost.
   useEffect(() => {
     if (phase === 'crashed' && bet.placed && bet.cashedOutAt === null) {
+      // Settle the lost bet server-side (fire-and-forget)
       const session = auth.getSession();
       if (session) {
         void import('../../lib/game-service').then(({ GameService }) => {
-          void import('../../lib/persistentGameEngine').then(({ aviatorLoop }) => {
-            void GameService.aviatorSettle(
-              session.userId,
-              aviatorLoop.getRoundUuid(),
-              bet.roundId,
-              bet.amount,
-            )
-              .then((res) => {
-                if (res.crash_point) {
-                  void import('../../lib/persistentGameEngine').then(({ aviatorLoop: loop }) => {
-                    loop.reportServerCrash(res.crash_point);
-                  });
-                }
-              })
-              .catch(() => { /* non-fatal */ });
-          });
+          void GameService.aviatorSettle(
+            session.userId,
+            aviatorLoop.getRoundUuid(),
+            bet.roundId,
+            bet.amount,
+          )
+            .then((res) => {
+              if (res.crash_point) {
+                aviatorLoop.reportServerCrash(res.crash_point);
+              }
+            })
+            .catch(() => { /* non-fatal */ });
         });
       }
       setBet((b) => ({ ...b, placed: false, betId: null }));
@@ -199,23 +154,13 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // ── Derived states ────────────────────────────────────────────────────────
-  const canPlace    = phase === 'waiting' && !bet.placed && bet.amount <= balance && countdown > 0;
-  const canCashOut  = phase === 'flying'  && bet.placed  && bet.cashedOutAt === null;
-  const canCancel   = phase === 'waiting' && bet.placed  && bet.cashedOutAt === null;
+  const canPlace = phase === 'waiting' && !bet.placed && bet.amount <= balance && countdown > 0;
+  const canCashOut = phase === 'flying' && bet.placed && bet.cashedOutAt === null;
+  const canCancel = phase === 'waiting' && bet.placed && bet.cashedOutAt === null;
   const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
+  const canQueueNextRound = phase === 'flying' && !bet.placed && bet.cashedOutAt === null;
+  const canCancelQueue = phase === 'flying' && !bet.placed && bet.pendingNextRound;
 
-  const canQueueNextRound =
-    (phase === 'flying' || phase === 'crashed') &&
-    !canCashOut &&
-    !bet.pendingNextRound;
-
-  const canCancelQueue =
-    (phase === 'flying' || phase === 'crashed') &&
-    !canCashOut &&
-    bet.pendingNextRound;
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
   function adjustAmount(delta: number) {
     setBet((b) => ({
       ...b,
@@ -235,9 +180,9 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
-        void placeBetAndStore(bet.amount).then((ok) => {
+        void onPlaceBet(bet.amount).then((ok) => {
           if (ok) {
-            setBet((b) => ({ ...b, autoBetEnabled: true }));
+            setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
           } else {
             onInsufficientBalance?.();
           }
@@ -252,24 +197,25 @@ export function BettingPanel({
 
   function handleBetClick() {
     if (!auth.getSession()) { bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login'); return; }
-
     if (canCashOut) { void doCashOut(); return; }
     if (canCancelQueue) { setBet((b) => ({ ...b, pendingNextRound: false })); return; }
     if (canCancel) { doCancel(); return; }
     if (isInsufficientBalance) { onInsufficientBalance?.(); return; }
-
     if (canPlace) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
         return;
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
-      void placeBetAndStore(bet.amount).then((ok) => {
-        if (!ok) onInsufficientBalance?.();
+      void onPlaceBet(bet.amount).then((ok) => {
+        if (ok) {
+          setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
+        } else {
+          onInsufficientBalance?.();
+        }
       });
       return;
     }
-
     if (canQueueNextRound) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
@@ -289,36 +235,30 @@ export function BettingPanel({
 
   /**
    * Server-validated cash out.
-   * Reads betId, amount, placedAtMs from betRef — always fresh, never stale.
-   * Actual server call goes through onServerCashOut (serialized in AviatorGame).
+   * Passes bet_id (if known) so the server can find the bet directly by ID,
+   * eliminating the round_uuid race condition that caused intermittent
+   * "Bet not found" errors.
    */
   async function doCashOut(atOverride?: number) {
-    const b = betRef.current;
-    const currentPhase = phaseRef.current;
-    if (!(currentPhase === 'flying' && b.placed && b.cashedOutAt === null)) return;
-
-    const at = atOverride ?? multiplierRef.current;
-    // Optimistically mark cashed out — prevents double-tap
-    setBet((prev) => ({ ...prev, cashedOutAt: at }));
+    if (!canCashOut) return;
+    const at = atOverride ?? multiplier;
+    // Optimistically mark as cashed out in UI immediately
+    setBet((b) => ({ ...b, cashedOutAt: at }));
 
     try {
-      // Delegate to AviatorGame which serializes concurrent cashouts
-      const res = await onServerCashOut(b.amount, b.placedAtMs, at, b.betId);
+      const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs, at, bet.betId);
       if (res.won && res.win > 0) {
         store.setBalance(res.balance_after);
-        onCashOut(b.amount, res.cashout_at ?? at);
+        onCashOut(bet.amount, res.cashout_at ?? at);
         onWin(res.win);
       } else {
+        // Server says round already crashed — snap UI state
         if (res.crash_point !== null) {
-          void import('../../lib/persistentGameEngine').then(({ aviatorLoop }) => {
-            if (res.crash_point !== null) aviatorLoop.reportServerCrash(res.crash_point);
-          });
+          aviatorLoop.reportServerCrash(res.crash_point);
         }
       }
     } catch {
       cms.toast({ title: 'Cashout error', body: 'Could not confirm cashout. Please check your balance.', kind: 'alert' });
-      // Revert optimistic update so user can retry
-      setBet((prev) => ({ ...prev, cashedOutAt: null }));
     }
   }
 
@@ -350,6 +290,9 @@ export function BettingPanel({
     betLabel = 'CANCEL';
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
     betShadow = 'shadow-btn-red';
+  } else if (phase === 'flying' && bet.placed && bet.cashedOutAt !== null) {
+    betShade = 'bg-aviator-green/40';
+    betShadow = '';
   } else if (canQueueNextRound) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
@@ -357,15 +300,15 @@ export function BettingPanel({
         <span className="text-xs opacity-80">Next round</span>
       </span>
     );
+  } else if (phase === 'crashed') {
+    betShade = 'bg-ink-600 opacity-50';
+    betShadow = '';
+  } else if (!canPlace && !isInsufficientBalance) {
+    betShade = 'bg-aviator-green/40';
+    betShadow = '';
   }
 
-  const isButtonDisabled =
-    !canPlace &&
-    !canCashOut &&
-    !canCancel &&
-    !isInsufficientBalance &&
-    !canQueueNextRound &&
-    !canCancelQueue;
+  const isButtonDisabled = !canPlace && !canCashOut && !canCancel && !isInsufficientBalance && !canQueueNextRound && !canCancelQueue;
 
   return (
     <div className="flex flex-col gap-2.5 rounded-2xl bg-ink-700 border border-ink-500/60 p-3 select-none">
@@ -442,27 +385,30 @@ export function BettingPanel({
           </div>
           {/* Quick-bet chips: first click = set, repeat click = add */}
           <div className="grid grid-cols-4 gap-1">
-            {QUICK_ADDS.map(({ label, value }) => (
-              <button
-                key={value}
-                className={`rounded-md py-1 text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-40 border ${
-                  lastQuickBet === value
-                    ? 'bg-aviator-green text-black border-aviator-green'
-                    : 'bg-ink-700 text-gray-300 hover:bg-ink-650 border-ink-500/60'
-                }`}
-                disabled={bet.placed}
-                onClick={() => {
-                  if (lastQuickBet === value) {
-                    setAmount(bet.amount + value);
-                  } else {
-                    setLastQuickBet(value);
-                    setAmount(value);
-                  }
-                }}
-              >
-                {label}
-              </button>
-            ))}
+            {quickStakes.map((value) => {
+              const label = value >= 1000 ? `${value / 1000}K` : String(value);
+              return (
+                <button
+                  key={value}
+                  className={`rounded-md py-1 text-[11px] font-semibold transition-colors cursor-pointer disabled:opacity-40 border ${
+                    lastQuickBet === value
+                      ? 'bg-aviator-green text-black border-aviator-green'
+                      : 'bg-ink-700 text-gray-300 hover:bg-ink-650 border-ink-500/60'
+                  }`}
+                  disabled={bet.placed}
+                  onClick={() => {
+                    if (lastQuickBet === value) {
+                      setAmount(bet.amount + value);
+                    } else {
+                      setLastQuickBet(value);
+                      setAmount(value);
+                    }
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
