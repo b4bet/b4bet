@@ -3,31 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <!-- Prevent browsers from caching this HTML file -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
     <meta http-equiv="Pragma" content="no-cache" />
     <meta http-equiv="Expires" content="0" />
     <title>B4BeT Gaming Platform</title>
-    <meta name="description" content="B4BeT Gaming Platform — built on Replit. Update this description to reflect the app." />
+    <meta name="description" content="B4BeT Gaming Platform" />
     <meta name="robots" content="index, follow" />
-    <meta property="og:title" content="B4BeT Gaming Platform" />
-    <meta property="og:description" content="B4BeT Gaming Platform — built on Replit. Update this description to reflect the app." />
-    <meta property="og:type" content="website" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="B4BeT Gaming Platform" />
-    <meta name="twitter:description" content="B4BeT Gaming Platform — built on Replit. Update this description to reflect the app." />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
 
     <!--
-      MAINTENANCE GUARD
-      - Runs before React, uses plain fetch (no JS cache)
-      - If maintenance is ON: injects maintenance HTML into #root and blocks React
-      - If maintenance is OFF: lets React load normally
-      - Polls every 8s and on tab-visible so long-lived tabs update instantly
-      - NO reload — avoids double-load slowness
+      MAINTENANCE GUARD — runs before React.
+      Fetches maintenance status synchronously-style using async IIFE.
+      React is loaded only AFTER we confirm maintenance is OFF.
+      If ON: inject maintenance HTML into #root, never load React.
+      Polls every 8s + on tab-visible so long-lived tabs update instantly.
     -->
     <script>
       (function () {
@@ -36,86 +31,85 @@
 
         // Never block admin route
         var loc = window.location.pathname + window.location.hash;
-        if (loc.indexOf('aryan') !== -1) return;
+        if (loc.indexOf('aryan') !== -1) {
+          loadReact();
+          return;
+        }
 
-        var reactBlocked = false;
-        var maintenanceShown = false;
+        var reactLoaded = false;
+        var maintShown = false;
 
-        function showMaintenance(title, message, eta) {
-          if (maintenanceShown) return;
-          maintenanceShown = true;
+        function loadReact() {
+          if (reactLoaded) return;
+          reactLoaded = true;
+          var s = document.createElement('script');
+          s.type = 'module';
+          s.src = '/src/main.tsx';
+          document.body.appendChild(s);
+        }
 
-          // Stop React from mounting (clear root, block the module script)
+        function renderMaintenance(title, message, eta) {
+          maintShown = true;
           var root = document.getElementById('root');
-          if (root) {
-            root.innerHTML = [
-              '<div style="min-height:100vh;background:#020617;display:flex;align-items:center;justify-content:center;font-family:Inter,sans-serif;padding:16px;">',
-              '  <div style="max-width:420px;width:100%;text-align:center;">',
-              '    <div style="width:80px;height:80px;border-radius:50%;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;">',
-              '      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">',
-              '        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
-              '      </svg>',
-              '    </div>',
-              '    <h1 style="color:#fff;font-size:28px;font-weight:700;margin:0 0 12px;">' + (title || 'Under Maintenance') + '</h1>',
-              '    <p style="color:#94a3b8;font-size:15px;line-height:1.6;margin:0 0 20px;">' + (message || 'We are performing scheduled maintenance. We will be back shortly.') + '</p>',
-              eta ? '<div style="display:inline-flex;align-items:center;gap:8px;background:#1e293b;border:1px solid #334155;border-radius:999px;padding:8px 20px;color:#cbd5e1;font-size:13px;margin-bottom:20px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Estimated: <strong style="color:#fff">' + eta + '</strong></div>' : '',
-              '    <div style="display:flex;gap:6px;justify-content:center;margin-top:8px;">',
-              '      <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4bounce 1s infinite;animation-delay:0ms;display:inline-block;"></span>',
-              '      <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4bounce 1s infinite;animation-delay:150ms;display:inline-block;"></span>',
-              '      <span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4bounce 1s infinite;animation-delay:300ms;display:inline-block;"></span>',
-              '    </div>',
-              '  </div>',
-              '</div>',
-              '<style>@keyframes b4bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}</style>',
-            ].join('');
-          }
-
-          // Prevent React module script from executing by removing it
-          var scripts = document.querySelectorAll('script[type="module"]');
-          for (var i = 0; i < scripts.length; i++) scripts[i].remove();
-          reactBlocked = true;
+          if (!root) return;
+          root.innerHTML = [
+            '<div style="min-height:100vh;background:#020617;display:flex;align-items:center;justify-content:center;font-family:Inter,sans-serif;padding:16px;">',
+            '<div style="max-width:420px;width:100%;text-align:center;">',
+            '<div style="width:80px;height:80px;border-radius:50%;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;">',
+            '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
+            '</div>',
+            '<h1 style="color:#fff;font-size:28px;font-weight:700;margin:0 0 12px;">' + (title || 'Under Maintenance') + '</h1>',
+            '<p style="color:#94a3b8;font-size:15px;line-height:1.6;margin:0 0 20px;">' + (message || 'We are performing scheduled maintenance. We will be back shortly.') + '</p>',
+            eta ? '<div style="display:inline-flex;align-items:center;gap:8px;background:#1e293b;border:1px solid #334155;border-radius:999px;padding:8px 20px;color:#cbd5e1;font-size:13px;margin-bottom:20px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>Estimated: <strong style="color:#fff">' + eta + '</strong></div>' : '',
+            '<div style="display:flex;gap:6px;justify-content:center;margin-top:8px;">',
+            '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4b 1s infinite 0ms;display:inline-block;"></span>',
+            '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4b 1s infinite 150ms;display:inline-block;"></span>',
+            '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4b 1s infinite 300ms;display:inline-block;"></span>',
+            '</div></div></div>',
+            '<style>@keyframes b4b{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}</style>',
+          ].join('');
         }
 
-        function hideMaintenance() {
-          if (!maintenanceShown) return;
-          // Maintenance turned OFF while tab was open — reload to restore full app
-          window.location.reload();
-        }
-
-        function check() {
+        function check(isInitial) {
           fetch(
             SUPA_URL + '/rest/v1/settings?key=eq.maintenance_mode&select=value&limit=1',
-            { headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY, 'Cache-Control': 'no-cache' } }
+            { headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY, 'Cache-Control': 'no-cache, no-store' } }
           )
           .then(function(r) { return r.json(); })
           .then(function(rows) {
-            if (!rows || !rows.length) return;
+            if (!rows || !rows.length) { if (isInitial) loadReact(); return; }
             var raw = rows[0].value;
             var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
             if (cfg && cfg.enabled) {
-              showMaintenance(cfg.title, cfg.message, cfg.estimated_time);
+              // Show maintenance page — do NOT load React
+              renderMaintenance(cfg.title, cfg.message, cfg.estimated_time);
             } else {
-              hideMaintenance();
+              if (maintShown) {
+                // Was showing maint, now OFF — reload to get full app
+                window.location.reload();
+              } else if (isInitial) {
+                // No maintenance — load React normally
+                loadReact();
+              }
             }
           })
-          .catch(function() { /* fail open — let app load normally */ });
+          .catch(function() {
+            // On error, fail open — let React load
+            if (isInitial) loadReact();
+          });
         }
 
-        // Run check immediately (before React mounts)
-        check();
+        // Initial check — React only loads after this resolves
+        check(true);
 
-        // Poll every 8 seconds
-        setInterval(check, 8000);
+        // Poll every 8s for long-lived tabs
+        setInterval(function() { check(false); }, 8000);
 
-        // Re-check when user switches back to this tab
+        // Instant update when user switches back to this tab
         document.addEventListener('visibilitychange', function() {
-          if (document.visibilityState === 'visible') check();
+          if (document.visibilityState === 'visible') check(false);
         });
       })();
     </script>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
