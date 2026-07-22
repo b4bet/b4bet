@@ -11,7 +11,7 @@ import {
 import { store } from '../lib/store';
 import { bus, Topics } from '../lib/bus';
 import type { TradingBetRecord } from '../lib/store';
-import { useBalance, useAdminConfig } from '../lib/hooks';
+import { useBalance, useAdminConfig, useGameLogos } from '../lib/hooks';
 import { cms } from '../lib/cms';
 import { auth } from '../lib/auth';
 import { GameService } from '../lib/game-service';
@@ -328,6 +328,8 @@ function ActiveBetsList({ bets }: { bets: ActiveBet[] }) {
 
 export default function TradingGameView({ onBack: _onBack }: { onBack?: () => void }) {
   const balance = useBalance();
+  const gameLogos = useGameLogos();
+  const tradingLogo = gameLogos['trading'];
 
   const [selectedAsset, setSelectedAsset] = useState<Asset>(ASSETS[0]);
   const [currentPrice,  setCurrentPrice]  = useState(ASSETS[0].basePrice);
@@ -516,6 +518,25 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
 
   return (
     <div className="flex flex-col animate-fade-in h-[calc(100vh-130px)] px-3">
+      {/* ── Trading Header with logo + balance ── */}
+      <div className="flex items-center justify-between py-2 mb-1">
+        <div className="flex items-center gap-2">
+          {tradingLogo ? (
+            <img src={tradingLogo} alt="Trading" className="h-8 w-auto object-contain rounded-lg" />
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <BarChart2 className="w-5 h-5 text-emerald-400" />
+              <span className="font-black text-white text-sm">Trading</span>
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-gray-800 border border-gray-700">
+          <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
+            {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+          </span>
+        </div>
+      </div>
+
       {/* ── Top bar: asset selector only ── */}
       <div className="bg-gray-900 border border-gray-800 rounded-t-2xl px-3 py-2 flex items-center gap-2 flex-shrink-0">
         <div className="relative flex-1">
