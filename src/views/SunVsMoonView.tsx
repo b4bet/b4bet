@@ -316,7 +316,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   };
 
   const limits = store.getGameLimits('sunvsmoon');
-  const QUICK_STAKES = [100, 500, 1000, 5000];
+  const adminHandler = store.getGameHandler('sunvsmoon');
+  const QUICK_STAKES = adminHandler.quickStakes?.length ? adminHandler.quickStakes : [100, 500, 1000, 5000];
   const bettingEnabled = phase === 'betting' && selectedBet === null && !settling;
 
   return (
@@ -329,9 +330,11 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
           </button>
         )}
         <div className="flex items-center gap-2 flex-1">
-          <div className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center overflow-hidden">
-            <img src={gameLogos["sunvsmoon"] || "/eclipse.png"} alt="Sun vs Moon" className="w-7 h-7 object-contain" onError={(e) => { (e.target as HTMLImageElement).src = "/eclipse.png"; }} />
-          </div>
+          {gameLogos["sunvsmoon"] && (
+            <div className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center overflow-hidden">
+              <img src={gameLogos["sunvsmoon"]} alt="Sun vs Moon" className="w-7 h-7 object-contain" />
+            </div>
+          )}
           <div>
             <p className="text-sm font-black text-white leading-none">Sun vs Moon</p>
             <p className="text-[9px] text-slate-400 mt-0.5">Round #{roundNumber}</p>
