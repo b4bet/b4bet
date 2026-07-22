@@ -288,7 +288,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
   return (
     <div className="relative space-y-4 animate-fade-in px-3">
-      {/* ── Header with logo + back + balance ── */}
+      {/* ── Header with logo (round, no box) + back + balance ── */}
       <div className="flex items-center justify-between mt-2 mb-1">
         <div className="flex items-center gap-2">
           {onBack && (
@@ -296,10 +296,20 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               <ArrowLeft className="w-4 h-4 text-slate-300" />
             </button>
           )}
-          {gameLogos["sunvsmoon"] && (
-            <div className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center overflow-hidden">
-              <img src={gameLogos["sunvsmoon"]} alt="Sun vs Moon" className="w-7 h-7 object-contain" />
-            </div>
+          {/* Round logo — no box, just circle */}
+          {gameLogos["sunvsmoon"] ? (
+            <img
+              src={gameLogos["sunvsmoon"]}
+              alt="Sun vs Moon"
+              className="w-10 h-10 rounded-full object-cover flex-shrink-0 ring-2 ring-yellow-500/30"
+            />
+          ) : (
+            <img
+              src="/eclipse.png"
+              alt="Sun vs Moon"
+              className="w-10 h-10 rounded-full object-contain flex-shrink-0"
+              onError={(e) => { (e.target as HTMLImageElement).src = '/sun.png'; }}
+            />
           )}
           <div>
             <p className="text-sm font-black text-white leading-none">Sun vs Moon</p>
