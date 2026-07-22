@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../integrations/supabase/client';
-import { store } from '../../lib/store';
 import { Save, RefreshCw, Settings, CheckCircle2, AlertCircle } from 'lucide-react';
 
 /** Canonical 8 games — in display order */
@@ -42,14 +41,11 @@ export default function GameSettingsTab() {
     setLoading(true);
     const { data } = await supabase.from('games').select('*');
     const rows = (data ?? []) as GameRow[];
-
-    // Keep only the 8 known slugs, sorted in canonical GAME_SLUGS order
     const bySlug = Object.fromEntries(rows.map(r => [r.slug, r]));
     const ordered = GAME_SLUGS
       .filter(({ slug }) => SLUG_SET.has(slug))
       .map(({ slug }) => bySlug[slug] ?? null)
       .filter((r): r is GameRow => r !== null);
-
     setGames(ordered);
     setLoading(false);
   }
@@ -58,22 +54,13 @@ export default function GameSettingsTab() {
     setSaveStatus(s => ({ ...s, [game.id]: 'saving' }));
     setSaveMsg(s => ({ ...s, [game.id]: '' }));
     try {
-      // 1. Save to Supabase games table
       const { error } = await supabase.from('games').update({
         is_active:    game.is_active,
-        min_bet:      game.min_bet,
-        max_bet:      game.max_bet,
         display_name: game.display_name,
         updated_at:   new Date().toISOString(),
       }).eq('id', game.id);
 
       if (error) throw new Error(error.message);
-
-      // 2. Sync limits into store.perGameLimits → also persists to admin_config in Supabase
-      store.setGameLimit(game.slug, { min: game.min_bet, max: game.max_bet });
-
-      // 3. Reload to confirm round-trip
-      await store.loadAdminConfigFromSupabase();
 
       setSaveStatus(s => ({ ...s, [game.id]: 'saved' }));
       setSaveMsg(s => ({ ...s, [game.id]: 'Supabase confirmed ✓' }));
@@ -87,7 +74,6 @@ export default function GameSettingsTab() {
 
   function update(id: string, patch: Partial<GameRow>) {
     setGames(gs => gs.map(g => g.id === id ? { ...g, ...patch } : g));
-    // Reset save status when any field changes
     setSaveStatus(s => ({ ...s, [id]: 'idle' }));
   }
 
@@ -138,36 +124,14 @@ export default function GameSettingsTab() {
                 </div>
               </div>
 
-              {/* Fields */}
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">Display Name</label>
-                  <input
-                    value={g.display_name}
-                    onChange={e => update(g.id, { display_name: e.target.value })}
-                    className="w-full bg-slatepanel-700 border border-slatepanel-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-neon-400/60"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">Min Bet (₹)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={g.min_bet}
-                    onChange={e => update(g.id, { min_bet: Number(e.target.value) })}
-                    className="w-full bg-slatepanel-700 border border-slatepanel-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-neon-400/60"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs text-slate-400 block mb-1">Max Bet (₹)</label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={g.max_bet}
-                    onChange={e => update(g.id, { max_bet: Number(e.target.value) })}
-                    className="w-full bg-slatepanel-700 border border-slatepanel-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-neon-400/60"
-                  />
-                </div>
+              {/* Display Name */}
+              <div>
+                <label className="text-xs text-slate-400 block mb-1">Display Name</label>
+                <input
+                  value={g.display_name}
+                  onChange={e => update(g.id, { display_name: e.target.value })}
+                  className="w-full bg-slatepanel-700 border border-slatepanel-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-neon-400/60"
+                />
               </div>
 
               {/* Footer row */}
@@ -201,7 +165,7 @@ export default function GameSettingsTab() {
 
         {games.length === 0 && (
           <div className="text-center py-12 text-slate-500">
-            No games found in database. Make sure the games table has rows for the 8 supported slugs.
+            No games found in database.
           </div>
         )}
       </div>
