@@ -93,16 +93,16 @@ export async function supabaseUpdateBalance(userId: string, newBalance: number):
  */
 export async function supabaseUpdateUserFull(userId: string, payload: UserUpdatePayload): Promise<void> {
   const { error } = await supabase.rpc('admin_update_user_full', {
-    p_user_id: userId,
-    p_username: payload.username ?? null,
+    p_user_id:     userId,
+    p_username:    payload.username     ?? null,
     p_display_name: payload.display_name ?? null,
-    p_phone: payload.phone ?? null,
-    p_email: payload.email ?? null,
-    p_balance: payload.balance != null ? payload.balance : null,
-    p_vip_level: payload.vip_level != null ? payload.vip_level : null,
-    p_is_active: payload.is_active != null ? payload.is_active : null,
-    p_is_banned: payload.is_banned != null ? payload.is_banned : null,
-    p_account_id: payload.account_id ?? null,
+    p_phone:       payload.phone        ?? null,
+    p_email:       payload.email        ?? null,
+    p_balance:     payload.balance      != null ? payload.balance : null,
+    p_vip_level:   payload.vip_level    != null ? payload.vip_level : null,
+    p_is_active:   payload.is_active    != null ? payload.is_active : null,
+    p_is_banned:   payload.is_banned    != null ? payload.is_banned : null,
+    p_account_id:  payload.account_id   ?? null,
   });
   if (error) throw error;
 }
@@ -271,14 +271,7 @@ export async function supabaseDeleteBanner(id: string): Promise<void> {
 // ---- Support Tickets ----
 export interface SupabaseTicket {
   id: string; user_id: string | null; subject: string; message: string;
-  status: string; priority: string; is_read: boolean;
-  created_at: string; updated_at: string;
-  replies?: SupabaseTicketReply[];
-}
-
-export interface SupabaseTicketReply {
-  id: string; ticket_id: string; sender: string;
-  message: string; created_at: string;
+  status: string; admin_reply: string | null; created_at: string; updated_at: string;
 }
 
 export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
@@ -289,16 +282,8 @@ export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
   } catch (e) { console.error('[supabase] getTickets error:', e); return []; }
 }
 
-export async function supabaseGetTicketReplies(ticketId: string): Promise<SupabaseTicketReply[]> {
-  try {
-    const { data, error } = await supabase.rpc('admin_get_ticket_replies', { p_ticket_id: ticketId });
-    if (error) throw error;
-    return (data ?? []) as SupabaseTicketReply[];
-  } catch (e) { console.error('[supabase] getTicketReplies error:', e); return []; }
-}
-
-export async function supabaseReplyToTicket(ticketId: string, message: string): Promise<void> {
-  const { error } = await supabase.rpc('admin_reply_ticket', { p_ticket_id: ticketId, p_message: message });
+export async function supabaseReplyTicket(ticketId: string, reply: string): Promise<void> {
+  const { error } = await supabase.rpc('admin_reply_ticket', { p_ticket_id: ticketId, p_reply: reply });
   if (error) throw error;
 }
 
@@ -307,56 +292,43 @@ export async function supabaseUpdateTicketStatus(ticketId: string, status: strin
   if (error) throw error;
 }
 
-export async function supabaseMarkTicketRead(ticketId: string): Promise<void> {
-  const { error } = await supabase.rpc('admin_mark_ticket_read', { p_ticket_id: ticketId });
-  if (error) throw error;
+// ---- Payment Methods ----
+export interface SupabasePaymentMethod {
+  id: string; name: string; type: string; min_amount: number; max_amount: number;
+  instructions: string | null; is_active: boolean; sort_order: number;
+  metadata: Record<string, unknown>; created_at: string;
 }
 
-// ---- Notifications ----
-export interface SupabaseNotification {
-  id: string; title: string; body: string;
-  type: string; target: string; is_sent: boolean;
-  sent_at: string | null; created_at: string;
-}
-
-export async function supabaseGetNotifications(): Promise<SupabaseNotification[]> {
+export async function supabaseGetPaymentMethods(): Promise<SupabasePaymentMethod[]> {
   try {
-    const { data, error } = await supabase.rpc('admin_get_notifications');
+    const { data, error } = await supabase.rpc('admin_get_payment_methods');
     if (error) throw error;
-    return (data ?? []) as SupabaseNotification[];
-  } catch (e) { console.error('[supabase] getNotifications error:', e); return []; }
+    return (data ?? []) as SupabasePaymentMethod[];
+  } catch (e) { console.error('[supabase] getPaymentMethods error:', e); return []; }
 }
 
-export async function supabaseSendNotification(title: string, body: string, type: string, target: string): Promise<string | null> {
+// ---- Bets ----
+export interface SupabaseBet {
+  id: string;
+  user_id: string | null;
+  bet_amount: number;
+  win_amount: number | null;
+  multiplier: number | null;
+  status: string;
+  bet_details: Record<string, unknown> | null;
+  placed_at: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export async function supabaseGetBets(limit = 500): Promise<SupabaseBet[]> {
   try {
-    const { data, error } = await supabase.rpc('admin_send_notification', {
-      p_title: title, p_body: body, p_type: type, p_target: target,
-    });
+    const { data, error } = await supabase
+      .from('bets')
+      .select('id, user_id, bet_amount, win_amount, multiplier, status, bet_details, placed_at, resolved_at, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
     if (error) throw error;
-    return data as string;
-  } catch (e) { console.error('[supabase] sendNotification error:', e); return null; }
-}
-
-// ---- Affiliates ----
-export interface SupabaseAffiliate {
-  id: string; user_id: string; referral_code: string;
-  total_referrals: number; total_earnings: number;
-  commission_rate: number; is_active: boolean;
-  created_at: string; updated_at: string;
-  user_email?: string; user_username?: string;
-}
-
-export async function supabaseGetAffiliates(): Promise<SupabaseAffiliate[]> {
-  try {
-    const { data, error } = await supabase.rpc('admin_get_affiliates');
-    if (error) throw error;
-    return (data ?? []) as SupabaseAffiliate[];
-  } catch (e) { console.error('[supabase] getAffiliates error:', e); return []; }
-}
-
-export async function supabaseUpdateAffiliateCommission(affiliateId: string, rate: number): Promise<void> {
-  const { error } = await supabase.rpc('admin_update_affiliate_commission', {
-    p_affiliate_id: affiliateId, p_rate: rate,
-  });
-  if (error) throw error;
+    return (data ?? []) as SupabaseBet[];
+  } catch (e) { console.error('[supabase] getBets error:', e); return []; }
 }
