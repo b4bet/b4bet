@@ -83,8 +83,8 @@ function BetButton({
 }
 
 /**
- * Result overlay — absolute, covers only the game card.
- * min-h ensures it is tall even when card content is small.
+ * Result overlay — absolute inset-0, fills the game card.
+ * The card itself has min-h-[420px] so this overlay is always tall enough.
  */
 function ResultOverlay({
   visible, result, won, payout, choice,
@@ -97,8 +97,8 @@ function ResultOverlay({
   const labels: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
 
   return (
-    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-3xl overflow-hidden bg-black/80 backdrop-blur-sm min-h-[420px]">
-      <div className="flex flex-col items-center gap-6 px-6 py-12 w-full">
+    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-3xl overflow-hidden bg-black/80 backdrop-blur-sm">
+      <div className="flex flex-col items-center gap-6 px-6 py-10 w-full">
         <img
           src={images[result]}
           alt={labels[result]}
@@ -348,10 +348,10 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         </div>
       </div>
 
-      {/* ── Game card — relative so overlay stays inside ── */}
-      <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden">
+      {/* ── Game card — min-h ensures overlay is tall during revealed phase ── */}
+      <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden min-h-[420px]">
 
-        {/* Result overlay — absolute, covers only this card */}
+        {/* Result overlay — absolute inset-0, fills the card (which is min 420px tall) */}
         <ResultOverlay
           visible={phase === 'revealed'}
           result={result}
