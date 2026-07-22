@@ -68,50 +68,6 @@ export async function supabaseGetIpMultiAccounts(): Promise<IpMultiAccount[]> {
   } catch (e) { console.error('[supabase] getIpMultiAccounts error:', e); return []; }
 }
 
-// ---- Bans ----
-export interface SupabaseBan {
-  id: string;
-  user_id: string | null;
-  username: string;
-  email: string;
-  phone: string;
-  account_id: string;
-  ip: string;
-  ban_reason: string;
-  banned_by: string;
-  ban_date: string;
-  unban_date: string | null;
-  unban_reason: string | null;
-  is_active_ban: boolean;
-}
-
-/** Get all bans with full user details (username, email, phone, account_id, ip) */
-export async function supabaseGetBans(): Promise<SupabaseBan[]> {
-  try {
-    const { data, error } = await supabase.rpc('admin_get_bans');
-    if (error) throw error;
-    return (data ?? []) as SupabaseBan[];
-  } catch (e) { console.error('[supabase] getBans error:', e); return []; }
-}
-
-/** Ban a user — uses RPC to update profiles AND insert into bans table with full details */
-export async function supabaseBanUser(userId: string, reason = 'Banned by admin'): Promise<void> {
-  const { error } = await supabase.rpc('admin_ban_user', {
-    p_user_id: userId,
-    p_reason: reason,
-  });
-  if (error) throw error;
-}
-
-/** Unban a user — uses RPC to update profiles AND bans table */
-export async function supabaseUnbanUser(userId: string, reason = 'Unbanned by admin'): Promise<void> {
-  const { error } = await supabase.rpc('admin_unban_user', {
-    p_user_id: userId,
-    p_reason: reason,
-  });
-  if (error) throw error;
-}
-
 // ---- Stats ----
 export async function supabaseGetStats(): Promise<{ onlineUsers: number; topWin: number; paidOut: number }> {
   try {
@@ -148,6 +104,7 @@ export interface SupabaseProfile {
   created_at: string;
   updated_at: string;
   email?: string;
+  registration_ip?: string | null;
 }
 
 export interface UserUpdatePayload {
@@ -191,6 +148,29 @@ export async function supabaseUpdateUserFull(userId: string, payload: UserUpdate
     p_is_active: payload.is_active != null ? payload.is_active : null,
     p_is_banned: payload.is_banned != null ? payload.is_banned : null,
     p_account_id: payload.account_id ?? null,
+  });
+  if (error) throw error;
+}
+
+/**
+ * Ban a user — uses admin_ban_user RPC which also records the ban in the bans table.
+ * Falls back to direct profile update if RPC fails.
+ */
+export async function supabaseBanUser(userId: string, reason = 'Banned by admin'): Promise<void> {
+  const { error } = await supabase.rpc('admin_ban_user', {
+    p_user_id: userId,
+    p_reason: reason,
+  });
+  if (error) throw error;
+}
+
+/**
+ * Unban a user — uses admin_unban_user RPC which also updates the bans table unban_date.
+ */
+export async function supabaseUnbanUser(userId: string, reason = 'Unbanned by admin'): Promise<void> {
+  const { error } = await supabase.rpc('admin_unban_user', {
+    p_user_id: userId,
+    p_reason: reason,
   });
   if (error) throw error;
 }

@@ -1,13 +1,12 @@
 import { useEffect, useState, useCallback } from 'react';
 import {
   supabaseGetUsers, supabaseBanUser, supabaseUnbanUser,
-  supabaseGetIpMultiAccounts, supabaseGetBans,
-  type SupabaseProfile, type IpMultiAccount, type SupabaseBan,
+  supabaseGetIpMultiAccounts,
+  type SupabaseProfile, type IpMultiAccount,
 } from '../../lib/supabaseIntegration';
 import {
   ShieldBan, Search, Unlock, AlertTriangle, Activity,
   ShieldAlert, ShieldCheck, RefreshCw, Mail, Phone, Clock, Zap,
-  Hash, Globe,
 } from 'lucide-react';
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
@@ -54,27 +53,6 @@ function useIpMultiAccounts() {
   return { ipData, loading, reload: load };
 }
 
-function useBansHistory() {
-  const [bans, setBans] = useState<SupabaseBan[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await supabaseGetBans();
-      setBans(data);
-    } catch (e) {
-      console.error('useBansHistory load error:', e);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { void load(); }, [load]);
-
-  return { bans, loading, reload: load };
-}
-
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmt(ts: string | undefined | null): string {
@@ -92,12 +70,11 @@ function fmt(ts: string | undefined | null): string {
 export default function BanSectionTab() {
   const { users, loading: usersLoading, reload: reloadUsers, setUsers } = useSupabaseUsers();
   const { ipData, loading: ipLoading, reload: reloadIp } = useIpMultiAccounts();
-  const { bans, loading: bansLoading, reload: reloadBans } = useBansHistory();
 
   const [search, setSearch] = useState('');
   const [banIdInput, setBanIdInput] = useState('');
   const [banReason, setBanReason] = useState('');
-  const [unbanModal, setUnbanModal] = useState<SupabaseBan | null>(null);
+  const [unbanModal, setUnbanModal] = useState<SupabaseProfile | null>(null);
   const [unbanReason, setUnbanReason] = useState('');
   const [ipSearch, setIpSearch] = useState('');
   const [ipActionModal, setIpActionModal] = useState<{ userId: string; username: string; action: 'ban' | 'unban' } | null>(null);
@@ -105,9 +82,8 @@ export default function BanSectionTab() {
   const [expandedIp, setExpandedIp] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [activeTab, setActiveTab] = useState<'banned' | 'history' | 'ip'>('banned');
 
-  const loading = usersLoading || ipLoading || bansLoading;
+  const loading = usersLoading || ipLoading;
 
   function flash(ok: boolean, msg: string) {
     if (ok) { setSuccess(msg); setError(''); }
@@ -115,12 +91,11 @@ export default function BanSectionTab() {
     setTimeout(() => { setSuccess(''); setError(''); }, 3000);
   }
 
-  function reload() { void reloadUsers(); void reloadIp(); void reloadBans(); }
+  function reload() { void reloadUsers(); void reloadIp(); }
 
-  // Active banned users (from profiles)
   const bannedUsers = users.filter((u) => u.is_banned === true || u.is_active === false);
 
-  const filteredBanned = bannedUsers.filter((u) => {
+  const filtered = bannedUsers.filter((u) => {
     const q = search.toLowerCase();
     return (
       !q ||
@@ -128,18 +103,6 @@ export default function BanSectionTab() {
       (u.display_name ?? '').toLowerCase().includes(q) ||
       (u.email ?? '').toLowerCase().includes(q) ||
       (u.account_id ?? '').toLowerCase().includes(q)
-    );
-  });
-
-  // Ban history (all bans from bans table - including unbanned)
-  const filteredHistory = bans.filter((b) => {
-    const q = search.toLowerCase();
-    return (
-      !q ||
-      b.username.toLowerCase().includes(q) ||
-      b.email.toLowerCase().includes(q) ||
-      b.account_id.toLowerCase().includes(q) ||
-      b.ip.toLowerCase().includes(q)
     );
   });
 
@@ -169,24 +132,19 @@ export default function BanSectionTab() {
       setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, is_banned: true, is_active: false } : u));
       flash(true, `${user.username ?? user.id} has been banned.`);
       setBanIdInput(''); setBanReason('');
-      void reloadBans();
     } catch {
       flash(false, 'Failed to ban user. Try again.');
     }
   }
 
   // ─── Unban ────────────────────────────────────────────────────────────────
-  async function handleUnban(ban: SupabaseBan) {
-    if (!unbanReason.trim()) { flash(false, 'Please enter an unban reason.'); return; }
+  async function handleUnban(user: SupabaseProfile, reason: string) {
     try {
-      if (ban.user_id) {
-        await supabaseUnbanUser(ban.user_id, unbanReason.trim());
-        setUsers((prev) => prev.map((u) => u.id === ban.user_id ? { ...u, is_banned: false, is_active: true } : u));
-      }
-      flash(true, `${ban.username} has been unbanned.`);
+      await supabaseUnbanUser(user.id, reason.trim() || 'Unbanned by admin');
+      setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, is_banned: false, is_active: true } : u));
+      flash(true, `${user.username ?? user.id} has been unbanned.`);
       setUnbanModal(null);
       setUnbanReason('');
-      void reloadBans();
     } catch {
       flash(false, 'Failed to unban user. Try again.');
     }
@@ -210,7 +168,6 @@ export default function BanSectionTab() {
       setIpActionModal(null);
       setIpActionReason('');
       void reloadIp();
-      void reloadBans();
     } catch {
       flash(false, `Failed to ${ipActionModal.action} user.`);
     }
@@ -278,7 +235,7 @@ export default function BanSectionTab() {
             </datalist>
           </div>
           <div>
-            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Reason (required)</p>
+            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Reason</p>
             <input type="text" value={banReason} onChange={(e) => setBanReason(e.target.value)} placeholder="Ban reason…" className="input" />
           </div>
         </div>
@@ -287,194 +244,103 @@ export default function BanSectionTab() {
         </button>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-slatepanel-800 p-1 rounded-xl border border-borderline-900">
-        {([
-          { key: 'banned', label: `Banned (${bannedUsers.length})`, icon: ShieldBan },
-          { key: 'history', label: `Ban History (${bans.length})`, icon: Clock },
-          { key: 'ip', label: `IP Tracker (${ipData.length})`, icon: Activity },
-        ] as const).map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setActiveTab(key)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition-colors ${
-              activeTab === key
-                ? 'bg-slatepanel-600 text-white border border-borderline-700'
-                : 'text-slate-500 hover:text-slate-300'
-            }`}
-          >
-            <Icon className="w-3.5 h-3.5" /> {label}
-          </button>
-        ))}
-      </div>
-
-      {/* Search bar (shared) */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-        <input
-          className="input pl-10"
-          placeholder={activeTab === 'ip' ? 'Search by IP, username, email…' : 'Search by username, email, account ID, IP…'}
-          value={activeTab === 'ip' ? ipSearch : search}
-          onChange={(e) => activeTab === 'ip' ? setIpSearch(e.target.value) : setSearch(e.target.value)}
-        />
-      </div>
-
-      {/* ── Tab: Banned Users ─────────────────────────────────────────────── */}
-      {activeTab === 'banned' && (
+      {/* Banned users list */}
+      <div className="panel p-4 space-y-3">
+        <div className="flex items-center gap-2 mb-1">
+          <h2 className="font-display font-bold text-base text-white flex items-center gap-2">
+            <ShieldBan className="w-4 h-4 text-coral-400" /> Banned Users
+          </h2>
+          <span className="text-[10px] bg-coral-500/15 text-coral-300 px-2 py-0.5 rounded-full border border-coral-500/30">{bannedUsers.length}</span>
+        </div>
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <input className="input pl-10" placeholder="Search banned users…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
         <div className="space-y-2">
           {usersLoading && <p className="text-xs text-slate-500 text-center py-4">Loading users…</p>}
-          {!usersLoading && filteredBanned.length === 0 && (
+          {!usersLoading && filtered.length === 0 && (
             <p className="text-xs text-slate-500 text-center py-4">{search ? 'No banned users match your search.' : 'No banned users.'}</p>
           )}
-          {filteredBanned.map((u) => {
-            const banRecord = bans.find((b) => b.user_id === u.id && b.is_active_ban);
-            return (
-              <div key={u.id} className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800 space-y-2">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-coral-500/20 border border-coral-500/30 grid place-items-center flex-shrink-0">
-                    <ShieldBan className="w-4 h-4 text-coral-400" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-white text-sm">{u.username ?? '—'}</span>
-                      <span className="text-[9px] bg-coral-500/15 text-coral-300 px-1.5 py-0.5 rounded-full border border-coral-500/30">Banned</span>
-                      <span className="text-[10px] text-slate-500 font-mono">#{u.account_id ?? '—'}</span>
-                    </div>
-                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
-                      {(u.email) && (
-                        <span className="flex items-center gap-1 text-[10px] text-slate-400">
-                          <Mail className="w-3 h-3 text-slate-500" />{u.email}
-                        </span>
-                      )}
-                      {u.phone && (
-                        <span className="flex items-center gap-1 text-[10px] text-slate-400">
-                          <Phone className="w-3 h-3 text-slate-500" />{u.phone}
-                        </span>
-                      )}
-                      {banRecord?.ip && (
-                        <span className="flex items-center gap-1 text-[10px] text-slate-400">
-                          <Globe className="w-3 h-3 text-slate-500" />{banRecord.ip}
-                        </span>
-                      )}
-                    </div>
-                    {banRecord && (
-                      <div className="flex flex-wrap gap-x-3 mt-1">
-                        <span className="text-[10px] text-slate-500">Reason: <span className="text-slate-300">{banRecord.ban_reason}</span></span>
-                        <span className="text-[10px] text-slate-500">Banned: <span className="text-slate-300">{fmt(banRecord.ban_date)}</span></span>
-                      </div>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => { setUnbanModal(banRecord ?? { id: '', user_id: u.id, username: u.username ?? u.id, email: u.email ?? '', phone: u.phone ?? '', account_id: u.account_id ?? '', ip: '', ban_reason: '', banned_by: 'admin', ban_date: '', unban_date: null, unban_reason: null, is_active_ban: true }); setUnbanReason(''); }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-xs font-semibold hover:bg-emeraldwin-500/25 transition-colors flex-shrink-0"
-                  >
-                    <Unlock className="w-3.5 h-3.5" /> Unban
-                  </button>
-                </div>
+          {filtered.map((u) => (
+            <div key={u.id} className="flex items-center gap-3 bg-slatepanel-800 rounded-xl p-3 border border-borderline-800">
+              <div className="w-9 h-9 rounded-full bg-coral-500/20 border border-coral-500/30 grid place-items-center flex-shrink-0">
+                <ShieldBan className="w-4 h-4 text-coral-400" />
               </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* ── Tab: Ban History ──────────────────────────────────────────────── */}
-      {activeTab === 'history' && (
-        <div className="space-y-2">
-          {bansLoading && <p className="text-xs text-slate-500 text-center py-4">Loading ban history…</p>}
-          {!bansLoading && filteredHistory.length === 0 && (
-            <p className="text-xs text-slate-500 text-center py-4">{search ? 'No bans match your search.' : 'No ban history.'}</p>
-          )}
-          {filteredHistory.map((ban) => (
-            <div key={ban.id} className={`bg-slatepanel-800 rounded-xl p-3 border space-y-2 ${ban.is_active_ban ? 'border-coral-500/30' : 'border-borderline-800'}`}>
-              <div className="flex items-start gap-3">
-                <div className={`w-8 h-8 rounded-full grid place-items-center flex-shrink-0 ${ban.is_active_ban ? 'bg-coral-500/20' : 'bg-slate-700'}`}>
-                  {ban.is_active_ban
-                    ? <ShieldBan className="w-3.5 h-3.5 text-coral-400" />
-                    : <ShieldCheck className="w-3.5 h-3.5 text-emeraldwin-400" />}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-white text-sm">{u.username ?? '—'}</span>
+                  <span className="text-[9px] bg-coral-500/15 text-coral-300 px-1.5 py-0.5 rounded-full border border-coral-500/30">Banned</span>
                 </div>
-                <div className="flex-1 min-w-0 space-y-1">
-                  {/* Row 1: name + status + account id */}
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-white text-sm">{ban.username}</span>
-                    <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold ${
-                      ban.is_active_ban
-                        ? 'bg-coral-500/15 border-coral-500/30 text-coral-300'
-                        : 'bg-emeraldwin-500/10 border-emeraldwin-500/20 text-emeraldwin-400'
-                    }`}>
-                      {ban.is_active_ban ? 'Active Ban' : 'Unbanned'}
-                    </span>
-                    {ban.account_id && (
-                      <span className="flex items-center gap-1 text-[10px] text-slate-500 font-mono">
-                        <Hash className="w-3 h-3" />{ban.account_id}
-                      </span>
-                    )}
-                  </div>
-                  {/* Row 2: email, phone, ip */}
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-                    {ban.email && (
-                      <span className="flex items-center gap-1 text-[10px] text-slate-400">
-                        <Mail className="w-3 h-3 text-slate-500" />{ban.email}
-                      </span>
-                    )}
-                    {ban.phone && (
-                      <span className="flex items-center gap-1 text-[10px] text-slate-400">
-                        <Phone className="w-3 h-3 text-slate-500" />{ban.phone}
-                      </span>
-                    )}
-                    {ban.ip && (
-                      <span className="flex items-center gap-1 text-[10px] text-slate-400">
-                        <Globe className="w-3 h-3 text-slate-500" />{ban.ip}
-                      </span>
-                    )}
-                  </div>
-                  {/* Row 3: ban details */}
-                  <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-                    <span className="text-[10px] text-slate-500">
-                      Reason: <span className="text-slate-300">{ban.ban_reason || '—'}</span>
-                    </span>
-                    <span className="flex items-center gap-1 text-[10px] text-slate-500">
-                      <Clock className="w-3 h-3" />{fmt(ban.ban_date)}
-                    </span>
-                    {!ban.is_active_ban && ban.unban_date && (
-                      <span className="text-[10px] text-emeraldwin-400">
-                        Unbanned: {fmt(ban.unban_date)}{ban.unban_reason ? ` — ${ban.unban_reason}` : ''}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                {ban.is_active_ban && ban.user_id && (
-                  <button
-                    onClick={() => { setUnbanModal(ban); setUnbanReason(''); }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-xs font-semibold hover:bg-emeraldwin-500/25 transition-colors flex-shrink-0"
-                  >
-                    <Unlock className="w-3.5 h-3.5" /> Unban
-                  </button>
-                )}
+                <p className="text-[11px] text-slate-500 mt-0.5">{u.email ?? '—'} · #{u.account_id ?? u.id.slice(0, 8)}</p>
+                {u.registration_ip && <p className="text-[10px] text-slate-600 mt-0.5">Reg IP: {u.registration_ip}</p>}
               </div>
+              <button
+                onClick={() => { setUnbanModal(u); setUnbanReason(''); }}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-xs font-semibold hover:bg-emeraldwin-500/25 transition-colors flex-shrink-0"
+              >
+                <Unlock className="w-3.5 h-3.5" /> Unban
+              </button>
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Unban confirmation modal */}
+      {unbanModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="panel p-6 w-full max-w-sm space-y-4">
+            <div className="flex items-center gap-3">
+              <Unlock className="w-5 h-5 text-emeraldwin-300" />
+              <h3 className="font-display font-bold text-white">Unban User</h3>
+            </div>
+            <p className="text-sm text-slate-400">You are unbanning <span className="text-white font-semibold">{unbanModal.username}</span>. This will restore their access.</p>
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Reason (optional)</p>
+              <input
+                type="text"
+                value={unbanReason}
+                onChange={(e) => setUnbanReason(e.target.value)}
+                placeholder="Unban reason…"
+                className="input"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => { setUnbanModal(null); setUnbanReason(''); }} className="flex-1 py-2 rounded-xl bg-slatepanel-700 text-slate-300 text-sm hover:bg-slatepanel-600">Cancel</button>
+              <button onClick={() => void handleUnban(unbanModal, unbanReason)} className="flex-1 py-2 rounded-xl bg-emeraldwin-500/20 border border-emeraldwin-500/40 text-emeraldwin-300 text-sm font-semibold">Confirm Unban</button>
+            </div>
+          </div>
+        </div>
       )}
 
-      {/* ── Tab: IP Tracker ───────────────────────────────────────────────── */}
-      {activeTab === 'ip' && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] text-slate-500">
-              IPs with <span className="text-white font-semibold">2+ accounts</span> — shows name, email, phone, ID, date per account.
+      {/* ── IP Tracker ──────────────────────────────────────────────────────── */}
+      <div className="panel p-4 space-y-3">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div>
+            <h2 className="font-display font-bold text-base text-white flex items-center gap-2">
+              <Activity className="w-4 h-4 text-neon-300" /> IP Tracker
+            </h2>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              IPs with <span className="text-white font-semibold">2+ accounts</span> — shows name, email, phone, IP, date & time per account.
             </p>
-            <span className="text-[10px] bg-neon-500/15 text-neon-300 px-2 py-0.5 rounded-full border border-neon-500/30">
-              {ipData.length} multi-account IP{ipData.length !== 1 ? 's' : ''}
-            </span>
           </div>
+          <span className="text-[10px] bg-neon-500/15 text-neon-300 px-2 py-0.5 rounded-full border border-neon-500/30">
+            {ipData.length} multi-account IP{ipData.length !== 1 ? 's' : ''}
+          </span>
+        </div>
 
-          {ipLoading && <p className="text-xs text-slate-500 text-center py-4">Loading…</p>}
-          {!ipLoading && filteredIpGroups.length === 0 && (
-            <p className="text-xs text-slate-500 text-center py-4">
-              {ipSearch ? 'No IP activity matches your search.' : 'No multi-account IPs detected yet.'}
-            </p>
-          )}
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <input className="input pl-10" placeholder="Search by IP, username, email, account ID…" value={ipSearch} onChange={(e) => setIpSearch(e.target.value)} />
+        </div>
 
+        {ipLoading && <p className="text-xs text-slate-500 text-center py-4">Loading…</p>}
+        {!ipLoading && filteredIpGroups.length === 0 && (
+          <p className="text-xs text-slate-500 text-center py-4">
+            {ipSearch ? 'No IP activity matches your search.' : 'No multi-account IPs detected yet.'}
+          </p>
+        )}
+
+        <div className="space-y-3">
           {filteredIpGroups.map((group) => {
             const userCount = Number(group.user_count);
             const isExpanded = expandedIp === group.ip_address;
@@ -530,6 +396,7 @@ export default function BanSectionTab() {
                                 : <ShieldCheck className="w-3.5 h-3.5 text-emeraldwin-400" />}
                             </div>
                             <span className="text-sm font-semibold text-white">{username}</span>
+                            {/* FIX: was a broken regular string, now a proper template literal */}
                             <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-semibold flex-shrink-0 ${isBanned ? 'bg-coral-500/15 border-coral-500/30 text-coral-300' : 'bg-emeraldwin-500/10 border-emeraldwin-500/20 text-emeraldwin-400'}`}>
                               {isBanned ? 'Banned' : 'Active'}
                             </span>
@@ -594,36 +461,7 @@ export default function BanSectionTab() {
             );
           })}
         </div>
-      )}
-
-      {/* Unban confirmation modal */}
-      {unbanModal && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="panel p-6 w-full max-w-sm space-y-4">
-            <div className="flex items-center gap-3">
-              <Unlock className="w-5 h-5 text-emeraldwin-300" />
-              <h3 className="font-display font-bold text-white">Unban User</h3>
-            </div>
-            <p className="text-sm text-slate-400">
-              You are unbanning <span className="text-white font-semibold">{unbanModal.username}</span>. This will restore their access.
-            </p>
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Unban Reason (required)</p>
-              <input
-                type="text"
-                value={unbanReason}
-                onChange={(e) => setUnbanReason(e.target.value)}
-                placeholder="Enter reason for unbanning…"
-                className="input"
-              />
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => { setUnbanModal(null); setUnbanReason(''); }} className="flex-1 py-2 rounded-xl bg-slatepanel-700 text-slate-300 text-sm hover:bg-slatepanel-600">Cancel</button>
-              <button onClick={() => void handleUnban(unbanModal)} className="flex-1 py-2 rounded-xl bg-emeraldwin-500/20 border border-emeraldwin-500/40 text-emeraldwin-300 text-sm font-semibold">Confirm Unban</button>
-            </div>
-          </div>
-        </div>
-      )}
+      </div>
 
       {/* IP Action modal */}
       {ipActionModal && (
