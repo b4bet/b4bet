@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { HelpCircle, Menu, Volume2, Music, X, Wallet, ChevronLeft, Plane } from 'lucide-react';
+import { HelpCircle, Menu, Volume2, Music, X, Wallet, Plane } from 'lucide-react';
 import { Toggle } from './Toggle';
 import { formatMoney } from './game/format';
 import { useGameLogos } from '../../lib/hooks';
@@ -15,7 +15,7 @@ interface HeaderProps {
   onBack?: () => void;
 }
 
-export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, onToggleMusic, onToggleAnimation, onBack }: HeaderProps) {
+export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, onToggleMusic, onToggleAnimation }: HeaderProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [howToOpen, setHowToOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -34,79 +34,79 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
   }, [settingsOpen]);
 
   return (
-    <header className="flex items-center justify-between gap-3 px-3 sm:px-4 py-2.5 bg-ink-800 border-b border-ink-600/60">
-      <div className="flex items-center gap-2">
-        {onBack && (
-          <button
-            onClick={onBack}
-            className="flex items-center gap-0.5 h-7 px-2 rounded-lg bg-ink-700 border border-ink-500/70 hover:border-aviator-blue/60 transition-colors text-gray-300 hover:text-white active:scale-95"
-            aria-label="Go back"
-          >
-            <ChevronLeft className="w-3 h-3" strokeWidth={2.5} />
-            <span className="text-[10px] font-bold">Back</span>
-          </button>
-        )}
+    <header className="flex items-center gap-2 px-3 py-2 bg-ink-900 border-b border-ink-700/60 relative z-10">
+      {/* Logo — round shape, bigger, left aligned */}
+      <div className="flex items-center gap-2 flex-1 min-w-0">
         {aviatorLogo ? (
-          <img src={aviatorLogo} alt="Aviator" className="h-9 w-auto object-contain" />
+          <img
+            src={aviatorLogo}
+            alt="Aviator"
+            className="w-12 h-12 rounded-full object-cover flex-shrink-0 ring-2 ring-red-500/40"
+          />
         ) : (
-          <span className="text-white font-black text-lg">Aviator</span>
+          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-red-600 to-orange-500 flex items-center justify-center flex-shrink-0 ring-2 ring-red-500/40">
+            <Plane className="w-6 h-6 text-white" />
+          </div>
         )}
+        <div className="min-w-0">
+          <p className="text-sm font-black text-white leading-none">Aviator</p>
+          <p className="text-[10px] text-slate-400 mt-0.5">Crash Game</p>
+        </div>
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-3">
+      {/* Right side controls */}
+      <div className="flex items-center gap-1.5 flex-shrink-0">
         <button
           onClick={() => setHowToOpen(true)}
-          className="flex items-center gap-1.5 rounded-lg bg-ink-700 hover:bg-ink-650 border border-ink-500/70 px-2.5 sm:px-3 py-2 text-xs sm:text-sm font-semibold text-gray-200 transition-colors"
+          className="flex items-center gap-1.5 rounded-lg bg-ink-700 hover:bg-ink-650 border border-ink-500/70 px-2 py-1.5 text-xs font-semibold text-gray-200 transition-colors"
         >
-          <HelpCircle className="h-4 w-4 text-aviator-blue" />
+          <HelpCircle className="w-3.5 h-3.5" />
           <span className="hidden sm:inline">How to Play</span>
         </button>
 
-        {/* Balance — always visible */}
-        <div className="flex items-center gap-1.5 rounded-lg bg-ink-700 border border-ink-500/70 px-2.5 py-2">
-          <Wallet className="h-4 w-4 text-aviator-green" />
-          <span className="font-mono font-bold text-aviator-green text-sm sm:text-base tabular-nums">
+        {/* Balance */}
+        <div className="flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-ink-700 border border-ink-500/70">
+          <Wallet className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+          <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
             {formatMoney(balance)}
           </span>
         </div>
 
-        <div className="relative" ref={menuRef}>
+        <div ref={menuRef} className="relative">
           <button
             onClick={() => setSettingsOpen((v) => !v)}
             className="flex items-center justify-center rounded-lg bg-ink-700 hover:bg-ink-650 border border-ink-500/70 p-2 transition-colors"
             aria-label="Settings"
           >
-            <Menu className="h-5 w-5 text-gray-200" />
+            <Menu className="w-4 h-4 text-gray-300" />
           </button>
 
           {settingsOpen && (
-            <div className="absolute right-0 top-full mt-2 w-64 rounded-xl bg-ink-700 border border-ink-500/80 shadow-2xl z-50 animate-slide-up overflow-hidden">
-              <div className="px-4 py-3 border-b border-ink-600 flex items-center justify-between">
-                <span className="text-sm font-bold text-white">Settings</span>
+            <div className="absolute right-0 top-full mt-1 w-52 bg-ink-800 border border-ink-600 rounded-xl shadow-2xl z-50 p-3 space-y-3">
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-sm font-bold text-white">Settings</p>
                 <button onClick={() => setSettingsOpen(false)} className="text-gray-400 hover:text-white">
-                  <X className="h-4 w-4" />
+                  <X className="w-4 h-4" />
                 </button>
               </div>
-              <div className="p-2">
-                <SettingRow
-                  icon={<Volume2 className="h-4 w-4 text-aviator-blue" />}
-                  label="Sound Effects"
-                  checked={soundOn}
-                  onChange={onToggleSound}
-                />
-                <SettingRow
-                  icon={<Music className="h-4 w-4 text-aviator-purple" />}
-                  label="Background Music"
-                  checked={musicOn}
-                  onChange={onToggleMusic}
-                />
-                <SettingRow
-                  icon={<Plane className="h-4 w-4 text-aviator-green" />}
-                  label="Animation"
-                  checked={animationOn}
-                  onChange={onToggleAnimation}
-                />
-              </div>
+              <SettingRow
+                icon={<Volume2 className="w-4 h-4" />}
+                label="Sound Effects"
+                checked={soundOn}
+                onChange={onToggleSound}
+              />
+              <SettingRow
+                icon={<Music className="w-4 h-4" />}
+                label="Background Music"
+                checked={musicOn}
+                onChange={onToggleMusic}
+              />
+              <SettingRow
+                icon={<Plane className="w-4 h-4" />}
+                label="Animation"
+                checked={animationOn}
+                onChange={onToggleAnimation}
+              />
             </div>
           )}
         </div>
@@ -129,12 +129,12 @@ function SettingRow({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-ink-650">
-      <div className="flex items-center gap-2.5">
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-2 text-gray-300">
         {icon}
-        <span className="text-sm font-medium text-gray-200">{label}</span>
+        <span className="text-xs">{label}</span>
       </div>
-      <Toggle checked={checked} onChange={onChange} label={label} />
+      <Toggle checked={checked} onChange={onChange} />
     </div>
   );
 }
@@ -142,36 +142,33 @@ function SettingRow({
 function HowToPlayModal({ onClose }: { onClose: () => void }) {
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4 animate-fade-in"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-2xl bg-ink-700 border border-ink-500/80 shadow-2xl overflow-hidden"
+        className="bg-ink-800 border border-ink-600 rounded-2xl p-6 max-w-sm w-full space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-4 border-b border-ink-600">
-          <h2 className="text-lg font-bold text-white flex items-center gap-2">
-            <HelpCircle className="h-5 w-5 text-aviator-red" />
-            How to Play
-          </h2>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Plane className="w-5 h-5 text-red-400" />
+            <h2 className="font-bold text-white">How to Play</h2>
+          </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white">
-            <X className="h-5 w-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
-        <div className="p-5 space-y-3 text-sm text-gray-300 leading-relaxed">
-          <Step n={1} title="Place your bet">
-            During the countdown, press <span className="text-aviator-green font-semibold">BET</span> on either
-            panel before the plane takes off.
+        <div className="space-y-3">
+          <Step n={1} title="Place Your Bet">
+            During the countdown, press BET on either panel before the plane takes off.
           </Step>
-          <Step n={2} title="Watch the multiplier climb">
-            Once the plane launches, the multiplier rises from 1.00x. The longer it flies, the bigger your
-            potential win.
+          <Step n={2} title="Watch the Multiplier">
+            Once the plane launches, the multiplier rises from 1.00x. The longer it flies, the bigger your potential win.
           </Step>
-          <Step n={3} title="Cash out in time">
-            Hit <span className="text-aviator-orange font-semibold">CASH OUT</span> before the plane flies away.
-            Your win = bet × multiplier at cash-out.
+          <Step n={3} title="Cash Out in Time">
+            Hit CASH OUT before the plane flies away. Your win = bet × multiplier at cash-out.
           </Step>
-          <Step n={4} title="Don't wait too long">
+          <Step n={4} title="Don't Wait Too Long">
             If the plane flies away before you cash out, your bet is lost for that round.
           </Step>
         </div>
@@ -183,12 +180,12 @@ function HowToPlayModal({ onClose }: { onClose: () => void }) {
 function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-3">
-      <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-aviator-red/20 text-aviator-red font-bold text-sm">
-        {n}
+      <div className="w-6 h-6 rounded-full bg-red-500/20 border border-red-500/40 flex items-center justify-center flex-shrink-0 mt-0.5">
+        <span className="text-red-400 text-xs font-bold">{n}</span>
       </div>
       <div>
-        <p className="font-semibold text-white">{title}</p>
-        <p className="text-gray-400">{children}</p>
+        <p className="text-sm font-semibold text-white">{title}</p>
+        <p className="text-xs text-gray-400 mt-0.5">{children}</p>
       </div>
     </div>
   );
