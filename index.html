@@ -16,6 +16,77 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <!--
+      MAINTENANCE GUARD — runs before React bundle loads.
+      Fetches maintenance_mode from Supabase using plain fetch (no JS cache).
+      If enabled=true and this is not an admin route, forces a hard reload
+      so stale cached JS bundles cannot hide the maintenance page.
+      Uses sessionStorage to avoid infinite reload loops.
+    -->
+    <script>
+      (function () {
+        var SUPABASE_URL = 'https://qbuanfugtqiljlkenlqo.supabase.co';
+        var SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFidWFuZnVndHFpbGpsa2VubHFvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQyMjQwOTgsImV4cCI6MjA5OTgwMDA5OH0.UqcqncVJb2co0eRe_v6_GErB8u9FCYZxbzkZtTUKfmU';
+        var RELOAD_FLAG = 'b4bet_maint_reloaded';
+        var LAST_STATE_KEY = 'b4bet_maint_state';
+
+        // Never block admin panel
+        var h = window.location.pathname + window.location.hash;
+        var isAdmin = h.indexOf('/aryan') !== -1 || h.indexOf('#aryan') !== -1;
+        if (isAdmin) return;
+
+        function checkAndEnforce() {
+          fetch(
+            SUPABASE_URL + '/rest/v1/settings?key=eq.maintenance_mode&select=value&limit=1',
+            {
+              headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': 'Bearer ' + SUPABASE_ANON_KEY,
+                'Cache-Control': 'no-cache, no-store',
+              },
+            }
+          )
+          .then(function (r) { return r.json(); })
+          .then(function (rows) {
+            if (!rows || !rows.length) return;
+            var raw = rows[0].value;
+            var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            var isOn = !!(cfg && cfg.enabled);
+            var wasOn = sessionStorage.getItem(LAST_STATE_KEY) === 'on';
+
+            if (isOn) {
+              sessionStorage.setItem(LAST_STATE_KEY, 'on');
+              // If we haven't hard-reloaded yet for this maintenance window, do it now
+              if (sessionStorage.getItem(RELOAD_FLAG) !== '1') {
+                sessionStorage.setItem(RELOAD_FLAG, '1');
+                window.location.reload(true);
+              }
+            } else {
+              // Maintenance is OFF — clear flags so next time it turns ON we reload again
+              sessionStorage.removeItem(RELOAD_FLAG);
+              sessionStorage.removeItem(LAST_STATE_KEY);
+              // If it just turned OFF and we were showing maint page, reload to restore app
+              if (wasOn) {
+                window.location.reload(true);
+              }
+            }
+          })
+          .catch(function () { /* network error — fail open, app loads normally */ });
+        }
+
+        // Run immediately on page load
+        checkAndEnforce();
+
+        // Also run every 8 seconds so long-lived tabs get updated
+        setInterval(checkAndEnforce, 8000);
+
+        // Run when tab becomes visible again
+        document.addEventListener('visibilitychange', function () {
+          if (document.visibilityState === 'visible') checkAndEnforce();
+        });
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
