@@ -1,15 +1,5 @@
 /**
  * TradingGameView — server-side settlement version.
- *
- * When a bet expires the outcome is settled by the process-bet Edge Function
- * (trading_settle). The server compares entry vs exit price, atomically
- * updates profiles.balance and inserts a bets row.
- * store.recordTradingBet() is called ONLY for the local UI history — it no
- * longer modifies the balance.
- *
- * Layout matches spec §6:
- *   Top bar:     Asset selector + Binary chip only.
- *   Control panel order: Amount → Active Bets toggle → Expiration → UP/DOWN → Payout.
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -26,7 +16,6 @@ import { cms } from '../lib/cms';
 import { auth } from '../lib/auth';
 import { GameService } from '../lib/game-service';
 
-// ─────────────────────────────────────────────────────────────
 type AssetCategory = 'Crypto' | 'Forex' | 'Commodities' | 'Stocks';
 type BetDirection  = 'UP' | 'DOWN';
 type TimeOption    = 1 | 5 | 10 | 30;
@@ -60,7 +49,6 @@ interface ActiveBet {
 
 interface ToastItem { id: string; message: string; type: 'win' | 'lose' | 'info'; }
 
-// ─────────────────────────────────────────────────────────────
 const ASSETS: Asset[] = [
   { category: 'Crypto',      name: 'Bitcoin',    symbol: 'BTC/USDT',   basePrice: 43000, payout: 85, volatility: 0.03  },
   { category: 'Crypto',      name: 'Ethereum',   symbol: 'ETH/USDT',   basePrice: 2600,  payout: 82, volatility: 0.035 },
@@ -95,9 +83,6 @@ function catColor(cat: AssetCategory): string {
   return { Crypto: 'text-orange-400', Forex: 'text-blue-400', Commodities: 'text-yellow-400', Stocks: 'text-green-400' }[cat];
 }
 
-// ─────────────────────────────────────────────────────────────
-// Toast
-// ─────────────────────────────────────────────────────────────
 function ToastItem({ toast, onRemove }: { toast: ToastItem; onRemove: (id: string) => void }) {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -124,9 +109,6 @@ function ToastItem({ toast, onRemove }: { toast: ToastItem; onRemove: (id: strin
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// Chart (Canvas-based — unchanged)
-// ─────────────────────────────────────────────────────────────
 function PriceChart({ priceHistory, currentPrice, selectedAsset, activeBets }: {
   priceHistory: PricePoint[]; currentPrice: number; selectedAsset: Asset; activeBets?: ActiveBet[];
 }) {
@@ -261,6 +243,9 @@ function PriceChart({ priceHistory, currentPrice, selectedAsset, activeBets }: {
   const onTouchStart = (e: React.TouchEvent) => { dragStartX.current = e.touches[0].clientX; dragStartOffset.current = scrollOffset; };
   const onTouchMove  = (e: React.TouchEvent) => { const delta = (e.touches[0].clientX - dragStartX.current) / 2; setScrollOffset(Math.max(0, Math.min(priceHistory.length - visibleCount, Math.round(dragStartOffset.current - delta)))); };
 
+  // suppress unused warning — fmtPrice used in chart label formatting context
+  void fmtPrice;
+
   return (
     <div className="relative w-full h-full bg-[#0d1117]">
       <div className="absolute top-2 left-2 flex gap-1 z-20">
@@ -294,9 +279,6 @@ function PriceChart({ priceHistory, currentPrice, selectedAsset, activeBets }: {
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// Active bets panel
-// ─────────────────────────────────────────────────────────────
 function ActiveBetsList({ bets }: { bets: ActiveBet[] }) {
   const winning = bets.filter((b) => b.isWinning).length;
   return (
@@ -344,9 +326,6 @@ function ActiveBetsList({ bets }: { bets: ActiveBet[] }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────
-// Main view
-// ─────────────────────────────────────────────────────────────
 export default function TradingGameView({ onBack: _onBack }: { onBack?: () => void }) {
   const balance = useBalance();
 
@@ -383,7 +362,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
     return () => document.removeEventListener('mousedown', handler);
   }, [betsPanelOpen]);
 
-  // ── Init price history ──
   useEffect(() => {
     const now = Date.now();
     const history: PricePoint[] = [];
@@ -397,7 +375,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
     setCurrentPrice(history[history.length - 1].price);
   }, [selectedAsset]);
 
-  // ── Price tick ──
   const updatePrice = useCallback(() => {
     const asset = assetRef.current;
     const last  = currentPriceRef.current;
@@ -420,7 +397,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
   }, []);
   const removeToast = useCallback((id: string) => setToasts((prev) => prev.filter((t) => t.id !== id)), []);
 
-  // ── Resolve bets (server-side settlement) ──
   const resolveBets = useCallback(() => {
     const now = Date.now();
     const cp  = currentPriceRef.current;
@@ -435,7 +411,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
       });
       updated.forEach((bet) => {
         if (bet.timeRemaining <= 0) {
-          // Settlement is fully server-side
           const session = auth.getSession();
           if (session) {
             void GameService.tradingSettle(
@@ -447,14 +422,12 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
               cp,
               bet.payoutPercentage,
             ).then((res) => {
-              // Sync balance from server
               store.setBalance(res.balance_after);
               if (res.won) {
                 addToast(`WIN +${Math.floor(res.profit)} on ${bet.asset.symbol}`, 'win');
               } else {
                 addToast(`LOSS -${Math.floor(bet.betAmount)} on ${bet.asset.symbol}`, 'lose');
               }
-              // Local history only — no balance mutation
               store.recordTradingBet({
                 symbol: bet.asset.symbol,
                 direction: bet.direction,
@@ -471,7 +444,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
               addToast(`Settle failed: ${msg}`, 'info');
             });
           }
-          // Don't push to remaining — bet is expired
         } else {
           remaining.push(bet);
         }
@@ -507,7 +479,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
       addToast('Invalid bet amount', 'info');
       return;
     }
-    // Deduct balance locally for optimistic display; server reconciles on settle
     const ok = store.debit(amt);
     if (!ok) { bus.emit(Topics.InsufficientBalance); addToast('Insufficient balance', 'info'); return; }
 
@@ -544,7 +515,7 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
   const canBet       = betAmount > 0 && betAmount <= balance;
 
   return (
-    <div className="flex flex-col animate-fade-in h-[calc(100vh-130px)]">
+    <div className="flex flex-col animate-fade-in h-[calc(100vh-130px)] px-3">
       {/* ── Top bar: asset selector only ── */}
       <div className="bg-gray-900 border border-gray-800 rounded-t-2xl px-3 py-2 flex items-center gap-2 flex-shrink-0">
         <div className="relative flex-1">
@@ -592,7 +563,7 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
       {/* ── Control panel ── */}
       <div className="bg-gray-900 border border-t-0 border-gray-800 rounded-b-2xl px-3 py-2.5 flex-shrink-0 space-y-2.5">
 
-        {/* Amount FIRST */}
+        {/* Amount */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] text-gray-400 uppercase tracking-wide">Amount</span>
