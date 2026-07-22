@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { HelpCircle, Menu, Volume2, Music, X, Wallet, ChevronLeft, Plane } from 'lucide-react';
-import { AviatorLogo } from './AviatorLogo';
 import { Toggle } from './Toggle';
 import { formatMoney } from './game/format';
+import { useGameLogos } from '../../lib/hooks';
 
 interface HeaderProps {
   balance: number;
@@ -19,6 +19,8 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [howToOpen, setHowToOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const logos = useGameLogos();
+  const aviatorLogo = logos['aviator'];
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -37,14 +39,18 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
         {onBack && (
           <button
             onClick={onBack}
-            className="hidden flex items-center gap-0.5 h-7 px-2 rounded-lg bg-ink-700 border border-ink-500/70 hover:border-aviator-blue/60 transition-colors text-gray-300 hover:text-white active:scale-95"
+            className="flex items-center gap-0.5 h-7 px-2 rounded-lg bg-ink-700 border border-ink-500/70 hover:border-aviator-blue/60 transition-colors text-gray-300 hover:text-white active:scale-95"
             aria-label="Go back"
           >
             <ChevronLeft className="w-3 h-3" strokeWidth={2.5} />
             <span className="text-[10px] font-bold">Back</span>
           </button>
         )}
-        <AviatorLogo size="md" />
+        {aviatorLogo ? (
+          <img src={aviatorLogo} alt="Aviator" className="h-9 w-auto object-contain" />
+        ) : (
+          <span className="text-white font-black text-lg">Aviator</span>
+        )}
       </div>
 
       <div className="flex items-center gap-2 sm:gap-3">
@@ -56,7 +62,8 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
           <span className="hidden sm:inline">How to Play</span>
         </button>
 
-        <div className="hidden">
+        {/* Balance — always visible */}
+        <div className="flex items-center gap-1.5 rounded-lg bg-ink-700 border border-ink-500/70 px-2.5 py-2">
           <Wallet className="h-4 w-4 text-aviator-green" />
           <span className="font-mono font-bold text-aviator-green text-sm sm:text-base tabular-nums">
             {formatMoney(balance)}
