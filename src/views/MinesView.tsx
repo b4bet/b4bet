@@ -9,7 +9,7 @@ import { auth } from '../lib/auth';
 import { GameService } from '../lib/game-service';
 import { bus, Topics } from '../lib/bus';
 import { supabase } from '../integrations/supabase/client';
-import { useAdminConfig } from '../lib/hooks';
+import { useAdminConfig, useGameLogos, useBalance } from '../lib/hooks';
 import { Bomb, Gem, Flag, Play, HandCoins, RefreshCw } from 'lucide-react';
 
 // ── Local UI state ────────────────────────────────────────────────────────────
@@ -168,6 +168,8 @@ export default function MinesView() {
   const { rows: myHistory, loading: histLoading, error: histError, refresh: refreshHistory } = useSupabaseMinesHistory();
 
   const adminCfg = useAdminConfig();
+  const gameLogos = useGameLogos();
+  const balance = useBalance();
   const quickStakes = adminCfg.gameHandlers['mines']?.quickStakes?.length
     ? adminCfg.gameHandlers['mines'].quickStakes
     : [100, 500, 1000, 5000];
@@ -270,14 +272,21 @@ export default function MinesView() {
 
   return (
     <div className="space-y-4 animate-fade-in px-3">
-      {/* pt-4 gives breathing room from the main app header */}
-      <div className="flex items-center gap-2 pt-4">
-        <div className="w-9 h-9 rounded-xl bg-coral-500/20 border border-coral-500/40 grid place-items-center">
-          <Bomb className="w-5 h-5 text-coral-400" />
+      {/* Header with admin logo + balance */}
+      <div className="flex items-center justify-between pt-4">
+        <div className="flex items-center gap-2">
+          {gameLogos['mines'] ? (
+            <img src={gameLogos['mines']} alt="Mines" className="w-9 h-9 object-contain rounded-xl" />
+          ) : null}
+          <div>
+            <h1 className="font-display font-extrabold text-xl text-white leading-none">Mines</h1>
+            <p className="text-xs text-slate-500">5×5 grid · {game.active ? game.mineCount : minesInput} mines hidden</p>
+          </div>
         </div>
-        <div>
-          <h1 className="font-display font-extrabold text-xl text-white leading-none">Mines</h1>
-          <p className="text-xs text-slate-500">5×5 grid · {game.active ? game.mineCount : minesInput} mines hidden</p>
+        <div className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-slatepanel-800 border border-borderline-900">
+          <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
+            {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+          </span>
         </div>
       </div>
 
