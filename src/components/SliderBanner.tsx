@@ -71,10 +71,14 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
       className="relative w-full rounded-2xl bg-slatepanel-900"
       style={{ overflow: 'hidden' }}
     >
-      {/* Slides track — each slide is exactly 100% width of this container */}
+      {/* Slides track — 2:1 aspect ratio container so banners fill perfectly */}
       <div
-        className="flex h-40 sm:h-48 transition-transform duration-500 ease-in-out"
-        style={{ transform: `translateX(-${idx * 100}%)`, width: '100%' }}
+        className="flex transition-transform duration-500 ease-in-out"
+        style={{
+          transform: `translateX(-${idx * 100}%)`,
+          width: '100%',
+          aspectRatio: '2 / 1',
+        }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
@@ -88,10 +92,11 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
                 style={{ minWidth: '100%', maxWidth: '100%' }}
                 className="relative block bg-slatepanel-900 flex-shrink-0"
               >
+                {/* object-cover fills the 2:1 box perfectly — upload 2:1 images for zero cut */}
                 <img
                   src={b.imageUrl}
                   alt={b.title || 'Banner'}
-                  className="w-full h-full object-contain"
+                  className="w-full h-full object-cover"
                 />
               </a>
             ))
