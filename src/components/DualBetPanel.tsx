@@ -149,7 +149,8 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
       lastQuickRef.current = base;
     }
   };
-  const quickStakes = cfg.crashQuickStakes && cfg.crashQuickStakes.length ? cfg.crashQuickStakes : [200, 500, 1000, 2000];
+  // Read quick stakes from gameHandlers.crash first, then fall back to crashQuickStakes
+  const quickStakes = (cfg.gameHandlers['crash']?.quickStakes?.length ? cfg.gameHandlers['crash'].quickStakes : null) ?? (cfg.crashQuickStakes?.length ? cfg.crashQuickStakes : [200, 500, 1000, 2000]);
 
   const stepDelta = stake < 100 ? 5 : stake < 1000 ? 25 : 100;
   const inc = () => { setAmountStr(String(Math.round((stake + stepDelta) * 100) / 100)); lastQuickRef.current = null; };
