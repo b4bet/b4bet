@@ -137,7 +137,7 @@ export interface RoundOutcomePreview {
 
 export const globalRounds: Record<string, number> = { wingo: 1, k3: 1, fived: 1, sunvsmoon: 1 };
 
-const GAME_HANDLER_KEYS = ['crash', 'aviator', 'wingo', 'k3', 'fived', 'sunvsmoon', 'trading'] as const;
+const GAME_HANDLER_KEYS = ['crash', 'aviator', 'wingo', 'k3', 'fived', 'sunvsmoon', 'trading', 'mines'] as const;
 
 const DEFAULT_CRASH_HANDLER: GameHandlerConfig = {
   mode: 'AUTO', targetWinProbability: 55, houseEdge: 4,
@@ -156,6 +156,8 @@ const DEFAULT_ADMIN_CONFIG: AdminConfig = {
     k3: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '3,3,3', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
     fived: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '00000', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
     sunvsmoon: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 6, manualResult: 'sun', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
+    mines: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '', manualTargetRoundId: null, quickStakes: [100, 500, 1000, 5000] },
+    trading: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '', manualTargetRoundId: null, quickStakes: [100, 500, 1000, 5000] },
   },
 };
 
@@ -394,6 +396,12 @@ class Store {
             }
           }
 
+          // Keep crashQuickStakes in sync with crash handler's quickStakes
+          const crashHandler = this.admin.gameHandlers['crash'];
+          if (crashHandler?.quickStakes?.length) {
+            this.admin.crashQuickStakes = crashHandler.quickStakes;
+          }
+
           bus.emit(Topics.AdminConfig, this.admin);
         }
       }
@@ -443,6 +451,7 @@ class Store {
       if (patch.manualCrashPoint !== undefined) this.admin.manualCrashPoint = patch.manualCrashPoint;
       if (patch.houseEdge !== undefined) this.admin.houseEdge = patch.houseEdge;
       if (patch.targetWinProbability !== undefined) this.admin.targetWinProbability = patch.targetWinProbability;
+      if (patch.quickStakes !== undefined) this.admin.crashQuickStakes = patch.quickStakes;
     }
     bus.emit(Topics.AdminConfig, this.admin);
     const { error } = await supabase.rpc('admin_update_setting', {
@@ -482,6 +491,7 @@ class Store {
       if (patch.manualCrashPoint !== undefined) this.admin.manualCrashPoint = patch.manualCrashPoint;
       if (patch.houseEdge !== undefined) this.admin.houseEdge = patch.houseEdge;
       if (patch.targetWinProbability !== undefined) this.admin.targetWinProbability = patch.targetWinProbability;
+      if (patch.quickStakes !== undefined) this.admin.crashQuickStakes = patch.quickStakes;
     }
     bus.emit(Topics.AdminConfig, this.admin);
     void this._persistAdminConfig();
