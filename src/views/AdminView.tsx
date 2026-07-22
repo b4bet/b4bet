@@ -5,6 +5,7 @@ import {
   CreditCard, FileText, Image, Gift, Settings, History,
   ShieldBan, MessageSquare, Zap, BarChart2, LogOut, Menu, X,
   KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown, Link2, Share2,
+  WrenchIcon,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -45,11 +46,12 @@ import AdminSupportNotification from '../components/AdminSupportNotification';
 import AffiliatesTab from './admin/AffiliatesTab';
 import TopRankingsTab from './admin/TopRankingsTab';
 import SocialLinksTab from './admin/SocialLinksTab';
+import MaintenanceTab from './admin/MaintenanceTab';
 
 // Tab keys — some map to PermissionKey directly, others are routed via TAB_PERM_MAP below
 type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager'
   | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory'
-  | 'signupBonus' | 'dashboard' | 'socialLinks';
+  | 'signupBonus' | 'dashboard' | 'socialLinks' | 'maintenance';
 
 type GameHandlerKey = 'crash' | 'wingo' | 'k3' | 'fived' | 'sunvsmoon' | 'aviator';
 type FloatToast = { id: number; message: string; icon: 'deposit' | 'withdrawal' | 'support' };
@@ -85,6 +87,7 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'signupBonus',         label: 'Signup Bonus',     icon: Gift },
   { key: 'ban',                 label: 'Ban Section',      icon: ShieldBan },
   { key: 'intercom',            label: 'Intercom',         icon: MessageSquare },
+  { key: 'maintenance',         label: 'Maintenance',      icon: WrenchIcon },
 ];
 
 // Maps tab keys that don't match a PermissionKey to the permission that gates them.
@@ -99,6 +102,7 @@ const TAB_PERM_MAP: Partial<Record<string, PermissionKey>> = {
   topRankings:         'history',
   signupBonus:         'marketing',
   socialLinks:         'marketing',
+  maintenance:         'banner',       // Maintenance shares Banner permission (owner-level)
 };
 
 const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.Element }[] = [
@@ -461,6 +465,7 @@ export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r:
           {tab === 'history'             && hasPermission('history') && <HistoryTab />}
           {tab === 'ban'                 && hasPermission('ban') && <BanSectionTab />}
           {tab === 'intercom'            && hasPermission('intercom') && <IntercomTab />}
+          {tab === 'maintenance'         && hasPermission('maintenance') && <MaintenanceTab />}
           {tab === 'manageProfile'       && (
             <div className="space-y-4">
               <h2 className="font-bold text-lg">Profile</h2>
