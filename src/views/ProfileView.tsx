@@ -119,8 +119,9 @@ export default function ProfileView({
   );
 }
 
-/** Redeem Code Section */
+/** Redeem Code Section — uses real Supabase userId for tracking */
 export function RedeemCodeSection() {
+  const session = useAuth();
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<
@@ -130,14 +131,17 @@ export function RedeemCodeSection() {
     | null
   >(null);
 
-  const apply = () => {
-    // Guard: only allow a single redemption trigger per click.
+  const apply = async () => {
     if (submitting) return;
     const trimmed = code.trim();
     if (!trimmed) return;
+
+    // Use real Supabase userId if logged in, else fallback to anonymous accountId
+    const userId = session?.userId ?? getOrCreateAccountId();
+
     setSubmitting(true);
     try {
-      const result = store.applyRedeemCode(trimmed, getOrCreateAccountId());
+      const result = await store.applyRedeemCodeAsync(trimmed, userId);
       if (result.status === 'success') {
         setStatus({
           kind: 'success',
@@ -149,8 +153,9 @@ export function RedeemCodeSection() {
       } else {
         setStatus({ kind: 'invalid', message: 'Invalid code. Please check and try again.' });
       }
+    } catch {
+      setStatus({ kind: 'invalid', message: 'Something went wrong. Please try again.' });
     } finally {
-      // Small delay prevents rapid duplicate triggers / duplicate popup windows.
       setTimeout(() => setSubmitting(false), 500);
     }
   };
@@ -178,7 +183,7 @@ export function RedeemCodeSection() {
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
-              if (!submitting) apply();
+              if (!submitting) void apply();
             }
           }}
           placeholder="Enter redeem code..."
@@ -187,11 +192,11 @@ export function RedeemCodeSection() {
         />
         <button
           type="button"
-          onClick={apply}
+          onClick={() => void apply()}
           disabled={submitting}
           className="btn-primary px-4 py-2 text-sm disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          <TicketPercent className="w-4 h-4" /> Apply
+          <TicketPercent className="w-4 h-4" /> {submitting ? 'Applying…' : 'Apply'}
         </button>
       </div>
       {status && (
