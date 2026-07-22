@@ -159,11 +159,6 @@ const DEFAULT_ADMIN_CONFIG: AdminConfig = {
   },
 };
 
-const DEFAULT_REDEEM_CODES: Record<string, RedeemCode> = {
-  WELCOME50: { code: 'WELCOME50', bonus: 50, maxUsesPerUser: 1, userLimit: 100, createdAt: Date.now(), usageByUser: {} },
-  BONUS100: { code: 'BONUS100', bonus: 100, maxUsesPerUser: 1, userLimit: 100, createdAt: Date.now(), usageByUser: {} },
-};
-
 class Store {
   // Balance starts at -1 (sentinel) to distinguish "not loaded yet" from actual 0.
   // UI should show a loading skeleton while balance === -1.
@@ -197,7 +192,8 @@ class Store {
   private static SIGNUP_BONUS_HISTORY_KEY = 'b4bet.signupBonusHistory';
   private signupBonusGrantedCache: Set<string> = new Set();
 
-  redeemCodes: Record<string, RedeemCode> = { ...DEFAULT_REDEEM_CODES };
+  // No hardcoded codes — all codes come from Supabase only
+  redeemCodes: Record<string, RedeemCode> = {};
 
   constructor() {
     this.restoreBalances();
@@ -260,15 +256,10 @@ class Store {
 
   // ---- Balance ----
   private restoreBalances() {
-    // Do NOT restore balance from localStorage on startup — it can be stale and show
-    // wrong numbers (e.g. "4") before Supabase profile loads.
-    // Balance is always fetched fresh from Supabase on auth state change.
-    // We still persist balancesByUser so creditUser() can update the right slot.
     try {
       const raw = localStorage.getItem(Store.BALANCES_KEY);
       if (raw) this.balancesByUser = JSON.parse(raw);
     } catch { /* ignore */ }
-    // balance stays -1 (loading sentinel) until Supabase auth resolves
   }
 
   private persistBalances() {
@@ -334,12 +325,6 @@ class Store {
     return true;
   }
 
-  /**
-   * Debit balance only in local memory — does NOT write to Supabase.
-   * Use this when the server-side operation will deduct the balance itself
-   * (e.g. aviator_place_bet), to prevent a double deduction where both the
-   * client and the server each subtract the bet amount from Supabase.
-   */
   debitLocalOnly(amount: number): boolean {
     if (!auth.getSession()) {
       bus.emit(Topics.AuthOpenModal, 'login');
@@ -448,11 +433,6 @@ class Store {
     }).catch(() => {});
   }
 
-  /**
-   * setGameHandlerAsync — same as setGameHandler but AWAITS the Supabase write.
-   * Use this in admin UI where you need to confirm the write succeeded before
-   * showing a success state.
-   */
   async setGameHandlerAsync(gameKey: string, patch: Partial<GameHandlerConfig>): Promise<void> {
     const current = this.getGameHandler(gameKey);
     const updated = { ...current, ...patch };
@@ -465,7 +445,6 @@ class Store {
       if (patch.targetWinProbability !== undefined) this.admin.targetWinProbability = patch.targetWinProbability;
     }
     bus.emit(Topics.AdminConfig, this.admin);
-    // Await actual Supabase write — throws if it fails
     const { error } = await supabase.rpc('admin_update_setting', {
       p_key: 'admin_config',
       p_value: this._buildDbPayload() as unknown as string,
@@ -551,7 +530,7 @@ class Store {
   getAdminHistory(opts: { game?: AdminHistoryGame | 'all'; search?: string; period?: 'all' | 'day' | 'week' | 'month' | 'year' } = {}): AdminHistoryRecord[] {
     let rows = [...this.adminHistory];
     if (opts.game && opts.game !== 'all') rows = rows.filter(r => r.game === opts.game);
-    if (opts.search) { const s = opts.search.toLowerCase(); rows = rows.filter(r => r.username.toLowerCase().includes(r.userId) || r.userId.includes(s)); }
+    if (opts.search) { const s = opts.search.toLowerCase(); rows = rows.filter(r => r.username.toLowerCase().includes(s) || r.userId.includes(s)); }
     if (opts.period && opts.period !== 'all') {
       const now = Date.now();
       const ms = { day: 86400000, week: 604800000, month: 2592000000, year: 31536000000 } as const;
@@ -581,7 +560,6 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'mines', amount: rec.stake, win: rec.win,
       result: rec.busted ? 'busted' : `${rec.multiplier.toFixed(2)}x` });
-    // Add to leaderboard if player won
     if (!rec.busted && rec.win > 0) {
       const session = auth.getSession();
       const username = session?.username ?? meta.username;
@@ -634,10 +612,8 @@ class Store {
         const row = rows.find(r => r.key === 'redeem_codes');
         if (row?.value && typeof row.value === 'object') {
           const loaded = row.value as Record<string, RedeemCode>;
-          if (Object.keys(loaded).length > 0) {
-            this.redeemCodes = loaded;
-            bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
-          }
+          this.redeemCodes = loaded;
+          bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
         }
       }
     } catch { /* ignore */ }
@@ -658,7 +634,6 @@ class Store {
    * 4. Saves updated codes back to Supabase.
    */
   async applyRedeemCodeAsync(code: string, userId: string): Promise<{ status: 'success' | 'used' | 'invalid'; bonus: number }> {
-    // Always fetch fresh from Supabase to avoid stale local state
     await this.loadRedeemCodesFromSupabase();
 
     const upper = code.trim().toUpperCase();
@@ -668,14 +643,11 @@ class Store {
     const uses = entry.usageByUser[userId] ?? 0;
     if (uses >= entry.maxUsesPerUser) return { status: 'used', bonus: 0 };
 
-    // Check total user limit
     const totalUses = Object.keys(entry.usageByUser).length;
     if (totalUses >= entry.userLimit) return { status: 'used', bonus: 0 };
 
-    // Record usage
     entry.usageByUser[userId] = uses + 1;
 
-    // Credit balance via Supabase
     const session = auth.getSession();
     if (session?.username) {
       this.creditUser(session.username, entry.bonus);
@@ -683,21 +655,19 @@ class Store {
       this.credit(entry.bonus);
     }
 
-    // Push notification
     this.pushNotification({
       title: 'Redeem Code Applied!',
       body: `Code ${upper} unlocked ${this.currency}${entry.bonus} bonus credits.`,
       kind: 'success',
     });
 
-    // Persist to Supabase
     bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
     await this.persistRedeemCodesToSupabase();
 
     return { status: 'success', bonus: entry.bonus };
   }
 
-  /** Legacy sync wrapper — kept for backward compat, now delegates to async */
+  /** Legacy sync wrapper — kept for backward compat */
   applyRedeemCode(code: string, accountId: string): { status: 'success' | 'used' | 'invalid'; bonus: number } {
     const upper = code.trim().toUpperCase();
     const entry = this.redeemCodes[upper];
