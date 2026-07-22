@@ -10,6 +10,7 @@ import {
   Shield, Sliders, Target, Cpu, Zap, Upload, Image as ImageIcon, Trash2,
   Rocket, Bomb, Trophy, DollarSign, Dices, Circle, BarChart2, Sun, Plane,
   Plus, X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal,
+  CheckCircle, AlertCircle,
 } from 'lucide-react';
 
 // CrashHandlingPanel — dedicated async Supabase-connected panel
@@ -32,6 +33,7 @@ const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Generic Game Handler Panel (shared by lottery-style games)
+// Quick stakes are Supabase-connected via setGameHandlerAsync for all games.
 // ─────────────────────────────────────────────────────────────────────────────
 function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlaceholder, manualHint }: {
   gameKey: string; label: string; icon: typeof Rocket; manualLabel: string;
@@ -49,10 +51,15 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
     if (handler.manualTargetRoundId && handler.manualTargetRoundId > currentRound) return;
     setTargetRound(String(upcomingRound));
   }, [upcomingRound, handler.manualTargetRoundId, currentRound]);
+
+  // Quick stakes — Supabase connected
   const [stake1, setStake1] = useState(String(handler.quickStakes[0] ?? '10'));
   const [stake2, setStake2] = useState(String(handler.quickStakes[1] ?? '100'));
   const [stake3, setStake3] = useState(String(handler.quickStakes[2] ?? '1000'));
   const [stake4, setStake4] = useState(String(handler.quickStakes[3] ?? '10000'));
+  const [stakesStatus, setStakesStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [stakesMsg, setStakesMsg] = useState('');
+
   const [preview, setPreview] = useState<RoundOutcomePreview | null>(null);
 
   const setMode = (mode: 'AUTO' | 'MANUAL') => store.setGameHandler(gameKey, { mode });
@@ -82,10 +89,24 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
     userEditedRoundRef.current = false;
     refreshPreview();
   };
-  const saveStakes = () => {
+
+  // Save quick stakes to Supabase (async, confirmed)
+  const saveStakes = async () => {
     const vals = [parseFloat(stake1), parseFloat(stake2), parseFloat(stake3), parseFloat(stake4)]
       .filter((n) => Number.isFinite(n) && n > 0).slice(0, 4);
-    if (vals.length) store.setGameHandler(gameKey, { quickStakes: vals });
+    if (!vals.length) return;
+    setStakesStatus('saving');
+    setStakesMsg('');
+    try {
+      await store.setGameHandlerAsync(gameKey, { quickStakes: vals });
+      await store.loadAdminConfigFromSupabase();
+      setStakesStatus('saved');
+      setStakesMsg('Supabase confirmed ✓');
+    } catch (e) {
+      setStakesStatus('error');
+      setStakesMsg((e as Error).message ?? 'Save failed');
+    }
+    setTimeout(() => setStakesStatus('idle'), 5000);
   };
 
   return (
@@ -146,17 +167,40 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
           </div>
         ) : (<p className="text-xs text-slate-500">Preview will appear automatically.</p>)}
       </div>
-      <div>
-        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 block">Quick Stake Chips (4 presets)</label>
-        <div className="grid grid-cols-4 gap-2 mb-2">
+
+      {/* Quick stakes — Supabase connected */}
+      <div className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800 space-y-2">
+        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">Quick Stake Chips (4 presets)</label>
+        <div className="grid grid-cols-4 gap-2">
           <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 1</p><input type="number" value={stake1} onChange={(e) => setStake1(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
           <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 2</p><input type="number" value={stake2} onChange={(e) => setStake2(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
           <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 3</p><input type="number" value={stake3} onChange={(e) => setStake3(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
           <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 4</p><input type="number" value={stake4} onChange={(e) => setStake4(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={saveStakes} className="btn-primary px-4 py-1.5 text-xs">Save Stakes</button>
-          <span className="text-[11px] text-slate-500">Current: <span className="text-white tabular">{handler.quickStakes.join(' · ')}</span></span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => { void saveStakes(); }}
+            disabled={stakesStatus === 'saving'}
+            className="btn-primary px-4 py-1.5 text-xs flex items-center gap-1.5 disabled:opacity-60"
+          >
+            {stakesStatus === 'saving' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+            Save Stakes
+          </button>
+          {stakesStatus === 'saved' && (
+            <span className="text-[11px] text-emeraldwin-300 font-semibold flex items-center gap-1">
+              <CheckCircle className="w-3 h-3" />{stakesMsg}
+            </span>
+          )}
+          {stakesStatus === 'error' && (
+            <span className="text-[11px] text-coral-300 font-semibold flex items-center gap-1">
+              <AlertCircle className="w-3 h-3" />{stakesMsg}
+            </span>
+          )}
+          {stakesStatus === 'idle' && (
+            <span className="text-[11px] text-slate-500">
+              Current: <span className="text-white tabular">{handler.quickStakes.join(' · ')}</span>
+            </span>
+          )}
         </div>
       </div>
     </div>
