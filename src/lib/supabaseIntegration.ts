@@ -25,7 +25,7 @@ export async function logoutUser(): Promise<void> {
 }
 
 // ---- IP Logging ----
-/** Log a user's IP address on login or signup */
+/** Log a user's IP address on login or signup using the SECURITY DEFINER RPC */
 export async function logUserIp(userId: string, ipAddress: string, action: 'login' | 'signup' = 'login'): Promise<void> {
   try {
     const { error } = await supabase.rpc('log_user_ip', {
