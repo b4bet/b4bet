@@ -29,7 +29,7 @@ const promoSlides = [
   },
 ];
 
-export default function SliderBanner({ onSlideClick }: { onSlideClick: (i: number) => void }) {
+export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) {
   const banners = useBanners();
   const useAdmin = banners.length > 0;
   const count = useAdmin ? banners.length : promoSlides.length;
@@ -67,29 +67,28 @@ export default function SliderBanner({ onSlideClick }: { onSlideClick: (i: numbe
   };
 
   return (
-    <div
-      className="relative w-full overflow-hidden"
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-    >
+    <div className="relative w-full overflow-hidden rounded-2xl bg-slatepanel-900">
+
       {/* Slides track */}
       <div
-        className="flex transition-transform duration-300 ease-in-out"
+        className="flex transition-transform duration-500 ease-in-out"
         style={{ transform: `translateX(-${idx * 100}%)` }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
       >
         {useAdmin
-          ? banners.map((b, i) => (
+          ? banners.map((b) => (
               <a
-                key={i}
+                key={b.id}
                 href={b.linkUrl || '#'}
                 onClick={(e) => { if (!b.linkUrl) e.preventDefault(); }}
-                className="min-w-full h-40 sm:h-48 relative block bg-slatepanel-900 shrink-0"
+                className="min-w-full h-40 sm:h-48 relative block bg-slatepanel-900 flex-shrink-0"
               >
-                {/* object-contain so full banner image is visible without cutting */}
+                {/* Full image — object-contain so nothing is cut off */}
                 <img
                   src={b.imageUrl}
-                  alt={b.title || ''}
+                  alt={b.title || 'Banner'}
                   className="w-full h-full object-contain"
                 />
               </a>
@@ -99,21 +98,24 @@ export default function SliderBanner({ onSlideClick }: { onSlideClick: (i: numbe
               return (
                 <div
                   key={i}
-                  className="min-w-full h-40 sm:h-48 relative overflow-hidden bg-slatepanel-900 shrink-0"
+                  className="min-w-full h-40 sm:h-48 relative overflow-hidden flex-shrink-0"
                 >
+                  {/* Background gradient */}
                   <div className={`absolute inset-0 bg-gradient-to-r ${s.gradient}`} />
-                  <div className="relative z-10 h-full flex flex-col justify-center px-5 gap-1">
-                    <div className={`flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest ${s.accent}`}>
-                      <Icon className="w-3 h-3" />
-                      Promo
+                  {/* Decorative circle */}
+                  <div className="absolute -right-8 -top-8 w-40 h-40 rounded-full bg-white/5" />
+                  <div className="absolute -right-4 -bottom-4 w-24 h-24 rounded-full bg-white/3" />
+
+                  {/* Content */}
+                  <div className="relative h-full flex flex-col justify-center px-5 py-4">
+                    <div className={`flex items-center gap-1.5 mb-2 ${s.accent}`}>
+                      <Icon className="w-4 h-4" />
+                      <span className="text-[11px] font-bold uppercase tracking-widest">Promo</span>
                     </div>
-                    <div className="text-xl font-black text-white leading-tight">{s.title}</div>
-                    <div className="text-xs text-slate-400 max-w-[220px]">{s.subtitle}</div>
-                    <button
-                      onClick={() => onSlideClick(i)}
-                      className="btn-primary mt-3 px-4 py-2 text-sm self-start flex items-center gap-1"
-                    >
-                      {s.cta} <ArrowRight className="w-3 h-3" />
+                    <h2 className="font-display font-extrabold text-white text-xl leading-tight mb-1">{s.title}</h2>
+                    <p className="text-slate-300 text-xs leading-snug max-w-[70%]">{s.subtitle}</p>
+                    <button onClick={() => onCta(i)} className="btn-primary mt-3 px-4 py-2 text-sm">
+                      {s.cta} <ArrowRight className="inline w-3.5 h-3.5 ml-1" />
                     </button>
                   </div>
                 </div>
@@ -121,8 +123,8 @@ export default function SliderBanner({ onSlideClick }: { onSlideClick: (i: numbe
             })}
       </div>
 
-      {/* Dots */}
-      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5">
+      {/* Dot indicators */}
+      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 z-10">
         {Array.from({ length: count }).map((_, i) => (
           <button
             key={i}
