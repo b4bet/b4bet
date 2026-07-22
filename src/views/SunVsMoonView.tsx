@@ -18,8 +18,11 @@ type BetChoice = 'sun' | 'moon' | 'tie';
 type Phase = 'betting' | 'processing' | 'revealed';
 
 const BETTING_DURATION = 15;
-const YEAR_PREFIX     = 2026;
+const YEAR_PREFIX      = 2026;
 const PAYOUTS: Record<BetChoice, number> = { sun: 1, moon: 1, tie: 8 };
+
+// Quick stakes — clicking ADDS the value to current bet amount
+const QUICK_STAKE_AMOUNTS = [100, 200, 300, 500];
 
 function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: number }) {
   const radius = 38;
@@ -53,10 +56,10 @@ function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: numbe
 
 function BetButton({
   choice, label, payout, imageSrc, glowColor,
-  selected, disabled, betAmount, onSelect,
+  selected, disabled, onSelect,
 }: {
   choice: BetChoice; label: string; payout: string; imageSrc: string; glowColor: string;
-  selected: boolean; disabled: boolean; betAmount: number; onSelect: (c: BetChoice) => void;
+  selected: boolean; disabled: boolean; onSelect: (c: BetChoice) => void;
 }) {
   return (
     <button
@@ -71,16 +74,14 @@ function BetButton({
       style={{
         borderColor:     selected ? glowColor : undefined,
         backgroundColor: selected ? `${glowColor}22` : undefined,
-        boxShadow:       selected ? `0  0 18px 4px ${glowColor}55` : undefined,
+        boxShadow:       selected ? `0 0 18px 4px ${glowColor}55` : undefined,
       }}
     >
       <img src={imageSrc} alt={label} className="w-12 h-12 object-contain drop-shadow-lg" />
       <span className="text-xs font-black text-white tracking-wide">{label}</span>
       <span className="text-[10px] text-slate-400">{payout}</span>
       {selected && (
-        <span className="text-[10px] font-bold text-white/80 mt-0.5">
-          ₹{betAmount.toLocaleString()}
-        </span>
+        <span className="text-[10px] font-bold text-white/80 mt-0.5">Selected</span>
       )}
     </button>
   );
@@ -163,19 +164,22 @@ function HistoryStrip({ history }: { history: Array<{ round: number; result: Bet
 
 export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const gameLogos = useGameLogos();
-  const balance      = useBalance();
-  const [betAmountStr, setBetAmountStr] = useState('100');
-  const betAmount = parseFloat(betAmountStr) || 0;
+  const balance   = useBalance();
+
+  // Bet amount as number directly
+  const [betAmount, setBetAmount] = useState(100);
+  const betAmountStr = String(betAmount);
 
   const initEng = sunMoonLoop.getState();
-  const [selectedBet, setSelectedBet] = useState<BetChoice | null>(null);
-  const [phase,       setPhase]      = useState<Phase>(initEng.phase);
-  const [secondsLeft, setSecondsLeft] = useState(initEng.secondsLeft);
-  const [roundNumber, setRoundNumber] = useState(YEAR_PREFIX * 10 + initEng.roundId);
-  const [result,      setResult]     = useState<BetChoice | null>(initEng.result);
-  const [lastWon,     setLastWon]    = useState(false);
-  const [lastPayout,  setLastPayout] = useState(0);
-  const [history,     setHistory]    = useState<Array<{ round: number; result: BetChoice }>>(() => {
+  const [selectedChoice, setSelectedChoice] = useState<BetChoice | null>(null);
+  const [betPlaced, setBetPlaced]           = useState(false);   // true after PLACE BET clicked
+  const [phase,       setPhase]             = useState<Phase>(initEng.phase);
+  const [secondsLeft, setSecondsLeft]       = useState(initEng.secondsLeft);
+  const [roundNumber, setRoundNumber]       = useState(YEAR_PREFIX * 10 + initEng.roundId);
+  const [result,      setResult]            = useState<BetChoice | null>(initEng.result);
+  const [lastWon,     setLastWon]           = useState(false);
+  const [lastPayout,  setLastPayout]        = useState(0);
+  const [history,     setHistory]           = useState<Array<{ round: number; result: BetChoice }>>(() => {
     const h = sunMoonLoop.getHistory();
     return h.map((r, i) => ({ round: YEAR_PREFIX * 10 + initEng.roundId - (i + 1), result: r }));
   });
@@ -185,11 +189,13 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const [historyTab, setHistoryTab] = useState<'rounds' | 'my'>('rounds');
   const [settling, setSettling] = useState(false);
 
-  const settledRoundRef = useRef<number>(-1);
-  const selectedBetRef  = useRef<BetChoice | null>(null);
-  const betAmountRef    = useRef<number>(betAmount);
-  useEffect(() => { selectedBetRef.current = selectedBet; }, [selectedBet]);
-  useEffect(() => { betAmountRef.current  = betAmount; }, [betAmount]);
+  const settledRoundRef    = useRef<number>(-1);
+  const selectedChoiceRef  = useRef<BetChoice | null>(null);
+  const betAmountRef       = useRef<number>(betAmount);
+  const betPlacedRef       = useRef(false);
+  useEffect(() => { selectedChoiceRef.current = selectedChoice; }, [selectedChoice]);
+  useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
+  useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
 
   useEffect(() => {
     const off = bus.on(EngineTopics.SunMoonState, (payload) => {
@@ -201,18 +207,21 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       setSecondsLeft(s.secondsLeft);
       setResult(s.result);
 
+      // New round started — reset UI
       if (s.phase === 'betting' && settledRoundRef.current !== -1 && settledRoundRef.current !== rn) {
-        setSelectedBet(null);
+        setSelectedChoice(null);
+        setBetPlaced(false);
       }
 
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
         settledRoundRef.current = rn;
-        const sb = selectedBetRef.current;
+        const sb      = selectedChoiceRef.current;
+        const placed  = betPlacedRef.current;
         const outcome = s.result;
 
         setHistory((prev) => [{ round: rn, result: outcome }, ...prev].slice(0, 20));
 
-        if (sb !== null) {
+        if (sb !== null && placed) {
           const stake = betAmountRef.current;
           const session = auth.getSession();
           if (!session) return;
@@ -254,15 +263,22 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     return off;
   }, []);
 
-  const handleSelectBet = useCallback((choice: BetChoice) => {
-    if (phase !== 'betting') return;
-    if (selectedBet !== null) return;
+  // Select direction (does NOT place bet yet)
+  const handleSelectChoice = useCallback((choice: BetChoice) => {
+    if (phase !== 'betting' || betPlaced) return;
+    setSelectedChoice((prev) => prev === choice ? null : choice);
+  }, [phase, betPlaced]);
+
+  // Confirm and place bet
+  const handlePlaceBet = useCallback(() => {
+    if (phase !== 'betting' || betPlaced || selectedChoice === null) return;
     const session = auth.getSession();
     if (!session) {
       bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login');
       return;
     }
-    const stake = parseFloat(betAmountStr) || 0;
+    const limits = store.getGameLimits('sunvsmoon');
+    const stake  = betAmountRef.current;
     if (stake < limits.min || stake > limits.max) {
       cms.toast({ title: 'Bet out of range', body: `Sun vs Moon bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
       return;
@@ -272,23 +288,33 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       return;
     }
     store.debit(stake);
-    setSelectedBet(choice);
-  }, [phase, selectedBet, betAmountStr, balance]);
+    setBetPlaced(true);
+  }, [phase, betPlaced, selectedChoice, balance]);
 
-  const adjustAmount = (delta: number) => {
-    const cur = parseFloat(betAmountStr) || 0;
-    const next = Math.max(10, Math.min(balance, Math.round(cur + delta)));
-    setBetAmountStr(String(next));
+  // Add quick stake amount to current bet
+  const handleQuickStake = (amount: number) => {
+    if (betPlaced) return;
+    setBetAmount((prev) => Math.min(prev + amount, balance));
   };
 
-  const limits = store.getGameLimits('sunvsmoon');
-  const adminHandler = store.getGameHandler('sunvsmoon');
-  const QUICK_STAKES = adminHandler.quickStakes?.length ? adminHandler.quickStakes : [100, 500, 1000, 5000];
-  const bettingEnabled = phase === 'betting' && selectedBet === null && !settling;
+  // Manual input
+  const handleAmountInput = (val: string) => {
+    const n = parseFloat(val);
+    if (!isNaN(n) && n >= 0) setBetAmount(n);
+    else if (val === '') setBetAmount(0);
+  };
+
+  const adjustAmount = (delta: number) => {
+    setBetAmount((prev) => Math.max(10, Math.min(balance, Math.round(prev + delta))));
+  };
+
+  const limits          = store.getGameLimits('sunvsmoon');
+  const canPlaceBet     = phase === 'betting' && !betPlaced && !settling && selectedChoice !== null && betAmount > 0;
+  const canSelectChoice = phase === 'betting' && !betPlaced;
 
   return (
     <div className="relative space-y-4 animate-fade-in px-3">
-      {/* ── Header with logo (round, no box) + back + balance ── */}
+      {/* ── Header ── */}
       <div className="flex items-center justify-between mt-2 mb-1">
         <div className="flex items-center gap-2">
           {onBack && (
@@ -296,7 +322,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               <ArrowLeft className="w-4 h-4 text-slate-300" />
             </button>
           )}
-          {/* Round logo — no box, just circle */}
           {gameLogos["sunvsmoon"] ? (
             <img
               src={gameLogos["sunvsmoon"]}
@@ -316,7 +341,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             <p className="text-[9px] text-slate-400 mt-0.5">Round #{roundNumber}</p>
           </div>
         </div>
-        {/* Balance */}
         <div className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-slatepanel-800 border border-borderline-900">
           <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
             {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
@@ -326,13 +350,19 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
       {/* ── Game area ── */}
       <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden">
-        <div className="p-4 space-y-5">
+        <div className="p-4 space-y-4">
+
+          {/* Timer / Processing */}
           <div className="flex flex-col items-center gap-2">
             {phase === 'betting' ? (
               <>
                 <TimerCircle secondsLeft={secondsLeft} total={BETTING_DURATION} />
                 <p className="text-[11px] text-slate-400">
-                  {selectedBet ? `Bet placed on ${selectedBet.toUpperCase()} — waiting for result` : 'SUN · ECLIPSE · MOON'}
+                  {betPlaced
+                    ? `Bet placed on ${selectedChoice?.toUpperCase()} — waiting for result`
+                    : selectedChoice
+                      ? `${selectedChoice.toUpperCase()} selected — set amount & place bet`
+                      : 'Pick SUN · ECLIPSE · MOON'}
                 </p>
               </>
             ) : phase === 'processing' ? (
@@ -343,28 +373,31 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             ) : null}
           </div>
 
+          {/* Direction selector buttons */}
           {phase !== 'processing' && (
             <div className="flex items-stretch gap-2">
               <BetButton
                 choice="sun" label="SUN" payout="1:1" imageSrc="/sun.png" glowColor="#FFB627"
-                selected={selectedBet === 'sun'} disabled={!bettingEnabled}
-                betAmount={betAmount} onSelect={handleSelectBet}
+                selected={selectedChoice === 'sun'} disabled={!canSelectChoice}
+                onSelect={handleSelectChoice}
               />
               <BetButton
                 choice="tie" label="ECLIPSE" payout="8:1" imageSrc="/eclipse.png" glowColor="#F59E0B"
-                selected={selectedBet === 'tie'} disabled={!bettingEnabled}
-                betAmount={betAmount} onSelect={handleSelectBet}
+                selected={selectedChoice === 'tie'} disabled={!canSelectChoice}
+                onSelect={handleSelectChoice}
               />
               <BetButton
                 choice="moon" label="MOON" payout="1:1" imageSrc="/moon.png" glowColor="#818CF8"
-                selected={selectedBet === 'moon'} disabled={!bettingEnabled}
-                betAmount={betAmount} onSelect={handleSelectBet}
+                selected={selectedChoice === 'moon'} disabled={!canSelectChoice}
+                onSelect={handleSelectChoice}
               />
             </div>
           )}
 
-          {phase === 'betting' && selectedBet === null && (
+          {/* Amount & quick stakes — only when betting and not yet placed */}
+          {phase === 'betting' && !betPlaced && (
             <div className="space-y-2">
+              {/* Amount input row */}
               <div className="flex items-center justify-between">
                 <p className="text-[10px] text-slate-400 uppercase tracking-widest">Bet Amount</p>
                 <div className="flex gap-2">
@@ -373,32 +406,75 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={() => adjustAmount(-50)} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">−</button>
+                <button
+                  onClick={() => adjustAmount(-50)}
+                  className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold"
+                >−</button>
                 <input
                   type="text"
                   inputMode="decimal"
                   value={betAmountStr}
-                  onChange={(e) => setBetAmountStr(e.target.value)}
+                  onChange={(e) => handleAmountInput(e.target.value)}
                   className="flex-1 bg-slatepanel-800 border border-borderline-900 rounded-xl px-3 py-2 text-center text-white font-bold text-sm focus:outline-none focus:border-neon-400/60"
                 />
-                <button onClick={() => adjustAmount(50)} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">+</button>
+                <button
+                  onClick={() => adjustAmount(50)}
+                  className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold"
+                >+</button>
               </div>
+
+              {/* Quick stakes — each click ADDS the amount */}
               <div className="flex gap-2">
-                {QUICK_STAKES.map((s) => (
+                {QUICK_STAKE_AMOUNTS.map((s) => (
                   <button
                     key={s}
-                    onClick={() => setBetAmountStr(String(Math.min(s, balance)))}
-                    className={[
-                      'flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors',
-                      betAmount === s
-                        ? 'bg-neon-500/20 border-neon-400/60 text-neon-300'
-                        : 'bg-slatepanel-800 border-borderline-900 text-slate-400 hover:border-slate-600',
-                    ].join(' ')}
+                    onClick={() => handleQuickStake(s)}
+                    className="flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-neon-400/50 hover:text-neon-300 active:scale-95"
                   >
-                    {s.toLocaleString()}
+                    +{s >= 1000 ? `${s / 1000}K` : s}
                   </button>
                 ))}
               </div>
+
+              {/* Current bet preview */}
+              {betAmount > 0 && (
+                <p className="text-center text-[10px] text-slate-400">
+                  Bet: <span className="text-white font-bold">₹{betAmount.toLocaleString()}</span>
+                  {selectedChoice && (
+                    <span className="ml-1">on <span className="font-bold text-white">{selectedChoice === 'tie' ? 'ECLIPSE' : selectedChoice.toUpperCase()}</span></span>
+                  )}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* PLACE BET button */}
+          {phase === 'betting' && !betPlaced && (
+            <button
+              onClick={handlePlaceBet}
+              disabled={!canPlaceBet}
+              className={[
+                'w-full py-3.5 rounded-2xl font-black text-sm tracking-wide transition-all active:scale-[0.97]',
+                canPlaceBet
+                  ? 'bg-gradient-to-r from-amber-500 to-yellow-400 text-black shadow-lg shadow-amber-500/30 hover:brightness-110 cursor-pointer'
+                  : 'bg-slatepanel-800 border border-borderline-900 text-slate-500 cursor-not-allowed opacity-60',
+              ].join(' ')}
+            >
+              {selectedChoice === null
+                ? 'Select SUN / ECLIPSE / MOON first'
+                : betAmount <= 0
+                  ? 'Enter bet amount'
+                  : `PLACE BET — ₹${betAmount.toLocaleString()}`}
+            </button>
+          )}
+
+          {/* Bet placed confirmation bar */}
+          {phase === 'betting' && betPlaced && (
+            <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
+              <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+              <p className="text-xs font-bold text-amber-300">
+                ₹{betAmount.toLocaleString()} on {selectedChoice === 'tie' ? 'ECLIPSE' : selectedChoice?.toUpperCase()} — waiting for result
+              </p>
             </div>
           )}
         </div>
@@ -408,7 +484,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
           result={result}
           won={lastWon}
           payout={lastPayout}
-          choice={selectedBet}
+          choice={betPlaced ? selectedChoice : null}
         />
       </div>
 
@@ -454,24 +530,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             )}
           </div>
         )}
-      </div>
-
-      {/* ── Payout info card ── */}
-      <div className="rounded-2xl bg-slatepanel-900 border border-borderline-900 p-4">
-        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Payout Table</p>
-        <div className="grid grid-cols-3 gap-2">
-          {[
-            { label: 'SUN', payout: '1:1', src: '/sun.png', color: '#FFB627' },
-            { label: 'ECLIPSE', payout: '8:1', src: '/eclipse.png', color: '#F59E0B' },
-            { label: 'MOON', payout: '1:1', src: '/moon.png', color: '#818CF8' },
-          ].map((row) => (
-            <div key={row.label} className="flex flex-col items-center gap-1.5 rounded-xl py-3 px-2 border border-white/5 bg-white/[0.02]">
-              <img src={row.src} alt={row.label} className="w-9 h-9 object-contain" />
-              <span className="text-[10px] font-bold text-white">{row.label}</span>
-              <span className="text-[9px] font-black" style={{ color: row.color }}>{row.payout}</span>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
