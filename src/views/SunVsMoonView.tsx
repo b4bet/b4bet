@@ -84,7 +84,6 @@ function BetButton({
 
 /**
  * Result overlay — absolute inset-0, fills the game card.
- * The card itself has min-h-[420px] so this overlay is always tall enough.
  */
 function ResultOverlay({
   visible, result, won, payout, choice,
@@ -99,11 +98,7 @@ function ResultOverlay({
   return (
     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-3xl overflow-hidden bg-black/80 backdrop-blur-sm">
       <div className="flex flex-col items-center gap-6 px-6 py-10 w-full">
-        <img
-          src={images[result]}
-          alt={labels[result]}
-          className="w-28 h-28 object-contain drop-shadow-2xl"
-        />
+        <img src={images[result]} alt={labels[result]} className="w-28 h-28 object-contain drop-shadow-2xl" />
         <div className="text-center">
           <p className="text-slate-400 text-xs uppercase tracking-widest mb-2">Result</p>
           <p className="text-4xl font-black text-white">{labels[result]}</p>
@@ -174,8 +169,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const [betAmount, setBetAmount] = useState(100);
   const betAmountStr = String(betAmount);
 
-  // Track the last quick-stake button pressed so we can SET on first click
-  // of a new denomination and ADD on repeated clicks of the same denomination.
+  // Track last quick-stake pressed: same button adds, different button sets
   const [lastQuickStake, setLastQuickStake] = useState<number | null>(null);
 
   const initEng = sunMoonLoop.getState();
@@ -271,7 +265,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     return off;
   }, []);
 
-  // Always SET the selected choice — no toggle so buttons stay responsive
+  // Always SET (no toggle) so buttons remain responsive after first click
   const handleSelectChoice = useCallback((choice: BetChoice) => {
     if (betPlaced) return;
     setSelectedChoice(choice);
@@ -299,17 +293,13 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   }, [phase, betPlaced, selectedChoice, balance]);
 
   /**
-   * Quick stake logic:
-   * - Clicking a DIFFERENT denomination: SET amount to that value
-   * - Clicking the SAME denomination again: ADD that value to current amount
+   * Quick stake: same button → add, different button → set
    */
   const handleQuickStake = (amount: number) => {
     if (betPlaced) return;
     if (lastQuickStake === amount) {
-      // Same button pressed again — add
       setBetAmount((prev) => Math.min(prev + amount, balance));
     } else {
-      // New denomination selected — set
       setBetAmount(Math.min(amount, balance));
       setLastQuickStake(amount);
     }
@@ -322,12 +312,19 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     setLastQuickStake(null);
   };
 
-  const adjustAmount = (delta: number) => {
-    setBetAmount((prev) => Math.max(10, Math.min(balance, Math.round(prev + delta))));
+  const limits = store.getGameLimits('sunvsmoon');
+
+  // − button: clamp to min bet, never go below
+  const decreaseAmount = () => {
+    setBetAmount((prev) => Math.max(limits.min, Math.min(balance, Math.round(prev - 50))));
     setLastQuickStake(null);
   };
 
-  const limits          = store.getGameLimits('sunvsmoon');
+  const increaseAmount = () => {
+    setBetAmount((prev) => Math.max(limits.min, Math.min(balance, Math.round(prev + 50))));
+    setLastQuickStake(null);
+  };
+
   const canPlaceBet     = phase === 'betting' && !betPlaced && !settling && selectedChoice !== null && betAmount > 0;
   const canSelectChoice = phase === 'betting' && !betPlaced;
 
@@ -368,10 +365,9 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         </div>
       </div>
 
-      {/* ── Game card — min-h ensures overlay is tall during revealed phase ── */}
+      {/* ── Game card ── */}
       <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden min-h-[420px]">
 
-        {/* Result overlay — absolute inset-0, fills the card (which is min 420px tall) */}
         <ResultOverlay
           visible={phase === 'revealed'}
           result={result}
@@ -401,47 +397,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             ) : null}
           </div>
 
-          {/* ── Bet Amount controls — shown ABOVE choice buttons so they're always visible ── */}
-          {phase === 'betting' && !betPlaced && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] text-slate-400 uppercase tracking-widest">Bet Amount</p>
-                <div className="flex gap-2">
-                  <span className="text-[9px] text-slate-500">Min: <span className="text-slate-400 font-semibold">₹{limits.min}</span></span>
-                  <span className="text-[9px] text-slate-500">Max: <span className="text-slate-400 font-semibold">₹{limits.max.toLocaleString()}</span></span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => adjustAmount(-50)} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">−</button>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={betAmountStr}
-                  onChange={(e) => handleAmountInput(e.target.value)}
-                  className="flex-1 bg-slatepanel-800 border border-borderline-900 rounded-xl px-3 py-2 text-center text-white font-bold text-sm focus:outline-none focus:border-neon-400/60"
-                />
-                <button onClick={() => adjustAmount(50)} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">+</button>
-              </div>
-              <div className="flex gap-2">
-                {QUICK_STAKE_AMOUNTS.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => handleQuickStake(s)}
-                    className={[
-                      'flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors active:scale-95',
-                      lastQuickStake === s
-                        ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
-                        : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-neon-400/50 hover:text-neon-300',
-                    ].join(' ')}
-                  >
-                    {lastQuickStake === s ? `+${s >= 1000 ? `${s / 1000}K` : s}` : `${s >= 1000 ? `${s / 1000}K` : s}`}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Direction selector buttons */}
+          {/* ── 1. Choice buttons (Sun / Eclipse / Moon) — ORIGINAL position ── */}
           {phase !== 'processing' && (
             <div className="flex items-stretch gap-2">
               <BetButton
@@ -459,6 +415,54 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                 selected={selectedChoice === 'moon'} disabled={!canSelectChoice}
                 onSelect={handleSelectChoice}
               />
+            </div>
+          )}
+
+          {/* ── 2. Amount controls — ORIGINAL position (below choice buttons) ── */}
+          {phase === 'betting' && !betPlaced && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] text-slate-400 uppercase tracking-widest">Bet Amount</p>
+                <div className="flex gap-2">
+                  <span className="text-[9px] text-slate-500">Min: <span className="text-slate-400 font-semibold">₹{limits.min}</span></span>
+                  <span className="text-[9px] text-slate-500">Max: <span className="text-slate-400 font-semibold">₹{limits.max.toLocaleString()}</span></span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={decreaseAmount}
+                  className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold"
+                >−</button>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={betAmountStr}
+                  onChange={(e) => handleAmountInput(e.target.value)}
+                  className="flex-1 bg-slatepanel-800 border border-borderline-900 rounded-xl px-3 py-2 text-center text-white font-bold text-sm focus:outline-none focus:border-neon-400/60"
+                />
+                <button
+                  onClick={increaseAmount}
+                  className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold"
+                >+</button>
+              </div>
+              <div className="flex gap-2">
+                {QUICK_STAKE_AMOUNTS.map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => handleQuickStake(s)}
+                    className={[
+                      'flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors active:scale-95',
+                      lastQuickStake === s
+                        ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                        : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-neon-400/50 hover:text-neon-300',
+                    ].join(' ')}
+                  >
+                    {lastQuickStake === s
+                      ? `+${s >= 1000 ? `${s / 1000}K` : s}`
+                      : `${s >= 1000 ? `${s / 1000}K` : s}`}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
@@ -494,7 +498,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         </div>
       </div>
 
-      {/* ── History — always visible ── */}
+      {/* ── History ── */}
       <div className="rounded-2xl bg-slatepanel-900 border border-borderline-900 p-4 space-y-4">
         <div className="flex gap-1 bg-slatepanel-800/60 rounded-xl p-1">
           {(['rounds', 'my'] as const).map((tab) => (
