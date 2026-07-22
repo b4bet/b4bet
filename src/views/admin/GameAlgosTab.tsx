@@ -1,7 +1,7 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import SelectModal from '../../components/SelectModal';
 import { cms } from '../../lib/cms';
-import { useAdminConfig, useGameLogos, useGameRound } from '../../lib/hooks';
+import { useAdminConfig, useGameLogos, useCrashState, useGameRound } from '../../lib/hooks';
 import { store, computeAutoOutcome } from '../../lib/store';
 import type { RoundOutcomePreview } from '../../lib/store';
 import { gameLogos } from '../../lib/gameLogos';
@@ -9,7 +9,7 @@ import type { GameKey } from '../../lib/gameLogos';
 import {
   Shield, Sliders, Target, Cpu, Zap, Upload, Image as ImageIcon, Trash2,
   Rocket, Bomb, Trophy, DollarSign, Dices, Circle, BarChart2, Sun, Plane,
-  X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal, CheckCircle, AlertCircle,
+  Plus, X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal,
 } from 'lucide-react';
 
 // CrashHandlingPanel — dedicated async Supabase-connected panel
@@ -32,11 +32,10 @@ const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Generic Game Handler Panel (shared by lottery-style games)
-// showBetLimits=true → shows Supabase-connected min/max bet section (mines, sunvsmoon, trading)
 // ─────────────────────────────────────────────────────────────────────────────
-function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlaceholder, manualHint, showBetLimits }: {
+function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlaceholder, manualHint }: {
   gameKey: string; label: string; icon: typeof Rocket; manualLabel: string;
-  manualPlaceholder: string; manualHint: string; showBetLimits?: boolean;
+  manualPlaceholder: string; manualHint: string;
 }) {
   const cfg = useAdminConfig();
   const handler = cfg.gameHandlers[gameKey] ?? store.getGameHandler(gameKey);
@@ -55,13 +54,6 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   const [stake3, setStake3] = useState(String(handler.quickStakes[2] ?? '1000'));
   const [stake4, setStake4] = useState(String(handler.quickStakes[3] ?? '10000'));
   const [preview, setPreview] = useState<RoundOutcomePreview | null>(null);
-
-  // Bet limits state (only used when showBetLimits=true)
-  const currentLimits = store.getGameLimits(gameKey);
-  const [minBet, setMinBet] = useState(String(cfg.perGameLimits[gameKey]?.min ?? ''));
-  const [maxBet, setMaxBet] = useState(String(cfg.perGameLimits[gameKey]?.max ?? ''));
-  const [limitsStatus, setLimitsStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [limitsMsg, setLimitsMsg] = useState('');
 
   const setMode = (mode: 'AUTO' | 'MANUAL') => store.setGameHandler(gameKey, { mode });
   const setProb = (v: number) => store.setGameHandler(gameKey, { targetWinProbability: v });
@@ -90,41 +82,10 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
     userEditedRoundRef.current = false;
     refreshPreview();
   };
-
   const saveStakes = () => {
     const vals = [parseFloat(stake1), parseFloat(stake2), parseFloat(stake3), parseFloat(stake4)]
       .filter((n) => Number.isFinite(n) && n > 0).slice(0, 4);
     if (vals.length) store.setGameHandler(gameKey, { quickStakes: vals });
-  };
-
-  // Supabase-connected bet limits save
-  const saveLimits = async () => {
-    const mn = parseFloat(minBet);
-    const mx = parseFloat(maxBet);
-    if (minBet !== '' && maxBet !== '') {
-      if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn <= 0 || mx <= mn) {
-        setLimitsMsg('Invalid — max must exceed min.');
-        setLimitsStatus('error');
-        setTimeout(() => setLimitsStatus('idle'), 3000);
-        return;
-      }
-    }
-    setLimitsStatus('saving');
-    setLimitsMsg('');
-    try {
-      if (minBet === '' && maxBet === '') {
-        store.setGameLimit(gameKey, null);
-      } else {
-        store.setGameLimit(gameKey, { min: mn, max: mx });
-      }
-      await store.loadAdminConfigFromSupabase();
-      setLimitsStatus('saved');
-      setLimitsMsg('Supabase confirmed ✓');
-    } catch (e) {
-      setLimitsStatus('error');
-      setLimitsMsg((e as Error).message ?? 'Save failed');
-    }
-    setTimeout(() => setLimitsStatus('idle'), 5000);
   };
 
   return (
@@ -198,87 +159,17 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
           <span className="text-[11px] text-slate-500">Current: <span className="text-white tabular">{handler.quickStakes.join(' · ')}</span></span>
         </div>
       </div>
-
-      {/* Bet Limits — only shown for games that need it (mines, sunvsmoon, trading) */}
-      {showBetLimits && (
-        <div className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800 space-y-2">
-          <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
-            <DollarSign className="w-3.5 h-3.5 text-emeraldwin-400" /> Bet Limits ({store.currency})
-          </label>
-          <p className="text-[10px] text-slate-500">
-            Active: <span className="text-white tabular">{store.currency}{currentLimits.min} – {store.currency}{currentLimits.max.toLocaleString()}</span>
-            {cfg.perGameLimits[gameKey]
-              ? <span className="ml-2 text-neon-400 font-semibold">(override active)</span>
-              : <span className="ml-2 text-slate-600">(using global)</span>}
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <p className="text-[9px] text-slate-500 mb-0.5">Min Bet</p>
-              <input
-                type="number"
-                value={minBet}
-                onChange={(e) => setMinBet(e.target.value)}
-                placeholder={String(cfg.minBet)}
-                min={1}
-                className="input tabular text-sm py-1.5 w-full"
-              />
-            </div>
-            <div>
-              <p className="text-[9px] text-slate-500 mb-0.5">Max Bet</p>
-              <input
-                type="number"
-                value={maxBet}
-                onChange={(e) => setMaxBet(e.target.value)}
-                placeholder={String(cfg.maxBet)}
-                min={1}
-                className="input tabular text-sm py-1.5 w-full"
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={() => { void saveLimits(); }}
-              disabled={limitsStatus === 'saving'}
-              className="btn-emerald px-4 py-1.5 text-xs flex items-center gap-1.5 disabled:opacity-60"
-            >
-              {limitsStatus === 'saving' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
-              Save Limits
-            </button>
-            {limitsStatus === 'saved' && (
-              <span className="text-[11px] text-emeraldwin-300 font-semibold flex items-center gap-1">
-                <CheckCircle className="w-3 h-3" />{limitsMsg}
-              </span>
-            )}
-            {limitsStatus === 'error' && (
-              <span className="text-[11px] text-coral-300 font-semibold flex items-center gap-1">
-                <AlertCircle className="w-3 h-3" />{limitsMsg}
-              </span>
-            )}
-            {cfg.perGameLimits[gameKey] && (
-              <button
-                onClick={() => { store.setGameLimit(gameKey, null); setMinBet(''); setMaxBet(''); }}
-                className="ml-auto text-[10px] text-coral-400 hover:text-coral-300 font-semibold"
-              >
-                Clear override
-              </button>
-            )}
-          </div>
-          <p className="text-[10px] text-slate-500">Leave blank to use global limits. Changes apply immediately to all players.</p>
-        </div>
-      )}
     </div>
   );
 }
 
-// ── Individual exported handler panels
+// ── Individual exported handler panels (lottery-style games only)
 export function WingoHandlingPanel() { return <GameHandlerPanel gameKey="wingo" label="Win Go" icon={Circle} manualLabel="Result Number (0-9)" manualPlaceholder="5" manualHint="Force the winning digit for the queued draw." />; }
 export function K3HandlingPanel() { return <GameHandlerPanel gameKey="k3" label="K3" icon={Dices} manualLabel="Dice Result (a,b,c)" manualPlaceholder="3,3,3" manualHint="Three comma-separated dice values (1-6 each)." />; }
 export function FiveDHandlingPanel() { return <GameHandlerPanel gameKey="fived" label="5D" icon={Dices} manualLabel="Result Digits (5)" manualPlaceholder="12345" manualHint="Five-digit outcome, one digit per column." />; }
-
-// showBetLimits=true — Supabase-connected min/max amount input for these 3 games
-export function SunMoonHandlingPanel() { return <GameHandlerPanel gameKey="sunvsmoon" label="Sun vs Moon" icon={Sun} manualLabel="Winning Side" manualPlaceholder="sun / moon / eclipse" manualHint="Forces the round outcome to Sun, Eclipse, or Moon." showBetLimits />; }
-export function MinesHandlingPanel() { return <GameHandlerPanel gameKey="mines" label="Mines" icon={Bomb} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." showBetLimits />; }
-export function TradingHandlingPanel() { return <GameHandlerPanel gameKey="trading" label="Trading" icon={BarChart2} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." showBetLimits />; }
+export function SunMoonHandlingPanel() { return <GameHandlerPanel gameKey="sunvsmoon" label="Sun vs Moon" icon={Sun} manualLabel="Winning Side" manualPlaceholder="sun / moon / eclipse" manualHint="Forces the round outcome to Sun, Eclipse, or Moon." />; }
+export function MinesHandlingPanel() { return <GameHandlerPanel gameKey="mines" label="Mines" icon={Bomb} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." />; }
+export function TradingHandlingPanel() { return <GameHandlerPanel gameKey="trading" label="Trading" icon={BarChart2} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." />; }
 
 export function AllGameHandlersSection() {
   return (
