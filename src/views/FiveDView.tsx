@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronLeft, X, ChevronDown, ChevronUp } from 'lucide-react';
-import { useBalance } from '../lib/hooks';
+import { useBalance, useAdminConfig } from '../lib/hooks';
 import { store } from '../lib/store';
 import { bus, Topics } from '../lib/bus';
 import { playTick, playWin, playLose, playClick } from '../lib/lotteryAudio';
@@ -43,6 +43,8 @@ export default function FiveDView({ onBack }: { onBack?: () => void }) {
   const [winState, setWinState] = useState<any | null>(null);
 
   const limits = store.getGameLimits('fived');
+  const adminCfg = useAdminConfig();
+  const quickStakes = adminCfg.gameHandlers['fived']?.quickStakes?.length ? adminCfg.gameHandlers['fived'].quickStakes : [1, 10, 100, 1000];
 
   const calculate5DWin = useCallback((bet: Bet, balls: number[]) => {
     const sum = balls.reduce((a, b) => a + b, 0);
@@ -116,12 +118,11 @@ export default function FiveDView({ onBack }: { onBack?: () => void }) {
     return undefined;
   }, [winState]);
 
-  // Multiple bets per round — no betPlaced restriction
   const handleBetClick = (tab: string, value: string | number, color: string) => {
     if (isLocked) return;
     playClick();
     setActiveBet({ tab, value, color });
-    setBaseAmount(10);
+    setBaseAmount(quickStakes[0] ?? 10);
     setMultiplier(1);
   };
 
@@ -329,10 +330,10 @@ export default function FiveDView({ onBack }: { onBack?: () => void }) {
                 <div>
                   <div className="text-slate-400 text-sm mb-2">Base Amount</div>
                   <div className="flex gap-2">
-                    {[1, 10, 100, 1000].map(amt => (
+                    {quickStakes.map(amt => (
                       <button key={amt} onClick={() => { playClick(); setBaseAmount(amt); }}
                         className={`flex-1 py-2 rounded-lg font-bold border transition-colors ${baseAmount === amt ? 'bg-neon-500/20 border-neon-500 text-neon-400' : 'bg-slatepanel-800 border-borderline-800 text-slate-300'}`}>
-                        {amt}
+                        {amt >= 1000 ? `${amt / 1000}K` : amt}
                       </button>
                     ))}
                   </div>
