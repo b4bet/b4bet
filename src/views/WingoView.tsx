@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronLeft, X, ChevronDown, ChevronUp } from 'lucide-react';
-import { useBalance } from '../lib/hooks';
+import { useBalance, useAdminConfig } from '../lib/hooks';
 import { store } from '../lib/store';
 import { bus, Topics } from '../lib/bus';
 import { playTick, playWin, playLose, playClick } from '../lib/lotteryAudio';
@@ -26,9 +26,6 @@ type RecentBet = Bet & {
 
 export default function WingoView({ onBack }: { onBack?: () => void }) {
   const balance = useBalance();
-  // Timer / history / period are driven by the background persistent engine
-  // so they keep advancing even when this view is unmounted. Local state
-  // mirrors the engine's broadcasts.
   const initial = wingoLoop.getState();
   const [timeLeft, setTimeLeft] = useState<number>(initial.timeLeft);
   const periodRef = useRef(initial.roundId);
@@ -48,6 +45,8 @@ export default function WingoView({ onBack }: { onBack?: () => void }) {
   const [winState, setWinState] = useState<any | null>(null);
 
   const limits = store.getGameLimits('wingo');
+  const adminCfg = useAdminConfig();
+  const quickStakes = adminCfg.gameHandlers['wingo']?.quickStakes?.length ? adminCfg.gameHandlers['wingo'].quickStakes : [1, 10, 100, 1000];
 
   const calculateWin = useCallback((bet: Bet, result: number) => {
     if (bet.type === result.toString()) return 9;
@@ -93,16 +92,12 @@ export default function WingoView({ onBack }: { onBack?: () => void }) {
     }
   }, [calculateWin]);
 
-  // Subscribe to the persistent engine: mirror timer/roundId, and settle any
-  // pending bet whenever a new round completes on the shared server-side loop.
   useEffect(() => {
     const offState = engineBus.on(EngineTopics.WingoState, (payload) => {
       const p = payload as { state: WingoState };
       const prev = timeLeft;
       setTimeLeft(p.state.timeLeft);
       periodRef.current = p.state.roundId;
-      // Emit tick sfx roughly like the previous 1Hz loop, only when the
-      // whole-second value actually changes to avoid duplicate plays.
       if (p.state.timeLeft !== prev) {
         if (p.state.timeLeft <= 15 && p.state.timeLeft > 5) playTick(false);
         if (p.state.timeLeft <= 5 && p.state.timeLeft > 0) playTick(true);
@@ -131,12 +126,11 @@ export default function WingoView({ onBack }: { onBack?: () => void }) {
     return undefined;
   }, [winState]);
 
-  // Allow multiple bets per round — no betPlaced restriction
   const handleBetClick = (type: string, color: string) => {
     if (isLocked) return;
     playClick();
     setActiveBet({ type, color });
-    setBaseAmount(10);
+    setBaseAmount(quickStakes[0] ?? 10);
     setMultiplier(1);
   };
 
@@ -345,13 +339,13 @@ export default function WingoView({ onBack }: { onBack?: () => void }) {
                 <div>
                   <div className="text-slate-400 text-sm mb-2">Base Amount</div>
                   <div className="flex gap-2">
-                    {[1, 10, 100, 1000].map(amt => (
+                    {quickStakes.map(amt => (
                       <button 
                         key={amt} 
                         onClick={() => { playClick(); setBaseAmount(amt); }}
                         className={`flex-1 py-2 rounded-lg font-bold border transition-colors ${baseAmount === amt ? 'bg-neon-500/20 border-neon-500 text-neon-400' : 'bg-slatepanel-800 border-borderline-800 text-slate-300'}`}
                       >
-                        {amt}
+                        {amt >= 1000 ? `${amt / 1000}K` : amt}
                       </button>
                     ))}
                   </div>
