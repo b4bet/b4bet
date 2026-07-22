@@ -624,6 +624,100 @@ Deno.serve(async (req: Request) => {
       return json({ success: true, game: gameKey, mode: "AUTO" });
     }
 
+    // ====================================================================
+    // SUN VS MOON: Get result for a round
+    // ====================================================================
+    if (action === "sunvsmoon_result") {
+      const { round_id } = body;
+      if (!round_id) return json({ error: "Missing round_id" }, 400);
+      const roundIdNum = parseInt(String(round_id), 10);
+
+      const { data: existing } = await supabase
+        .from("sunvsmoon_rounds")
+        .select("result")
+        .eq("round_id", roundIdNum)
+        .maybeSingle();
+
+      if (existing) return json({ result: existing.result });
+
+      const cfg = await getGameAdminConfig("sunvsmoon");
+      let result: string;
+      if (cfg.mode === "MANUAL" && cfg.manualResult) {
+        result = cfg.manualResult;
+      } else {
+        const rand = secureRandom();
+        result = rand < 0.45 ? "sun" : rand < 0.90 ? "moon" : "tie";
+      }
+
+      await supabase.from("sunvsmoon_rounds").insert({ round_id: roundIdNum, result }).catch(() => {});
+      return json({ result });
+    }
+
+    // ====================================================================
+    // SUN VS MOON: Settle bet
+    // ====================================================================
+    if (action === "sunvsmoon_settle") {
+      const { user_id, round_id, bet, stake } = body;
+      if (!user_id || !round_id || !bet || !stake) return json({ error: "Missing params" }, 400);
+      const roundIdNum = parseInt(String(round_id), 10);
+
+      // Get or generate result for this round
+      const { data: existingRound } = await supabase
+        .from("sunvsmoon_rounds")
+        .select("result")
+        .eq("round_id", roundIdNum)
+        .maybeSingle();
+
+      let result: string;
+      if (existingRound) {
+        result = existingRound.result;
+      } else {
+        const cfg = await getGameAdminConfig("sunvsmoon");
+        if (cfg.mode === "MANUAL" && cfg.manualResult) {
+          result = cfg.manualResult;
+        } else {
+          const rand = secureRandom();
+          result = rand < 0.45 ? "sun" : rand < 0.90 ? "moon" : "tie";
+        }
+        await supabase.from("sunvsmoon_rounds").insert({ round_id: roundIdNum, result }).catch(() => {});
+      }
+
+      const betChoice = String(bet);
+      const stakeNum = parseFloat(String(stake));
+      // Payout multipliers (net profit multiplier, not including stake return)
+      // sun/moon: 1:1 (win = stake), tie: 8:1 (win = 8 * stake)
+      const profitMultipliers: Record<string, number> = { sun: 1, moon: 1, tie: 8 };
+      const profitMult = profitMultipliers[betChoice] ?? 1;
+      const won = betChoice === result;
+      // The client already debited stake via store.debit() before calling settle.
+      // Server balance still shows the full pre-bet balance.
+      // Won:  credit stake + profit  → net change = +profit
+      // Lost: debit stake            → net change = -stake
+      const profit = won ? Math.floor(stakeNum * profitMult) : 0;
+      const payout = won ? stakeNum + profit : 0;
+
+      const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id as string).single();
+      if (!profile) return json({ error: "User not found" }, 400);
+
+      // Server balance: deduct stake always, add back payout if won
+      const newBalance = profile.balance - stakeNum + payout;
+      await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id as string);
+
+      const { data: gameRow } = await supabase.from("games").select("id").eq("slug", "sunvsmoon").maybeSingle();
+      await supabase.from("bets").insert({
+        user_id,
+        game_id: gameRow?.id ?? null,
+        bet_amount: stakeNum,
+        win_amount: payout,
+        multiplier: won ? profitMult + 1 : 0,
+        status: won ? "won" : "lost",
+        bet_details: { bet: betChoice, result, round_id: roundIdNum },
+        resolved_at: new Date().toISOString(),
+      }).catch(() => {});
+
+      return json({ success: true, result, won, payout, profit, balance_after: newBalance });
+    }
+
     return json({ error: `Unknown action: ${action}` }, 400);
 
   } catch (err) {
