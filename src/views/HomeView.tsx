@@ -26,7 +26,7 @@ export default function HomeView({ onNavigate }: Props) {
       </div>
 
       {/* Game grid */}
-      <GameGrid onNavigate={onNavigate} />
+      <GameGrid onPlay={onNavigate} />
 
       {/* Live stats strip */}
       <div className="flex items-center justify-around rounded-xl bg-slatepanel-900 border border-borderline-900 py-3">
