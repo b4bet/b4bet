@@ -56,13 +56,13 @@ export default function BanPopup() {
           </p>
         </div>
 
-        {/* Support email */}
+        {/* Support email — only email shown, icon on right side */}
         <a
           href={`mailto:${supportEmail}`}
-          className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl bg-neon-500/15 border border-neon-500/30 text-neon-300 text-sm font-semibold hover:bg-neon-500/25 transition-colors"
+          className="flex items-center justify-between px-4 py-2.5 rounded-xl bg-neon-500/15 border border-neon-500/30 text-neon-300 text-sm font-semibold hover:bg-neon-500/25 transition-colors"
         >
-          <Mail className="w-4 h-4" />
-          Contact Support: {supportEmail}
+          <span>{supportEmail}</span>
+          <Mail className="w-4 h-4 shrink-0" />
         </a>
 
         {/* Logout */}
