@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { bus, Topics } from './bus';
 import { store } from './store';
 import { cms } from './cms';
+import { logUserIp } from './supabaseIntegration';
 
 export interface AuthUser {
   id: string; accountId: string; username: string; email: string; mobile: string;
@@ -133,6 +134,9 @@ class AuthManager {
       registration_ip: clientIp,
     });
 
+    // Log IP to ip_logs table for tracking
+    void logUserIp(data.user.id, clientIp, 'signup');
+
     try { store.grantSignupBonus(data.user.id, uname); } catch { /* ignore */ }
     this.session = { userId: data.user.id, accountId, username: uname, email: umail, loggedInAt: Date.now() };
     this.persistSession();
@@ -170,6 +174,8 @@ class AuthManager {
             email: d2.user.email || '', loggedInAt: Date.now(),
           };
           this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
+          // Log IP on successful login
+          void getClientIp().then((ip) => logUserIp(d2.user.id, ip, 'login'));
           cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
           return { ok: true };
         }
@@ -184,6 +190,8 @@ class AuthManager {
       email: data.user.email || '', loggedInAt: Date.now(),
     };
     this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
+    // Log IP on successful login
+    void getClientIp().then((ip) => logUserIp(data.user.id, ip, 'login'));
     cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
     return { ok: true };
   }
