@@ -55,10 +55,10 @@ function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: numbe
 }
 
 function BetButton({
-  choice, label, payout, imageSrc, glowColor,
+  choice, payout, imageSrc, glowColor,
   selected, disabled, onSelect,
 }: {
-  choice: BetChoice; label: string; payout: string; imageSrc: string; glowColor: string;
+  choice: BetChoice; payout: string; imageSrc: string; glowColor: string;
   selected: boolean; disabled: boolean; onSelect: (c: BetChoice) => void;
 }) {
   return (
@@ -66,7 +66,7 @@ function BetButton({
       onClick={() => !disabled && onSelect(choice)}
       disabled={disabled}
       className={[
-        'flex flex-col items-center justify-center gap-1.5 rounded-2xl border-2 transition-all duration-200 py-3 px-2 flex-1',
+        'flex flex-col items-center justify-center gap-1 rounded-2xl border-2 transition-all duration-200 py-3 px-2 flex-1',
         'active:scale-95',
         disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer',
         selected ? 'border-opacity-100 scale-[1.04]' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.07]',
@@ -77,16 +77,13 @@ function BetButton({
         boxShadow:       selected ? `0 0 18px 4px ${glowColor}55` : undefined,
       }}
     >
-      <img src={imageSrc} alt={label} className="w-12 h-12 object-contain drop-shadow-lg" />
-      <span className="text-xs font-black text-white tracking-wide">{label}</span>
-      <span className="text-[10px] text-slate-400">{payout}</span>
-      {selected && (
-        <span className="text-[10px] font-bold text-white/80 mt-0.5">Selected</span>
-      )}
+      <img src={imageSrc} alt={choice} className="w-14 h-14 object-contain drop-shadow-lg" />
+      <span className="text-[10px] text-slate-400 font-semibold">{payout}</span>
     </button>
   );
 }
 
+/* Full-screen result overlay — covers entire viewport so main game stays hidden */
 function ResultOverlay({
   visible, result, won, payout, choice,
 }: {
@@ -98,31 +95,37 @@ function ResultOverlay({
   const labels: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm rounded-3xl">
-      <div className="flex flex-col items-center gap-4 px-8 py-8 rounded-3xl bg-slatepanel-900/90 border border-borderline-900 shadow-2xl max-w-xs w-full mx-4">
-        <img src={images[result]} alt={labels[result]} className="w-16 h-16 object-contain drop-shadow-xl" />
+    <div className="fixed inset-0 z-[999] flex flex-col items-center justify-center bg-black/85 backdrop-blur-md">
+      <div className="flex flex-col items-center gap-5 px-8 py-10 rounded-3xl bg-slatepanel-900/95 border border-borderline-900 shadow-2xl max-w-xs w-full mx-4">
+        <img
+          src={images[result]}
+          alt={labels[result]}
+          className="w-24 h-24 object-contain drop-shadow-2xl"
+        />
         <div className="text-center">
           <p className="text-slate-400 text-xs uppercase tracking-widest mb-1">Result</p>
-          <p className="text-2xl font-black text-white">{labels[result]}</p>
+          <p className="text-3xl font-black text-white">{labels[result]}</p>
         </div>
 
         {choice ? (
           won ? (
-            <div className="bg-emeraldwin-500/20 border border-emeraldwin-500/40 rounded-xl px-6 py-3 text-center">
-              <p className="text-emeraldwin-400 font-black text-lg">+₹{payout.toLocaleString()}</p>
-              <p className="text-xs text-emeraldwin-300/80">YOU WIN!</p>
+            <div className="w-full bg-emeraldwin-500/20 border border-emeraldwin-500/40 rounded-2xl px-6 py-4 text-center">
+              <p className="text-emeraldwin-400 font-black text-2xl">+₹{payout.toLocaleString()}</p>
+              <p className="text-sm text-emeraldwin-300/80 mt-1">YOU WIN!</p>
             </div>
           ) : (
-            <div className="bg-coral-500/20 border border-coral-500/40 rounded-xl px-6 py-3 text-center">
-              <p className="text-coral-400 font-black text-lg">LOST</p>
-              <p className="text-xs text-coral-300/80">Better luck next round</p>
+            <div className="w-full bg-coral-500/20 border border-coral-500/40 rounded-2xl px-6 py-4 text-center">
+              <p className="text-coral-400 font-black text-2xl">LOST</p>
+              <p className="text-sm text-coral-300/80 mt-1">Better luck next round</p>
             </div>
           )
         ) : (
-          <div className="bg-slate-800/60 rounded-xl px-6 py-3 text-center">
+          <div className="w-full bg-slate-800/60 rounded-2xl px-6 py-4 text-center">
             <p className="text-slate-400 text-sm">No bet placed this round</p>
           </div>
         )}
+
+        <p className="text-[10px] text-slate-500 animate-pulse">Next round starting soon…</p>
       </div>
     </div>
   );
@@ -166,13 +169,12 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const gameLogos = useGameLogos();
   const balance   = useBalance();
 
-  // Bet amount as number directly
   const [betAmount, setBetAmount] = useState(100);
   const betAmountStr = String(betAmount);
 
   const initEng = sunMoonLoop.getState();
   const [selectedChoice, setSelectedChoice] = useState<BetChoice | null>(null);
-  const [betPlaced, setBetPlaced]           = useState(false);   // true after PLACE BET clicked
+  const [betPlaced, setBetPlaced]           = useState(false);
   const [phase,       setPhase]             = useState<Phase>(initEng.phase);
   const [secondsLeft, setSecondsLeft]       = useState(initEng.secondsLeft);
   const [roundNumber, setRoundNumber]       = useState(YEAR_PREFIX * 10 + initEng.roundId);
@@ -189,10 +191,10 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const [historyTab, setHistoryTab] = useState<'rounds' | 'my'>('rounds');
   const [settling, setSettling] = useState(false);
 
-  const settledRoundRef    = useRef<number>(-1);
-  const selectedChoiceRef  = useRef<BetChoice | null>(null);
-  const betAmountRef       = useRef<number>(betAmount);
-  const betPlacedRef       = useRef(false);
+  const settledRoundRef   = useRef<number>(-1);
+  const selectedChoiceRef = useRef<BetChoice | null>(null);
+  const betAmountRef      = useRef<number>(betAmount);
+  const betPlacedRef      = useRef(false);
   useEffect(() => { selectedChoiceRef.current = selectedChoice; }, [selectedChoice]);
   useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
   useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
@@ -207,7 +209,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       setSecondsLeft(s.secondsLeft);
       setResult(s.result);
 
-      // New round started — reset UI
       if (s.phase === 'betting' && settledRoundRef.current !== -1 && settledRoundRef.current !== rn) {
         setSelectedChoice(null);
         setBetPlaced(false);
@@ -263,13 +264,11 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     return off;
   }, []);
 
-  // Select direction (does NOT place bet yet)
   const handleSelectChoice = useCallback((choice: BetChoice) => {
     if (phase !== 'betting' || betPlaced) return;
     setSelectedChoice((prev) => prev === choice ? null : choice);
   }, [phase, betPlaced]);
 
-  // Confirm and place bet
   const handlePlaceBet = useCallback(() => {
     if (phase !== 'betting' || betPlaced || selectedChoice === null) return;
     const session = auth.getSession();
@@ -291,13 +290,11 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     setBetPlaced(true);
   }, [phase, betPlaced, selectedChoice, balance]);
 
-  // Add quick stake amount to current bet
   const handleQuickStake = (amount: number) => {
     if (betPlaced) return;
     setBetAmount((prev) => Math.min(prev + amount, balance));
   };
 
-  // Manual input
   const handleAmountInput = (val: string) => {
     const n = parseFloat(val);
     if (!isNaN(n) && n >= 0) setBetAmount(n);
@@ -314,6 +311,16 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
   return (
     <div className="relative space-y-4 animate-fade-in px-3">
+
+      {/* Full-screen result overlay — fixed, covers entire viewport */}
+      <ResultOverlay
+        visible={phase === 'revealed'}
+        result={result}
+        won={lastWon}
+        payout={lastPayout}
+        choice={betPlaced ? selectedChoice : null}
+      />
+
       {/* ── Header ── */}
       <div className="flex items-center justify-between mt-2 mb-1">
         <div className="flex items-center gap-2">
@@ -349,7 +356,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       </div>
 
       {/* ── Game area ── */}
-      <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden">
+      <div className="rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden">
         <div className="p-4 space-y-4">
 
           {/* Timer / Processing */}
@@ -357,13 +364,11 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             {phase === 'betting' ? (
               <>
                 <TimerCircle secondsLeft={secondsLeft} total={BETTING_DURATION} />
-                <p className="text-[11px] text-slate-400">
-                  {betPlaced
-                    ? `Bet placed on ${selectedChoice?.toUpperCase()} — waiting for result`
-                    : selectedChoice
-                      ? `${selectedChoice.toUpperCase()} selected — set amount & place bet`
-                      : 'Pick SUN · ECLIPSE · MOON'}
-                </p>
+                {betPlaced && (
+                  <p className="text-[11px] text-slate-400">
+                    Bet on {selectedChoice === 'tie' ? 'ECLIPSE' : selectedChoice?.toUpperCase()} — waiting for result
+                  </p>
+                )}
               </>
             ) : phase === 'processing' ? (
               <div className="py-6 flex flex-col items-center gap-3">
@@ -373,31 +378,30 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             ) : null}
           </div>
 
-          {/* Direction selector buttons */}
+          {/* Direction selector — only image + payout, no text above */}
           {phase !== 'processing' && (
             <div className="flex items-stretch gap-2">
               <BetButton
-                choice="sun" label="SUN" payout="1:1" imageSrc="/sun.png" glowColor="#FFB627"
+                choice="sun" payout="1:1" imageSrc="/sun.png" glowColor="#FFB627"
                 selected={selectedChoice === 'sun'} disabled={!canSelectChoice}
                 onSelect={handleSelectChoice}
               />
               <BetButton
-                choice="tie" label="ECLIPSE" payout="8:1" imageSrc="/eclipse.png" glowColor="#F59E0B"
+                choice="tie" payout="8:1" imageSrc="/eclipse.png" glowColor="#F59E0B"
                 selected={selectedChoice === 'tie'} disabled={!canSelectChoice}
                 onSelect={handleSelectChoice}
               />
               <BetButton
-                choice="moon" label="MOON" payout="1:1" imageSrc="/moon.png" glowColor="#818CF8"
+                choice="moon" payout="1:1" imageSrc="/moon.png" glowColor="#818CF8"
                 selected={selectedChoice === 'moon'} disabled={!canSelectChoice}
                 onSelect={handleSelectChoice}
               />
             </div>
           )}
 
-          {/* Amount & quick stakes — only when betting and not yet placed */}
+          {/* Amount controls — only when betting and not yet placed */}
           {phase === 'betting' && !betPlaced && (
             <div className="space-y-2">
-              {/* Amount input row */}
               <div className="flex items-center justify-between">
                 <p className="text-[10px] text-slate-400 uppercase tracking-widest">Bet Amount</p>
                 <div className="flex gap-2">
@@ -435,16 +439,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   </button>
                 ))}
               </div>
-
-              {/* Current bet preview */}
-              {betAmount > 0 && (
-                <p className="text-center text-[10px] text-slate-400">
-                  Bet: <span className="text-white font-bold">₹{betAmount.toLocaleString()}</span>
-                  {selectedChoice && (
-                    <span className="ml-1">on <span className="font-bold text-white">{selectedChoice === 'tie' ? 'ECLIPSE' : selectedChoice.toUpperCase()}</span></span>
-                  )}
-                </p>
-              )}
             </div>
           )}
 
@@ -468,7 +462,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             </button>
           )}
 
-          {/* Bet placed confirmation bar */}
+          {/* Bet placed bar */}
           {phase === 'betting' && betPlaced && (
             <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
               <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
@@ -478,14 +472,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             </div>
           )}
         </div>
-
-        <ResultOverlay
-          visible={phase === 'revealed'}
-          result={result}
-          won={lastWon}
-          payout={lastPayout}
-          choice={betPlaced ? selectedChoice : null}
-        />
       </div>
 
       {/* ── History section ── */}
