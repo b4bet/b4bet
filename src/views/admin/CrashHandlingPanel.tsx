@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Shield, Sliders, Target, Cpu, Zap, Rocket, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
+import { Shield, Sliders, Target, Cpu, Zap, Rocket, RefreshCw, CheckCircle, AlertCircle, DollarSign } from 'lucide-react';
 import { useAdminConfig } from '../../lib/hooks';
 import { store } from '../../lib/store';
 
@@ -26,6 +26,13 @@ export function CrashHandlingPanel() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Bet limits state
+  const currentLimits = store.getGameLimits('crash');
+  const [minBet, setMinBet] = useState(String(cfg.perGameLimits['crash']?.min ?? ''));
+  const [maxBet, setMaxBet] = useState(String(cfg.perGameLimits['crash']?.max ?? ''));
+  const [limitsStatus, setLimitsStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [limitsMsg, setLimitsMsg] = useState('');
+
   const doSave = async (patch: Parameters<typeof store.setGameHandlerAsync>[1]) => {
     setSaveStatus('saving');
     setConfirmed(null);
@@ -43,6 +50,35 @@ export function CrashHandlingPanel() {
       setSaveStatus('error');
     }
     setTimeout(() => setSaveStatus('idle'), 5000);
+  };
+
+  const saveLimits = async () => {
+    const mn = parseFloat(minBet);
+    const mx = parseFloat(maxBet);
+    if (minBet !== '' && maxBet !== '') {
+      if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn <= 0 || mx <= mn) {
+        setLimitsMsg('Invalid — max must exceed min.');
+        setLimitsStatus('error');
+        setTimeout(() => setLimitsStatus('idle'), 3000);
+        return;
+      }
+    }
+    setLimitsStatus('saving');
+    setLimitsMsg('');
+    try {
+      if (minBet === '' && maxBet === '') {
+        store.setGameLimit('crash', null);
+      } else {
+        store.setGameLimit('crash', { min: mn, max: mx });
+      }
+      await store.loadAdminConfigFromSupabase();
+      setLimitsStatus('saved');
+      setLimitsMsg('Supabase confirmed ✓');
+    } catch (e) {
+      setLimitsStatus('error');
+      setLimitsMsg((e as Error).message ?? 'Save failed');
+    }
+    setTimeout(() => setLimitsStatus('idle'), 5000);
   };
 
   const setMode = (mode: 'AUTO' | 'MANUAL') => doSave({ mode });
@@ -238,6 +274,62 @@ export function CrashHandlingPanel() {
             Current: <span className="text-white tabular">{quickStakes.join(' · ')}</span>
           </span>
         </div>
+      </div>
+
+      {/* Bet Limits — Supabase connected */}
+      <div className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800 space-y-2">
+        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider flex items-center gap-2">
+          <DollarSign className="w-3.5 h-3.5 text-emeraldwin-400" /> Bet Limits ({store.currency})
+        </label>
+        <p className="text-[10px] text-slate-500">
+          Active: <span className="text-white tabular">{store.currency}{currentLimits.min} – {store.currency}{currentLimits.max.toLocaleString()}</span>
+          {cfg.perGameLimits['crash'] ? <span className="ml-2 text-neon-400 font-semibold">(override active)</span> : <span className="ml-2 text-slate-600">(using global)</span>}
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <p className="text-[9px] text-slate-500 mb-0.5">Min Bet</p>
+            <input
+              type="number"
+              value={minBet}
+              onChange={(e) => setMinBet(e.target.value)}
+              placeholder={String(cfg.minBet)}
+              min={1}
+              className="input tabular text-sm py-1.5 w-full"
+            />
+          </div>
+          <div>
+            <p className="text-[9px] text-slate-500 mb-0.5">Max Bet</p>
+            <input
+              type="number"
+              value={maxBet}
+              onChange={(e) => setMaxBet(e.target.value)}
+              placeholder={String(cfg.maxBet)}
+              min={1}
+              className="input tabular text-sm py-1.5 w-full"
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => { void saveLimits(); }}
+            disabled={limitsStatus === 'saving'}
+            className="btn-emerald px-4 py-1.5 text-xs flex items-center gap-1.5 disabled:opacity-60"
+          >
+            {limitsStatus === 'saving' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+            Save Limits
+          </button>
+          {limitsStatus === 'saved' && <span className="text-[11px] text-emeraldwin-300 font-semibold">{limitsMsg}</span>}
+          {limitsStatus === 'error' && <span className="text-[11px] text-coral-300 font-semibold">{limitsMsg}</span>}
+          {cfg.perGameLimits['crash'] && (
+            <button
+              onClick={() => { store.setGameLimit('crash', null); setMinBet(''); setMaxBet(''); }}
+              className="ml-auto text-[10px] text-coral-400 hover:text-coral-300 font-semibold"
+            >
+              Clear override
+            </button>
+          )}
+        </div>
+        <p className="text-[10px] text-slate-500">Leave blank to use global limits. Changes apply immediately to all players.</p>
       </div>
     </div>
   );
