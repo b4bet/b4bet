@@ -163,6 +163,31 @@ export async function supabaseUnbanUser(userId: string): Promise<void> {
   if (error) throw error;
 }
 
+// ---- Bets ----
+export interface SupabaseBet {
+  id: string;
+  user_id: string | null;
+  bet_amount: number;
+  win_amount: number | null;
+  multiplier: number | null;
+  status: string;
+  bet_details: Record<string, unknown>;
+  placed_at: string;
+  settled_at: string | null;
+}
+
+export async function supabaseGetBets(): Promise<SupabaseBet[]> {
+  try {
+    const { data, error } = await supabase
+      .from('bets')
+      .select('*')
+      .order('placed_at', { ascending: false })
+      .limit(500);
+    if (error) throw error;
+    return (data ?? []) as SupabaseBet[];
+  } catch (e) { console.error('[supabase] getBets error:', e); return []; }
+}
+
 // supabaseToggleAdmin intentionally removed — admin status must only be
 // changed via direct database access, never through the admin panel UI.
 
