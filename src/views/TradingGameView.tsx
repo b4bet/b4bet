@@ -518,17 +518,24 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
 
   return (
     <div className="flex flex-col animate-fade-in h-[calc(100vh-130px)] px-3">
-      {/* ── Trading Header with logo + balance ── */}
+      {/* ── Trading Header: round logo + "Trading" text + balance ── */}
       <div className="flex items-center justify-between py-2 mb-1">
         <div className="flex items-center gap-2">
           {tradingLogo ? (
-            <img src={tradingLogo} alt="Trading" className="h-8 w-auto object-contain rounded-lg" />
+            <img
+              src={tradingLogo}
+              alt="Trading"
+              className="w-10 h-10 rounded-full object-cover flex-shrink-0 ring-2 ring-emerald-500/30"
+            />
           ) : (
-            <div className="flex items-center gap-1.5">
-              <BarChart2 className="w-5 h-5 text-emerald-400" />
-              <span className="font-black text-white text-sm">Trading</span>
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-600 to-cyan-500 flex items-center justify-center flex-shrink-0 ring-2 ring-emerald-500/30">
+              <BarChart2 className="w-5 h-5 text-white" />
             </div>
           )}
+          <div>
+            <p className="text-sm font-black text-white leading-none">Trading</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Binary Options</p>
+          </div>
         </div>
         <div className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-gray-800 border border-gray-700">
           <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
