@@ -4,13 +4,12 @@ import { cms } from '../../lib/cms';
 import { useAdminConfig, useGameLogos, useCrashState, useGameRound } from '../../lib/hooks';
 import { store, computeAutoOutcome } from '../../lib/store';
 import type { RoundOutcomePreview } from '../../lib/store';
-import type { RedeemCode } from '../../lib/store';
 import { gameLogos } from '../../lib/gameLogos';
 import type { GameKey } from '../../lib/gameLogos';
 import {
   Shield, Sliders, Target, Cpu, Zap, Upload, Image as ImageIcon, Trash2,
   Rocket, Bomb, Trophy, DollarSign, Dices, Circle, BarChart2, Sun, Plane,
-  TicketPercent, Plus, X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal,
+  Plus, X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal,
 } from 'lucide-react';
 
 // CrashHandlingPanel — dedicated async Supabase-connected panel
@@ -171,7 +170,6 @@ export function FiveDHandlingPanel() { return <GameHandlerPanel gameKey="fived" 
 export function SunMoonHandlingPanel() { return <GameHandlerPanel gameKey="sunvsmoon" label="Sun vs Moon" icon={Sun} manualLabel="Winning Side" manualPlaceholder="sun / moon / eclipse" manualHint="Forces the round outcome to Sun, Eclipse, or Moon." />; }
 
 export function AllGameHandlersSection() {
-  // AviatorHandlingPanel is re-exported from AviatorHandlingPanel.tsx above
   return (
     <div className="space-y-4">
       <WingoHandlingPanel />
@@ -301,93 +299,6 @@ export function PerGameBetLimitsPanel() {
             })}
           </div>
           {msg && <p className="text-[11px] text-emeraldwin-300 font-semibold">{msg}</p>}
-        </>
-      )}
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Redeem Code Generator
-// ─────────────────────────────────────────────────────────────────────────────
-export function RedeemCodeAdminPanel() {
-  const [expanded, setExpanded] = useState(true);
-  const [newCode, setNewCode] = useState('');
-  const [newBonus, setNewBonus] = useState('100');
-  const [newMaxUses, setNewMaxUses] = useState('1');
-  const [msg, setMsg] = useState<string | null>(null);
-  const [codes, setCodes] = useState<RedeemCode[]>(() => store.listRedeemCodes());
-
-  const refresh = () => setCodes(store.listRedeemCodes());
-
-  const addCode = () => {
-    const code = newCode.trim().toUpperCase();
-    if (!code) { setMsg('Code cannot be empty.'); return; }
-    const bonus = parseFloat(newBonus);
-    const maxUses = parseInt(newMaxUses, 10);
-    if (!Number.isFinite(bonus) || bonus <= 0) { setMsg('Invalid bonus amount.'); return; }
-    if (!Number.isFinite(maxUses) || maxUses < 1) { setMsg('Max uses must be at least 1.'); return; }
-    store.addRedeemCode(code, bonus, maxUses);
-    refresh();
-    setNewCode(''); setNewBonus('100'); setNewMaxUses('1');
-    setMsg(`Code ${code} created.`);
-    setTimeout(() => setMsg(null), 2000);
-  };
-
-  return (
-    <div className="panel p-4 space-y-3">
-      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center justify-between">
-        <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
-          <TicketPercent className="w-5 h-5 text-amberx-300" /> Redeem Code Generator
-        </h2>
-        {expanded ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
-      </button>
-      {expanded && (
-        <>
-          <p className="text-xs text-slate-500">Create bonus codes. Each code tracks per-user usage.</p>
-          <div className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800 space-y-2">
-            <p className="text-xs font-bold text-white mb-1">New Redeem Code</p>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="col-span-3 sm:col-span-1">
-                <p className="text-[9px] text-slate-500 mb-0.5">Code</p>
-                <input type="text" value={newCode} onChange={(e) => setNewCode(e.target.value.toUpperCase())} placeholder="e.g. PROMO50" className="input text-sm py-1.5 w-full uppercase" maxLength={20} />
-              </div>
-              <div>
-                <p className="text-[9px] text-slate-500 mb-0.5">Bonus ({store.currency})</p>
-                <input type="number" value={newBonus} onChange={(e) => setNewBonus(e.target.value)} min={1} step={1} className="input tabular text-sm py-1.5 w-full" />
-              </div>
-              <div>
-                <p className="text-[9px] text-slate-500 mb-0.5">Uses per user</p>
-                <input type="number" value={newMaxUses} onChange={(e) => setNewMaxUses(e.target.value)} min={1} step={1} className="input tabular text-sm py-1.5 w-full" />
-              </div>
-            </div>
-            <button onClick={addCode} className="btn-primary w-full py-2 flex items-center justify-center gap-2 text-sm">
-              <Plus className="w-4 h-4" /> Create Code
-            </button>
-          </div>
-          {msg && <p className="text-[11px] text-emeraldwin-300 font-semibold">{msg}</p>}
-          <div className="space-y-2 max-h-72 overflow-y-auto">
-            {codes.length === 0 && <p className="text-xs text-slate-500 text-center py-4">No redeem codes yet</p>}
-            {codes.map((rc) => {
-              const totalUses = Object.keys(rc.usageByUser).length;
-              return (
-                <div key={rc.code} className="flex items-center gap-3 bg-slatepanel-800 rounded-xl p-3 border border-borderline-800">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-white text-sm">{rc.code}</span>
-                      <span className="text-[9px] bg-amberx-500/15 border border-amberx-500/30 text-amberx-300 px-1.5 py-0.5 rounded-full">+{store.currency}{rc.bonus}</span>
-                    </div>
-                    <p className="text-[10px] text-slate-500 mt-0.5">
-                      {totalUses} user{totalUses !== 1 ? 's' : ''} redeemed · max {rc.maxUsesPerUser}/user · created {new Date(rc.createdAt).toLocaleDateString()}
-                    </p>
-                  </div>
-                  <button onClick={() => { store.deleteRedeemCode(rc.code); refresh(); }} className="flex-shrink-0 w-8 h-8 rounded-lg bg-coral-500/15 border border-coral-500/30 grid place-items-center hover:bg-coral-500/25 transition-colors">
-                    <Trash2 className="w-3.5 h-3.5 text-coral-400" />
-                  </button>
-                </div>
-              );
-            })}
-          </div>
         </>
       )}
     </div>
@@ -585,7 +496,7 @@ export default function GameAlgosTab() {
     <div className="space-y-4">
       <div>
         <h2 className="font-display font-bold text-lg text-white">Game Algorithms & Assets</h2>
-        <p className="text-xs text-slate-500">Crash & Aviator handling panels are in Game Handlers tab. Manage game logos and redeem codes here.</p>
+        <p className="text-xs text-slate-500">Crash &amp; Aviator handling panels are in Game Handlers tab. Manage game logos here.</p>
       </div>
       <div className="panel p-4">
         <h3 className="font-display font-bold text-sm text-white mb-1 flex items-center gap-2">
@@ -629,7 +540,6 @@ export default function GameAlgosTab() {
           })}
         </div>
       </div>
-      <RedeemCodeAdminPanel />
     </div>
   );
 }
