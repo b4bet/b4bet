@@ -1,17 +1,5 @@
 /**
  * SunVsMoonView — server-side outcome version.
- *
- * Game flow per round (20s total):
- *   1. BETTING   (15s) — pick Sun / Moon / Eclipse and set bet amount.
- *   2. PROCESSING (2s) — "Processing…" screen.
- *   3. REVEALED   (3s) — server settles bet, balance updated.
- *   4. Auto-reset to step 1.
- *
- * The bet is settled via GameService.sunMoonSettle() which calls the
- * process-bet Edge Function. The server generates the result with
- * crypto.getRandomValues() and atomically updates profiles.balance + bets.
- * The local store.recordSunMoonRound() is called only for the "My Bets"
- * history tab — it never decides the outcome or modifies the balance.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -26,24 +14,12 @@ import { auth } from '../lib/auth';
 import { sunMoonLoop, EngineTopics, type SunMoonState } from '../lib/persistentGameEngine';
 import { GameService } from '../lib/game-service';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 type BetChoice = 'sun' | 'moon' | 'tie';
 type Phase = 'betting' | 'processing' | 'revealed';
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-const BETTING_DURATION = 15;   // seconds
+const BETTING_DURATION = 15;
 const YEAR_PREFIX     = 2026;
-
-/** Net-profit multipliers. Sun/Moon pay 1:1; Eclipse pays 8:1. */
 const PAYOUTS: Record<BetChoice, number> = { sun: 1, moon: 1, tie: 8 };
-
-// ---------------------------------------------------------------------------
-// Mini sub-components (unchanged UI)
-// ---------------------------------------------------------------------------
 
 function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: number }) {
   const radius = 38;
@@ -95,7 +71,7 @@ function BetButton({
       style={{
         borderColor:     selected ? glowColor : undefined,
         backgroundColor: selected ? `${glowColor}22` : undefined,
-        boxShadow:       selected ? `0 0 18px 4px ${glowColor}55` : undefined,
+        boxShadow:       selected ? `0  0 18px 4px ${glowColor}55` : undefined,
       }}
     >
       <img src={imageSrc} alt={label} className="w-12 h-12 object-contain drop-shadow-lg" />
@@ -185,9 +161,6 @@ function HistoryStrip({ history }: { history: Array<{ round: number; result: Bet
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main View
-// ---------------------------------------------------------------------------
 export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const gameLogos = useGameLogos();
   const balance      = useBalance();
@@ -232,13 +205,11 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         setSelectedBet(null);
       }
 
-      // Settle exactly once per revealed round — server-side
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
         settledRoundRef.current = rn;
         const sb = selectedBetRef.current;
         const outcome = s.result;
 
-        // Always update history strip
         setHistory((prev) => [{ round: rn, result: outcome }, ...prev].slice(0, 20));
 
         if (sb !== null) {
@@ -246,16 +217,13 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
           const session = auth.getSession();
           if (!session) return;
 
-          // Fire-and-forget settle — server decides win/loss and updates balance
           setSettling(true);
           void GameService.sunMoonSettle(session.userId, rn, sb, stake)
             .then((res) => {
-              // Sync balance from server response
               store.setBalance(res.balance_after);
               setLastWon(res.won);
               setLastPayout(res.profit);
 
-              // Local history record only (no balance calculation here)
               const record: Omit<SunMoonRoundRecord, 'id' | 'ts'> = {
                 roundNumber: rn,
                 stake,
@@ -286,7 +254,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     return off;
   }, []);
 
-  // ---- Place bet (deduct server-side on settle, no local debit) ----
   const handleSelectBet = useCallback((choice: BetChoice) => {
     if (phase !== 'betting') return;
     if (selectedBet !== null) return;
@@ -304,7 +271,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       bus.emit(Topics.InsufficientBalance);
       return;
     }
-    // Optimistic UI — debit shown locally; server reconciles on settle
     store.debit(stake);
     setSelectedBet(choice);
   }, [phase, selectedBet, betAmountStr, balance]);
@@ -321,7 +287,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const bettingEnabled = phase === 'betting' && selectedBet === null && !settling;
 
   return (
-    <div className="relative space-y-4 animate-fade-in">
+    <div className="relative space-y-4 animate-fade-in px-3">
       {/* ── Header ── */}
       <div className="flex items-center gap-2">
         {onBack && (
