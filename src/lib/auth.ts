@@ -26,18 +26,45 @@ function generateAccountId(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-/** Fetch the real client IP, cached in localStorage */
+/** Fetch the real client IP with 4 fallback services. Never caches a failed result. */
 async function getClientIp(): Promise<string> {
-  try {
-    const stored = localStorage.getItem('b4bet.clientIp');
-    if (stored) return stored;
-    const res = await fetch('https://api.ipify.org?format=json');
-    if (res.ok) {
-      const json = await res.json() as { ip: string };
-      localStorage.setItem('b4bet.clientIp', json.ip);
-      return json.ip;
-    }
-  } catch { /* fall through */ }
+  // Return session-cached IP if available (cleared on page reload)
+  const sessionIp = sessionStorage.getItem('b4bet.clientIp');
+  if (sessionIp) return sessionIp;
+
+  // Four independent services — try each with a 4-second timeout
+  const services: Array<() => Promise<string>> = [
+    async () => {
+      const r = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(4000) });
+      const j = await r.json() as { ip: string };
+      return j.ip;
+    },
+    async () => {
+      const r = await fetch('https://api64.ipify.org?format=json', { signal: AbortSignal.timeout(4000) });
+      const j = await r.json() as { ip: string };
+      return j.ip;
+    },
+    async () => {
+      const r = await fetch('https://api.my-ip.io/v1/ip.json', { signal: AbortSignal.timeout(4000) });
+      const j = await r.json() as { ip: string };
+      return j.ip;
+    },
+    async () => {
+      const r = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(4000) });
+      const j = await r.json() as { ip: string };
+      return j.ip;
+    },
+  ];
+
+  for (const fn of services) {
+    try {
+      const ip = await fn();
+      if (ip && ip.length > 3) {
+        sessionStorage.setItem('b4bet.clientIp', ip);
+        return ip;
+      }
+    } catch { /* try next */ }
+  }
   return '';
 }
 
@@ -55,6 +82,26 @@ async function recordSignupIp(accessToken: string, action: 'signup' | 'login' = 
     const json = await res.json();
     return (json?.ip as string) ?? '';
   } catch { return ''; }
+}
+
+/** Log user IP — tries Edge Function first, then multiple client-side fallbacks */
+async function logIpWithFallback(userId: string, accessToken: string | undefined, action: 'signup' | 'login'): Promise<string> {
+  // 1. Try server-side Edge Function (gets real IP from headers, bypasses CGNAT)
+  if (accessToken) {
+    const serverIp = await recordSignupIp(accessToken, action);
+    if (serverIp) {
+      void logUserIp(userId, serverIp, action);
+      sessionStorage.setItem('b4bet.clientIp', serverIp);
+      return serverIp;
+    }
+  }
+  // 2. Fall back to client-side IP detection with multiple services
+  const clientIp = await getClientIp();
+  if (clientIp) {
+    void logUserIp(userId, clientIp, action);
+    return clientIp;
+  }
+  return '';
 }
 
 class AuthManager {
@@ -158,23 +205,16 @@ class AuthManager {
       return { ok: false, error: error.message };
     }
     if (!data.user) return { ok: false, error: 'Registration failed. Please try again.' };
-    // Record the REAL IP (server-side, via Edge Function) now that we have a session token
-    let realIp = '';
-    if (data.session?.access_token) {
-      realIp = await recordSignupIp(data.session.access_token, 'signup');
-    }
-    // Fallback: also log via the RPC function with client IP
-    if (!realIp) {
-      realIp = await getClientIp();
-      if (realIp) void logUserIp(data.user.id, realIp, 'signup');
-    } else {
-      void logUserIp(data.user.id, realIp, 'signup');
-    }
-    // Save profile WITH account_id and is_active
+
+    // Log the real IP using Edge Function + multiple client fallbacks
+    const realIp = await logIpWithFallback(data.user.id, data.session?.access_token, 'signup');
+
+    // Save profile WITH account_id, is_active, and registration_ip
     const { error: profileErr } = await supabase.from('profiles').upsert({
       id: data.user.id, username: uname, display_name: uname, phone: umobile,
       balance: 0, total_deposit: 0, total_withdrawal: 0, vip_level: 0, is_admin: false,
       account_id: accountId, is_active: true, signup_bonus_granted: false,
+      registration_ip: realIp || null,
     });
     if (profileErr) console.error('[auth] profile upsert error:', profileErr);
     try { store.grantSignupBonus(data.user.id, uname, realIp); } catch { /* ignore */ }
@@ -214,12 +254,11 @@ class AuthManager {
             email: d2.user.email || '', loggedInAt: Date.now(),
           };
           this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
-          // Ensure account_id is synced in profiles
           if (accountId) {
             void supabase.from('profiles').update({ account_id: accountId }).eq('id', d2.user.id).then(() => {}).catch(() => {});
           }
-          // Log IP on successful login
-          void getClientIp().then((ip) => { if (ip) void logUserIp(d2.user.id, ip, 'login'); });
+          // Log IP with fallbacks
+          void logIpWithFallback(d2.user.id, d2.session?.access_token, 'login');
           cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
           return { ok: true };
         }
@@ -234,12 +273,11 @@ class AuthManager {
       email: data.user.email || '', loggedInAt: Date.now(),
     };
     this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
-    // Ensure account_id is synced in profiles
     if (accountId) {
       void supabase.from('profiles').update({ account_id: accountId }).eq('id', data.user.id).then(() => {}).catch(() => {});
     }
-    // Log IP on successful login
-    void getClientIp().then((ip) => { if (ip) void logUserIp(data.user.id, ip, 'login'); });
+    // Log IP with fallbacks
+    void logIpWithFallback(data.user.id, data.session?.access_token, 'login');
     cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
     return { ok: true };
   }
@@ -247,10 +285,6 @@ class AuthManager {
   private isLoggingOut = false;
 
   async logout() {
-    // Guard against re-entrant calls: supabase.auth.signOut() fires a
-    // 'SIGNED_OUT' auth event which App.tsx also listens for and calls
-    // logout() again. Without this guard, logout runs twice concurrently,
-    // causing duplicate toasts and a race between the two session clears.
     if (this.isLoggingOut) return;
     this.isLoggingOut = true;
     try {
@@ -309,21 +343,18 @@ class AuthManager {
   // Ban user — persists to Supabase `bans` table
   banUser(id: string, reason: string, bannedBy: 'system' | 'admin' = 'admin'): boolean {
     const user = this.usersCache.find(u => u.id === id);
-    // Allow banning even if not in cache (use id directly)
     const username = user?.username ?? id;
     const email = user?.email ?? '';
-    const ip = user?.registrationIp ?? localStorage.getItem('b4bet.clientIp') ?? '';
+    const ip = user?.registrationIp ?? sessionStorage.getItem('b4bet.clientIp') ?? '';
     void supabase.rpc('admin_ban_user', {
       p_user_id: id, p_username: username, p_email: email,
       p_ip: ip, p_reason: reason, p_banned_by: bannedBy,
     }).then(({ data }) => {
-      // Reload bans from Supabase to keep cache fresh
       void this.loadBansFromSupabase();
       if (data && typeof data === 'string') {
         // data is the new ban row id
       }
     }).catch(e => console.error('[auth] banUser error:', e));
-    // Optimistic local update
     if (user) user.isActive = false;
     this.bannedUsers.push({
       userId: id, username, email, ip,
@@ -336,7 +367,6 @@ class AuthManager {
 
   // Unban user by ban row id — persists to Supabase
   unbanUser(userId: string, reason: string): boolean {
-    // Find the active ban record for this user
     const banRecord = this.bannedUsers.find(b => b.userId === userId && !b.unbanDate);
     if (!banRecord) return false;
     const banId = banRecord.id;
@@ -345,7 +375,6 @@ class AuthManager {
         .then(() => void this.loadBansFromSupabase())
         .catch(e => console.error('[auth] unbanUser error:', e));
     }
-    // Optimistic local update
     banRecord.unbanDate = Date.now();
     banRecord.unbanReason = reason;
     const user = this.usersCache.find(u => u.id === userId);
