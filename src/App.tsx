@@ -19,6 +19,8 @@ import K3View from './views/K3View';
 import FiveDView from './views/FiveDView';
 import SunVsMoonView from './views/SunVsMoonView';
 import TradingGameView from './views/TradingGameView';
+import AffiliatePortalView from './views/AffiliatePortalView';
+import LandingPage from './views/LandingPage';
 import NotificationDrawer from './components/NotificationDrawer';
 import ProfileDrawer from './components/ProfileDrawer';
 import ToastHost from './components/ToastHost';
@@ -31,6 +33,8 @@ import { bus } from './lib/bus';
 import { crashEngine } from './lib/crashEngine';
 import { startAllPersistentGameEngines } from './lib/persistentGameEngine';
 import { useStaffSession } from './lib/cmsHooks';
+import { auth } from './lib/auth';
+import { supabase } from './integrations/supabase/client';
 
 export default function App() {
   const staffSession = useStaffSession();
@@ -38,19 +42,35 @@ export default function App() {
     if (typeof window !== 'undefined') {
       const p = window.location.pathname;
       const h = window.location.hash;
-      if (p === '/aryan' || p.startsWith('/aryan/') || h === '#aryan' || h === '#/aryan') {
-        return 'admin';
-      }
+      if (p === '/aryan' || p.startsWith('/aryan/') || h === '#aryan' || h === '#/aryan') return 'admin';
+      if (p === '/affiliate' || h === '#affiliate') return 'affiliate';
+      if (p === '/landing') return 'landing';
     }
     return 'home';
   });
   const [notifOpen, setNotifOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
   const [supportChatOpen, setSupportChatOpen] = useState(false);
-
-  // Auth modal state
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  useEffect(() => {
+    // Initialize login state from current session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setIsLoggedIn(!!session);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        auth.logout();
+        setIsLoggedIn(false);
+      } else if (session) {
+        setIsLoggedIn(true);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     const off = bus.on('auth:open_modal', (payload: unknown) => {
@@ -60,11 +80,7 @@ export default function App() {
     return off;
   }, []);
 
-  const openAuthModal = (mode: AuthModalMode) => {
-    setAuthModalMode(mode);
-    setAuthModalOpen(true);
-  };
-
+  const openAuthModal = (mode: AuthModalMode) => { setAuthModalMode(mode); setAuthModalOpen(true); };
   const navigate = (r: Route) => setRoute(r);
 
   useEffect(() => {
@@ -72,19 +88,18 @@ export default function App() {
     return off;
   }, []);
 
-  // Global game engines — keeps all round-based games running in background
   useEffect(() => {
     crashEngine.start();
     startAllPersistentGameEngines();
   }, []);
 
-  const showHeader = route !== 'admin';
-  const showBottomNav = route !== 'admin';
+  const showHeader = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
+  const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
 
   return (
-    <div className="app-root">
-      <ToastHost />
+    <div className="min-h-screen bg-slatepanel-950 text-white">
       <GeoBlockOverlay />
+      <ToastHost />
 
       {showHeader && (
         <Header
@@ -96,13 +111,14 @@ export default function App() {
         />
       )}
 
-      <main>
+      {/* pt-[62px] matches new header height */}
+      <div className={showHeader ? 'pb-16 pt-[62px]' : ''}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
-        {route === 'mines' && <MinesView />}
+        {route === 'mines' && <MinesView onNavigate={navigate} />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
-        {route === 'deposit' && <DepositView />}
+        {route === 'deposit' && <DepositView onNavigate={navigate} />}
         {route === 'wallet' && <WalletView onNavigate={navigate} />}
-        {route === 'withdraw' && <WithdrawView />}
+        {route === 'withdraw' && <WithdrawView onNavigate={navigate} />}
         {route === 'profile' && (
           <ProfileView
             onNavigate={navigate}
@@ -111,44 +127,37 @@ export default function App() {
             onOpenMenu={() => setWalletOpen(true)}
           />
         )}
-        {route === 'referral' && <ReferralView onOpenMenu={() => setWalletOpen(true)} />}
+        {route === 'referral' && <ReferralView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
         {route === 'admin' && <AdminView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
-        {route === 'history' && <HistoryView />}
-        {route === 'ludo' && <LudoView />}
+        {route === 'history' && <HistoryView onNavigate={navigate} />}
+        {route === 'ludo' && <LudoView onBack={() => navigate('home')} />}
+        {route === 'crash' && <CrashView onNavigate={navigate} />}
+        {route === 'aviator' && <AviatorView onBack={() => navigate('home')} />}
+        {route === 'wingo' && <WingoView onNavigate={navigate} />}
+        {route === 'k3' && <K3View onNavigate={navigate} />}
+        {route === 'fived' && <FiveDView onNavigate={navigate} />}
+        {route === 'sunvsmoon' && <SunVsMoonView onNavigate={navigate} />}
+        {route === 'trading' && <TradingGameView onNavigate={navigate} />}
+        {route === 'affiliate' && <AffiliatePortalView onBack={() => navigate('home')} />}
+        {route === 'landing' && <LandingPage onNavigate={navigate} />}
+      </div>
 
-        {route === 'crash' && <CrashView />}
-        {route === 'aviator' && <AviatorView />}
-        {route === 'wingo' && <WingoView />}
-        {route === 'k3' && <K3View />}
-        {route === 'fived' && <FiveDView />}
-        {route === 'sunvsmoon' && <SunVsMoonView />}
-        {route === 'trading' && <TradingGameView />}
-      </main>
+      {showBottomNav && <BottomNav route={route} onNavigate={navigate} />}
 
-      {showBottomNav && (
-        <BottomNav currentRoute={route} onNavigate={navigate} />
-      )}
-
-      <NotificationDrawer isOpen={notifOpen} onClose={() => setNotifOpen(false)} />
+      <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
       <ProfileDrawer
-        isOpen={walletOpen}
+        open={walletOpen}
         onClose={() => setWalletOpen(false)}
         onNavigate={navigate}
         onOpenSupport={() => { setWalletOpen(false); setSupportChatOpen(true); }}
         onOpenAuthModal={openAuthModal}
       />
-      <SupportChat isOpen={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
-
-      <AuthModal
-        isOpen={authModalOpen}
-        mode={authModalMode}
-        onClose={() => setAuthModalOpen(false)}
-      />
-
+      <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
+      <AuthModal open={authModalOpen} initialMode={authModalMode} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
 
-      {/* Ban popup — shown to any logged-in user whose account has been banned */}
-      <BanPopup />
+      {/* Ban popup — shown only to logged-in users whose account has been banned */}
+      {isLoggedIn && <BanPopup />}
     </div>
   );
 }
