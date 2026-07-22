@@ -62,12 +62,12 @@ function BetButton({
 }) {
   return (
     <button
-      onClick={() => !disabled && onSelect(choice)}
-      disabled={disabled}
+      type="button"
+      onClick={() => { if (!disabled) onSelect(choice); }}
       className={[
         'flex flex-col items-center justify-center gap-1 rounded-2xl border-2 transition-all duration-200 py-3 px-2 flex-1',
         'active:scale-95',
-        disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer',
+        disabled ? 'opacity-40 cursor-not-allowed pointer-events-none' : 'cursor-pointer',
         selected ? 'scale-[1.04]' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.07]',
       ].join(' ')}
       style={{
@@ -174,6 +174,10 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const [betAmount, setBetAmount] = useState(100);
   const betAmountStr = String(betAmount);
 
+  // Track the last quick-stake button pressed so we can SET on first click
+  // of a new denomination and ADD on repeated clicks of the same denomination.
+  const [lastQuickStake, setLastQuickStake] = useState<number | null>(null);
+
   const initEng = sunMoonLoop.getState();
   const [selectedChoice, setSelectedChoice] = useState<BetChoice | null>(null);
   const [betPlaced, setBetPlaced]           = useState(false);
@@ -214,6 +218,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       if (s.phase === 'betting' && settledRoundRef.current !== -1 && settledRoundRef.current !== rn) {
         setSelectedChoice(null);
         setBetPlaced(false);
+        setLastQuickStake(null);
       }
 
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
@@ -266,10 +271,11 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     return off;
   }, []);
 
+  // Always SET the selected choice — no toggle so buttons stay responsive
   const handleSelectChoice = useCallback((choice: BetChoice) => {
-    if (phase !== 'betting' || betPlaced) return;
-    setSelectedChoice((prev) => prev === choice ? null : choice);
-  }, [phase, betPlaced]);
+    if (betPlaced) return;
+    setSelectedChoice(choice);
+  }, [betPlaced]);
 
   const handlePlaceBet = useCallback(() => {
     if (phase !== 'betting' || betPlaced || selectedChoice === null) return;
@@ -292,19 +298,33 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     setBetPlaced(true);
   }, [phase, betPlaced, selectedChoice, balance]);
 
+  /**
+   * Quick stake logic:
+   * - Clicking a DIFFERENT denomination: SET amount to that value
+   * - Clicking the SAME denomination again: ADD that value to current amount
+   */
   const handleQuickStake = (amount: number) => {
     if (betPlaced) return;
-    setBetAmount((prev) => Math.min(prev + amount, balance));
+    if (lastQuickStake === amount) {
+      // Same button pressed again — add
+      setBetAmount((prev) => Math.min(prev + amount, balance));
+    } else {
+      // New denomination selected — set
+      setBetAmount(Math.min(amount, balance));
+      setLastQuickStake(amount);
+    }
   };
 
   const handleAmountInput = (val: string) => {
     const n = parseFloat(val);
     if (!isNaN(n) && n >= 0) setBetAmount(n);
     else if (val === '') setBetAmount(0);
+    setLastQuickStake(null);
   };
 
   const adjustAmount = (delta: number) => {
     setBetAmount((prev) => Math.max(10, Math.min(balance, Math.round(prev + delta))));
+    setLastQuickStake(null);
   };
 
   const limits          = store.getGameLimits('sunvsmoon');
@@ -381,28 +401,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             ) : null}
           </div>
 
-          {/* Direction selector buttons */}
-          {phase !== 'processing' && (
-            <div className="flex items-stretch gap-2">
-              <BetButton
-                choice="sun" payout="1:1" imageSrc="/sun.png" glowColor="#FFB627"
-                selected={selectedChoice === 'sun'} disabled={!canSelectChoice}
-                onSelect={handleSelectChoice}
-              />
-              <BetButton
-                choice="tie" payout="8:1" imageSrc="/eclipse.png" glowColor="#F59E0B"
-                selected={selectedChoice === 'tie'} disabled={!canSelectChoice}
-                onSelect={handleSelectChoice}
-              />
-              <BetButton
-                choice="moon" payout="1:1" imageSrc="/moon.png" glowColor="#818CF8"
-                selected={selectedChoice === 'moon'} disabled={!canSelectChoice}
-                onSelect={handleSelectChoice}
-              />
-            </div>
-          )}
-
-          {/* Amount controls */}
+          {/* ── Bet Amount controls — shown ABOVE choice buttons so they're always visible ── */}
           {phase === 'betting' && !betPlaced && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -428,12 +427,38 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   <button
                     key={s}
                     onClick={() => handleQuickStake(s)}
-                    className="flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-neon-400/50 hover:text-neon-300 active:scale-95"
+                    className={[
+                      'flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors active:scale-95',
+                      lastQuickStake === s
+                        ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                        : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-neon-400/50 hover:text-neon-300',
+                    ].join(' ')}
                   >
-                    +{s >= 1000 ? `${s / 1000}K` : s}
+                    {lastQuickStake === s ? `+${s >= 1000 ? `${s / 1000}K` : s}` : `${s >= 1000 ? `${s / 1000}K` : s}`}
                   </button>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Direction selector buttons */}
+          {phase !== 'processing' && (
+            <div className="flex items-stretch gap-2">
+              <BetButton
+                choice="sun" payout="1:1" imageSrc="/sun.png" glowColor="#FFB627"
+                selected={selectedChoice === 'sun'} disabled={!canSelectChoice}
+                onSelect={handleSelectChoice}
+              />
+              <BetButton
+                choice="tie" payout="8:1" imageSrc="/eclipse.png" glowColor="#F59E0B"
+                selected={selectedChoice === 'tie'} disabled={!canSelectChoice}
+                onSelect={handleSelectChoice}
+              />
+              <BetButton
+                choice="moon" payout="1:1" imageSrc="/moon.png" glowColor="#818CF8"
+                selected={selectedChoice === 'moon'} disabled={!canSelectChoice}
+                onSelect={handleSelectChoice}
+              />
             </div>
           )}
 
