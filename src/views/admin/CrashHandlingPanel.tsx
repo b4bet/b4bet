@@ -16,6 +16,8 @@ import { store } from '../../lib/store';
  *               The Edge Function reads root-level mode + manualCrashPoint for
  *               crash, so this value is exactly what the next round will use.
  *               After the round fires the Edge Function auto-reverts to AUTO.
+ *
+ * Quick Stakes — also saved via setGameHandlerAsync → Supabase confirmed ✓
  */
 export function CrashHandlingPanel() {
   const cfg = useAdminConfig();
@@ -26,14 +28,21 @@ export function CrashHandlingPanel() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
 
+  // Quick stakes state
+  const quickStakes = crash.quickStakes?.length ? crash.quickStakes : [200, 500, 1000, 2000];
+  const [s1, setS1] = useState(String(quickStakes[0]));
+  const [s2, setS2] = useState(String(quickStakes[1]));
+  const [s3, setS3] = useState(String(quickStakes[2]));
+  const [s4, setS4] = useState(String(quickStakes[3]));
+  const [stakesStatus, setStakesStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [stakesMsg, setStakesMsg] = useState('');
+
   const doSave = async (patch: Parameters<typeof store.setGameHandlerAsync>[1]) => {
     setSaveStatus('saving');
     setConfirmed(null);
     setErrorMsg('');
     try {
-      // Await the real Supabase write — throws on failure
       await store.setGameHandlerAsync('crash', patch);
-      // Reload from Supabase to confirm what was actually stored
       await store.loadAdminConfigFromSupabase();
       const saved = store.getGameHandler('crash');
       setConfirmed(saved.manualCrashPoint ?? null);
@@ -55,16 +64,23 @@ export function CrashHandlingPanel() {
     void doSave({ manualCrashPoint: point, mode: 'MANUAL' });
   };
 
-  // Quick stakes
-  const quickStakes = crash.quickStakes?.length ? crash.quickStakes : [200, 500, 1000, 2000];
-  const [s1, setS1] = useState(String(quickStakes[0]));
-  const [s2, setS2] = useState(String(quickStakes[1]));
-  const [s3, setS3] = useState(String(quickStakes[2]));
-  const [s4, setS4] = useState(String(quickStakes[3]));
-  const saveStakes = () => {
+  // Save quick stakes to Supabase (async, confirmed)
+  const saveStakes = async () => {
     const vals = [parseFloat(s1), parseFloat(s2), parseFloat(s3), parseFloat(s4)]
       .filter((n) => Number.isFinite(n) && n > 0).slice(0, 4);
-    if (vals.length) store.setGameHandler('crash', { quickStakes: vals });
+    if (!vals.length) return;
+    setStakesStatus('saving');
+    setStakesMsg('');
+    try {
+      await store.setGameHandlerAsync('crash', { quickStakes: vals });
+      await store.loadAdminConfigFromSupabase();
+      setStakesStatus('saved');
+      setStakesMsg('Supabase confirmed ✓');
+    } catch (e) {
+      setStakesStatus('error');
+      setStakesMsg((e as Error).message ?? 'Save failed');
+    }
+    setTimeout(() => setStakesStatus('idle'), 5000);
   };
 
   return (
@@ -189,7 +205,6 @@ export function CrashHandlingPanel() {
             Apply Manual Override
           </button>
 
-          {/* Confirmed — shown only after DB write succeeds */}
           {confirmed !== null && saveStatus !== 'error' && (
             <div className="rounded-xl bg-coral-900/30 border border-coral-500/40 px-3 py-2.5">
               <p className="text-[10px] uppercase tracking-wider text-coral-400 font-semibold mb-0.5">
@@ -215,12 +230,12 @@ export function CrashHandlingPanel() {
         </div>
       )}
 
-      {/* Quick stakes */}
-      <div>
-        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5 block">
+      {/* Quick stakes — Supabase connected */}
+      <div className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800 space-y-2">
+        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">
           Quick Stake Chips (4 presets)
         </label>
-        <div className="grid grid-cols-4 gap-2 mb-2">
+        <div className="grid grid-cols-4 gap-2">
           {[{v: s1, set: setS1}, {v: s2, set: setS2}, {v: s3, set: setS3}, {v: s4, set: setS4}].map((x, i) => (
             <div key={i}>
               <p className="text-[9px] text-slate-500 mb-0.5">Stake {i + 1}</p>
@@ -232,11 +247,30 @@ export function CrashHandlingPanel() {
             </div>
           ))}
         </div>
-        <div className="flex items-center gap-2">
-          <button onClick={saveStakes} className="btn-primary px-4 py-1.5 text-xs">Save Stakes</button>
-          <span className="text-[11px] text-slate-500">
-            Current: <span className="text-white tabular">{quickStakes.join(' · ')}</span>
-          </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => { void saveStakes(); }}
+            disabled={stakesStatus === 'saving'}
+            className="btn-primary px-4 py-1.5 text-xs flex items-center gap-1.5 disabled:opacity-60"
+          >
+            {stakesStatus === 'saving' ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+            Save Stakes
+          </button>
+          {stakesStatus === 'saved' && (
+            <span className="text-[11px] text-emeraldwin-300 font-semibold flex items-center gap-1">
+              <CheckCircle className="w-3 h-3" />{stakesMsg}
+            </span>
+          )}
+          {stakesStatus === 'error' && (
+            <span className="text-[11px] text-coral-300 font-semibold flex items-center gap-1">
+              <AlertCircle className="w-3 h-3" />{stakesMsg}
+            </span>
+          )}
+          {stakesStatus === 'idle' && (
+            <span className="text-[11px] text-slate-500">
+              Current: <span className="text-white tabular">{quickStakes.join(' · ')}</span>
+            </span>
+          )}
         </div>
       </div>
     </div>
