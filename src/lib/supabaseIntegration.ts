@@ -145,6 +145,24 @@ export async function supabaseUpdateUserFull(userId: string, payload: UserUpdate
   if (error) throw error;
 }
 
+/** Ban a user by setting is_banned=true and is_active=false in profiles */
+export async function supabaseBanUser(userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ is_banned: true, is_active: false })
+    .eq('id', userId);
+  if (error) throw error;
+}
+
+/** Unban a user by setting is_banned=false and is_active=true in profiles */
+export async function supabaseUnbanUser(userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ is_banned: false, is_active: true })
+    .eq('id', userId);
+  if (error) throw error;
+}
+
 // supabaseToggleAdmin intentionally removed — admin status must only be
 // changed via direct database access, never through the admin panel UI.
 
