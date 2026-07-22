@@ -28,18 +28,25 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const [utr, setUtr] = useState('');
   const [destination, setDestination] = useState('');
   const [details, setDetails] = useState('');
-  // Validation alert — rendered via portal so it escapes any stacking context
   const [alertPopup, setAlertPopup] = useState<{ title: string; body: string } | null>(null);
+  const [alertVisible, setAlertVisible] = useState(false);
   const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const alertFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const showAlert = (title: string, body: string) => {
     if (alertTimer.current) clearTimeout(alertTimer.current);
+    if (alertFadeTimer.current) clearTimeout(alertFadeTimer.current);
     setAlertPopup({ title, body });
-    alertTimer.current = setTimeout(() => setAlertPopup(null), 2500);
+    setAlertVisible(true);
+    alertTimer.current = setTimeout(() => {
+      setAlertVisible(false);
+      alertFadeTimer.current = setTimeout(() => setAlertPopup(null), 300);
+    }, 2500);
   };
 
   useEffect(() => () => {
     if (alertTimer.current) clearTimeout(alertTimer.current);
+    if (alertFadeTimer.current) clearTimeout(alertFadeTimer.current);
   }, []);
 
   useEffect(() => {
@@ -87,7 +94,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       showAlert('Enter Amount', 'Amount must be greater than 0.');
       return;
     }
-
     if (limits.min > 0 && amt < limits.min) {
       showAlert('Invalid Amount', `Minimum ${flow} amount is ${store.currency}${limits.min}.`);
       return;
@@ -96,7 +102,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       showAlert('Invalid Amount', `Maximum ${flow} amount is ${store.currency}${limits.max}.`);
       return;
     }
-
     if (flow === 'withdrawal' && amt > balance) {
       showAlert('Insufficient Balance', `Available: ${store.currency}${balance.toFixed(2)}`);
       return;
@@ -156,14 +161,61 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }).catch(() => {});
   };
 
-  // Alert portal — mounted directly on document.body to escape all stacking contexts
+  // Professional alert portal — rendered on document.body to escape stacking contexts
   const alertPortal = alertPopup
     ? createPortal(
-        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/60 px-6 pointer-events-none">
-          <div className="pointer-events-auto panel border border-coral-500/50 bg-midnight-900/95 backdrop-blur-xl px-6 py-5 max-w-xs w-full text-center shadow-2xl animate-fade-in">
-            <AlertTriangle className="w-8 h-8 text-coral-300 mx-auto mb-2" />
-            <p className="font-display font-bold text-white">{alertPopup.title}</p>
-            <p className="text-sm text-slate-300 mt-1">{alertPopup.body}</p>
+        <div
+          className="fixed inset-0 z-[9998] flex items-center justify-center px-6 pointer-events-none"
+          style={{ transition: 'opacity 0.3s ease', opacity: alertVisible ? 1 : 0 }}
+        >
+          <div className="pointer-events-auto w-full max-w-[320px] overflow-hidden rounded-2xl shadow-2xl"
+            style={{
+              background: 'linear-gradient(145deg, #1e1e2e 0%, #16162a 100%)',
+              border: '1px solid rgba(239,68,68,0.25)',
+              boxShadow: '0 0 0 1px rgba(239,68,68,0.08), 0 24px 48px rgba(0,0,0,0.6)',
+              transform: alertVisible ? 'scale(1) translateY(0)' : 'scale(0.95) translateY(8px)',
+              transition: 'transform 0.3s cubic-bezier(0.34,1.56,0.64,1), opacity 0.3s ease',
+            }}
+          >
+            {/* Top accent bar */}
+            <div className="h-[3px] w-full" style={{ background: 'linear-gradient(90deg, #ef4444, #f97316)' }} />
+
+            <div className="px-6 py-5 flex flex-col items-center text-center gap-3">
+              {/* Icon */}
+              <div className="w-12 h-12 rounded-full flex items-center justify-center"
+                style={{ background: 'rgba(239,68,68,0.12)', border: '1.5px solid rgba(239,68,68,0.3)' }}
+              >
+                <AlertTriangle className="w-5 h-5" style={{ color: '#f87171' }} />
+              </div>
+
+              {/* Text */}
+              <div>
+                <p className="font-semibold text-white text-[15px] leading-snug tracking-tight">
+                  {alertPopup.title}
+                </p>
+                <p className="text-[13px] mt-1 leading-relaxed" style={{ color: '#94a3b8' }}>
+                  {alertPopup.body}
+                </p>
+              </div>
+
+              {/* Progress bar */}
+              <div className="w-full h-[3px] rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    background: 'linear-gradient(90deg, #ef4444, #f97316)',
+                    animation: 'shrink 2.5s linear forwards',
+                  }}
+                />
+              </div>
+            </div>
+
+            <style>{`
+              @keyframes shrink {
+                from { width: 100%; }
+                to { width: 0%; }
+              }
+            `}</style>
           </div>
         </div>,
         document.body,
@@ -272,7 +324,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
         </div>
 
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
-          {/* ── Amount field (common) ── */}
           <div>
             <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">
               Amount ({store.currency})
@@ -329,23 +380,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
               {flow === 'withdrawal' && (
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Your UPI ID (VPA)</label>
-                  <input
-                    value={destination}
-                    onChange={(e) => setDestination(e.target.value)}
-                    placeholder="yourname@upi"
-                    className="input w-full py-3"
-                  />
+                  <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="yourname@upi" className="input w-full py-3" />
                 </div>
               )}
               {flow === 'deposit' && (
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">UTR / Transaction Ref</label>
-                  <input
-                    value={utr}
-                    onChange={(e) => setUtr(e.target.value)}
-                    placeholder="e.g. UTR123456789"
-                    className="input w-full py-3"
-                  />
+                  <input value={utr} onChange={(e) => setUtr(e.target.value)} placeholder="e.g. UTR123456789" className="input w-full py-3" />
                 </div>
               )}
             </div>
@@ -358,27 +399,12 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                 <div className="panel-inner p-4 rounded-xl bg-midnight-850 border border-borderline-900 space-y-2">
                   <h4 className="text-xs font-semibold text-amberx-300 mb-2">Bank Transfer Details</h4>
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <p className="text-[10px] text-slate-500">Bank Name</p>
-                      <p className="text-white font-semibold">{selected.bankName || '—'}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-slate-500">Account No.</p>
-                      <p className="text-white font-semibold font-mono">{selected.accountNumber || '—'}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-slate-500">IFSC</p>
-                      <p className="text-white font-semibold font-mono">{selected.ifsc || '—'}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] text-slate-500">Holder</p>
-                      <p className="text-white font-semibold">{selected.holderName || '—'}</p>
-                    </div>
+                    <div><p className="text-[10px] text-slate-500">Bank Name</p><p className="text-white font-semibold">{selected.bankName || '—'}</p></div>
+                    <div><p className="text-[10px] text-slate-500">Account No.</p><p className="text-white font-semibold font-mono">{selected.accountNumber || '—'}</p></div>
+                    <div><p className="text-[10px] text-slate-500">IFSC</p><p className="text-white font-semibold font-mono">{selected.ifsc || '—'}</p></div>
+                    <div><p className="text-[10px] text-slate-500">Holder</p><p className="text-white font-semibold">{selected.holderName || '—'}</p></div>
                   </div>
-                  <button type="button" onClick={() => {
-                    const text = `Bank: ${selected.bankName}\nA/C: ${selected.accountNumber}\nIFSC: ${selected.ifsc}\nHolder: ${selected.holderName}`;
-                    copyToClipboard(text);
-                  }} className="btn-ghost px-2 py-1 text-xs mt-2">
+                  <button type="button" onClick={() => copyToClipboard(`Bank: ${selected.bankName}\nA/C: ${selected.accountNumber}\nIFSC: ${selected.ifsc}\nHolder: ${selected.holderName}`)} className="btn-ghost px-2 py-1 text-xs mt-2">
                     <Copy className="w-3.5 h-3.5 mr-1" /> Copy Details
                   </button>
                 </div>
@@ -387,33 +413,18 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                 <>
                   <div>
                     <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Your Account Number</label>
-                    <input
-                      value={destination}
-                      onChange={(e) => setDestination(e.target.value)}
-                      placeholder="Enter your bank account number"
-                      className="input w-full py-3"
-                    />
+                    <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="Enter your bank account number" className="input w-full py-3" />
                   </div>
                   <div>
                     <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Bank Name / IFSC</label>
-                    <input
-                      value={details}
-                      onChange={(e) => setDetails(e.target.value)}
-                      placeholder="SBI / SBIN0001234"
-                      className="input w-full py-3"
-                    />
+                    <input value={details} onChange={(e) => setDetails(e.target.value)} placeholder="SBI / SBIN0001234" className="input w-full py-3" />
                   </div>
                 </>
               )}
               {flow === 'deposit' && (
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">UTR / Transaction Ref</label>
-                  <input
-                    value={utr}
-                    onChange={(e) => setUtr(e.target.value)}
-                    placeholder="UTR or Transaction Reference ID"
-                    className="input w-full py-3"
-                  />
+                  <input value={utr} onChange={(e) => setUtr(e.target.value)} placeholder="UTR or Transaction Reference ID" className="input w-full py-3" />
                 </div>
               )}
             </div>
@@ -426,58 +437,37 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                 <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Select Currency</label>
                 <div className="grid grid-cols-2 gap-2">
                   {(selected.cryptoCurrencies || []).map((cc) => (
-                    <button
-                      key={cc.id}
-                      type="button"
-                      onClick={() => setSelectedCrypto(cc)}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        selectedCrypto?.id === cc.id
-                          ? 'bg-blue-500/15 border-blue-400 text-white'
-                          : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-blue-400/50'
-                      }`}
+                    <button key={cc.id} type="button" onClick={() => setSelectedCrypto(cc)}
+                      className={`p-3 rounded-xl border text-left transition-all ${selectedCrypto?.id === cc.id ? 'bg-blue-500/15 border-blue-400 text-white' : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-blue-400/50'}`}
                     >
                       <div className="flex items-center gap-2">
                         <Coins className={`w-4 h-4 ${selectedCrypto?.id === cc.id ? 'text-blue-400' : 'text-slate-500'}`} />
-                        <div>
-                          <p className="text-sm font-semibold">{cc.name}</p>
-                          <p className="text-[10px] text-slate-500">{cc.network}</p>
-                        </div>
+                        <div><p className="text-sm font-semibold">{cc.name}</p><p className="text-[10px] text-slate-500">{cc.network}</p></div>
                       </div>
-                      {cc.gasFee > 0 && (
-                        <p className="text-[9px] text-amberx-300 mt-1">Gas: {cc.gasFee}</p>
-                      )}
+                      {cc.gasFee > 0 && <p className="text-[9px] text-amberx-300 mt-1">Gas: {cc.gasFee}</p>}
                     </button>
                   ))}
                 </div>
               </div>
-
               {selectedCrypto && flow === 'deposit' && (
                 <div className="panel-inner p-4 rounded-xl bg-midnight-850 border border-borderline-900 space-y-2">
                   <h4 className="text-xs font-semibold text-blue-300 mb-2">Send to this Address</h4>
                   <div className="bg-slatepanel-800 rounded-lg p-3">
                     <p className="text-[10px] text-slate-500">Network: {selectedCrypto.network}</p>
                     <p className="text-xs font-mono text-white break-all mt-1">{selectedCrypto.walletAddress || '—'}</p>
-                    {selectedCrypto.gasFee > 0 && (
-                      <p className="text-[10px] text-amberx-300 mt-1">Network Gas Fee: {selectedCrypto.gasFee}</p>
-                    )}
+                    {selectedCrypto.gasFee > 0 && <p className="text-[10px] text-amberx-300 mt-1">Network Gas Fee: {selectedCrypto.gasFee}</p>}
                   </div>
                   <button type="button" onClick={() => copyToClipboard(selectedCrypto.walletAddress)} className="btn-ghost px-2 py-1 text-xs flex items-center gap-1">
                     <Copy className="w-3.5 h-3.5 text-blue-400" /> Copy Address
                   </button>
                 </div>
               )}
-
               {selectedCrypto && flow === 'withdrawal' && (
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">
                     Your {selectedCrypto.name} Wallet Address ({selectedCrypto.network})
                   </label>
-                  <input
-                    value={destination}
-                    onChange={(e) => setDestination(e.target.value)}
-                    placeholder={`Enter your ${selectedCrypto.network} wallet address`}
-                    className="input w-full py-3 font-mono text-xs"
-                  />
+                  <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder={`Enter your ${selectedCrypto.network} wallet address`} className="input w-full py-3 font-mono text-xs" />
                   {selectedCrypto.gasFee > 0 && (
                     <p className="text-[10px] text-amberx-300 mt-1 flex items-center gap-1">
                       <Info className="w-3 h-3" /> Gas fee of {selectedCrypto.gasFee} will be deducted from your withdrawal.
@@ -485,16 +475,10 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                   )}
                 </div>
               )}
-
               {flow === 'deposit' && (
                 <div>
                   <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Transaction Hash / Ref</label>
-                  <input
-                    value={utr}
-                    onChange={(e) => setUtr(e.target.value)}
-                    placeholder="Enter transaction hash (TXID)"
-                    className="input w-full py-3 font-mono text-xs"
-                  />
+                  <input value={utr} onChange={(e) => setUtr(e.target.value)} placeholder="Enter transaction hash (TXID)" className="input w-full py-3 font-mono text-xs" />
                 </div>
               )}
             </div>
