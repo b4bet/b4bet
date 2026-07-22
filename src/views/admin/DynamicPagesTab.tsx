@@ -83,9 +83,10 @@ export default function DynamicPagesTab() {
         )}
       </div>
 
+      {/* Modal — fixed to viewport, perfectly centered with safe top offset */}
       {editing && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 pointer-events-none">
-          <div className="pointer-events-auto w-full max-w-lg panel border border-borderline-900 bg-midnight-900 rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="w-full max-w-lg panel border border-borderline-900 bg-midnight-900 rounded-2xl shadow-2xl max-h-[85vh] overflow-y-auto">
             <div className="flex items-center justify-between px-4 py-3 border-b border-borderline-900">
               <h3 className="font-display font-bold text-white">
                 {editing.id ? 'Edit Page' : 'New Dynamic Page'}
