@@ -21,7 +21,7 @@ import {
 import { store } from '../lib/store';
 import { bus, Topics } from '../lib/bus';
 import type { TradingBetRecord } from '../lib/store';
-import { useBalance } from '../lib/hooks';
+import { useBalance, useAdminConfig } from '../lib/hooks';
 import { cms } from '../lib/cms';
 import { auth } from '../lib/auth';
 import { GameService } from '../lib/game-service';
@@ -80,7 +80,6 @@ const ASSETS: Asset[] = [
 const CATEGORIES = ['Crypto', 'Forex', 'Commodities', 'Stocks'] as const;
 const MAX_HISTORY = 1000;
 const TIME_OPTIONS: TimeOption[] = [1, 5, 10, 30];
-const PRESET_AMOUNTS = [100, 500, 1000, 5000];
 
 function fmtPrice(price: number, asset: Asset): string {
   if (price >= 1000) return price.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -487,6 +486,10 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
   }, [updatePrice, resolveBets]);
 
   const limits = store.getGameLimits('trading');
+  const adminCfg = useAdminConfig();
+  const presetAmounts = adminCfg.gameHandlers['trading']?.quickStakes?.length
+    ? adminCfg.gameHandlers['trading'].quickStakes
+    : [100, 500, 1000, 5000];
 
   const handlePlaceBet = useCallback((direction: BetDirection) => {
     const session = auth.getSession();
@@ -614,9 +617,9 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
             </button>
           </div>
           <div className="flex gap-1.5 mt-1.5">
-            {PRESET_AMOUNTS.map((a) => (
+            {presetAmounts.map((a) => (
               <button key={a} onClick={() => setBetAmountStr(String(Math.min(a, Math.floor(balance))))} className="flex-1 py-1 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 text-[10px] font-semibold transition-colors">
-                {a.toLocaleString()}
+                {a >= 1000 ? `${a / 1000}K` : a.toLocaleString()}
               </button>
             ))}
           </div>
