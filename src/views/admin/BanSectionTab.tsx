@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
-import { supabaseGetUsers, supabaseBanUser, supabaseUnbanUser, type SupabaseProfile } from '../../lib/supabaseIntegration';
+import { useEffect, useState, useCallback } from 'react';
+import {
+  supabaseGetUsers, supabaseBanUser, supabaseUnbanUser,
+  supabaseGetIpMultiAccounts,
+  type SupabaseProfile, type IpMultiAccount,
+} from '../../lib/supabaseIntegration';
 import { ShieldBan, Search, Unlock, AlertTriangle, Activity, ShieldAlert, ShieldCheck, RefreshCw } from 'lucide-react';
 
 // ─── Supabase-backed hooks ────────────────────────────────────────────────────
@@ -25,24 +29,50 @@ function useSupabaseUsers() {
   return { users, loading, reload: load, setUsers };
 }
 
+function useIpMultiAccounts() {
+  const [ipData, setIpData] = useState<IpMultiAccount[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await supabaseGetIpMultiAccounts();
+      setIpData(data);
+    } catch (e) {
+      console.error('useIpMultiAccounts load error:', e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  return { ipData, loading, reload: load };
+}
+
 export default function BanSectionTab() {
-  const { users, loading, reload, setUsers } = useSupabaseUsers();
+  const { users, loading: usersLoading, reload: reloadUsers, setUsers } = useSupabaseUsers();
+  const { ipData, loading: ipLoading, reload: reloadIp } = useIpMultiAccounts();
 
   const [search, setSearch] = useState('');
   const [banIdInput, setBanIdInput] = useState('');
   const [banReason, setBanReason] = useState('');
   const [unbanModal, setUnbanModal] = useState<SupabaseProfile | null>(null);
   const [ipSearch, setIpSearch] = useState('');
-  const [ipActionModal, setIpActionModal] = useState<{ user: SupabaseProfile; action: 'ban' | 'unban' } | null>(null);
+  const [ipActionModal, setIpActionModal] = useState<{ userId: string; username: string; action: 'ban' | 'unban' } | null>(null);
   const [ipActionReason, setIpActionReason] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  const loading = usersLoading || ipLoading;
 
   function flash(ok: boolean, msg: string) {
     if (ok) { setSuccess(msg); setError(''); }
     else { setError(msg); setSuccess(''); }
     setTimeout(() => { setSuccess(''); setError(''); }, 3000);
   }
+
+  function reload() { void reloadUsers(); void reloadIp(); }
 
   // Banned users list
   const bannedUsers = users.filter((u) => u.is_banned === true || u.is_active === false);
@@ -58,34 +88,13 @@ export default function BanSectionTab() {
     );
   });
 
-  // ─── IP Activity: group all users by registration_ip, show duplicates ────
-  const ipGroups = useMemo(() => {
-    const groups = new Map<string, SupabaseProfile[]>();
-    for (const u of users) {
-      const ip = u.registration_ip ?? 'unknown';
-      const arr = groups.get(ip) ?? [];
-      arr.push(u);
-      groups.set(ip, arr);
-    }
-    return Array.from(groups.entries())
-      .map(([ip, group]) => ({
-        ip,
-        users: [...group].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()),
-      }))
-      .filter((g) => g.users.length > 1) // only show IPs with multiple accounts
-      .sort((a, b) => b.users.length - a.users.length);
-  }, [users]);
-
-  const filteredIpGroups = ipGroups.filter((g) => {
+  // Filter IP activity
+  const filteredIpGroups = ipData.filter((g) => {
     const q = ipSearch.trim().toLowerCase();
     if (!q) return true;
-    if (g.ip.toLowerCase().includes(q)) return true;
-    return g.users.some(
-      (u) =>
-        (u.username ?? '').toLowerCase().includes(q) ||
-        (u.email ?? '').toLowerCase().includes(q) ||
-        (u.account_id ?? '').toLowerCase().includes(q),
-    );
+    if (g.ip_address.toLowerCase().includes(q)) return true;
+    return g.usernames.some((u) => u.toLowerCase().includes(q)) ||
+      g.account_ids.some((a) => a.toLowerCase().includes(q));
   });
 
   // ─── Ban by ID ────────────────────────────────────────────────────────────
@@ -127,16 +136,17 @@ export default function BanSectionTab() {
     if (!reason) { flash(false, 'A reason is required.'); return; }
     try {
       if (ipActionModal.action === 'ban') {
-        await supabaseBanUser(ipActionModal.user.id);
-        setUsers((prev) => prev.map((u) => u.id === ipActionModal.user.id ? { ...u, is_banned: true, is_active: false } : u));
-        flash(true, `${ipActionModal.user.username ?? ipActionModal.user.id} has been banned.`);
+        await supabaseBanUser(ipActionModal.userId);
+        setUsers((prev) => prev.map((u) => u.id === ipActionModal.userId ? { ...u, is_banned: true, is_active: false } : u));
+        flash(true, `${ipActionModal.username} has been banned.`);
       } else {
-        await supabaseUnbanUser(ipActionModal.user.id);
-        setUsers((prev) => prev.map((u) => u.id === ipActionModal.user.id ? { ...u, is_banned: false, is_active: true } : u));
-        flash(true, `${ipActionModal.user.username ?? ipActionModal.user.id} has been unbanned.`);
+        await supabaseUnbanUser(ipActionModal.userId);
+        setUsers((prev) => prev.map((u) => u.id === ipActionModal.userId ? { ...u, is_banned: false, is_active: true } : u));
+        flash(true, `${ipActionModal.username} has been unbanned.`);
       }
       setIpActionModal(null);
       setIpActionReason('');
+      void reloadIp();
     } catch {
       flash(false, `Failed to ${ipActionModal.action} user.`);
     }
@@ -150,7 +160,7 @@ export default function BanSectionTab() {
           <ShieldBan className="w-6 h-6 text-coral-400" />
           <div>
             <h1 className="font-display font-bold text-xl text-white">Ban Section</h1>
-            <p className="text-xs text-slate-500">{bannedUsers.length} banned user{bannedUsers.length !== 1 ? 's' : ''} · {ipGroups.length} multi-account IP{ipGroups.length !== 1 ? 's' : ''}</p>
+            <p className="text-xs text-slate-500">{bannedUsers.length} banned user{bannedUsers.length !== 1 ? 's' : ''} · {ipData.length} multi-account IP{ipData.length !== 1 ? 's' : ''}</p>
           </div>
         </div>
         <button onClick={reload} disabled={loading} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white text-xs font-semibold disabled:opacity-50">
@@ -206,8 +216,8 @@ export default function BanSectionTab() {
           <input className="input pl-10" placeholder="Search banned users…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <div className="space-y-2">
-          {loading && <p className="text-xs text-slate-500 text-center py-4">Loading users…</p>}
-          {!loading && filtered.length === 0 && (
+          {usersLoading && <p className="text-xs text-slate-500 text-center py-4">Loading users…</p>}
+          {!usersLoading && filtered.length === 0 && (
             <p className="text-xs text-slate-500 text-center py-4">{search ? 'No banned users match your search.' : 'No banned users.'}</p>
           )}
           {filtered.map((u) => (
@@ -221,7 +231,7 @@ export default function BanSectionTab() {
                   <span className="text-[9px] bg-coral-500/15 text-coral-300 px-1.5 py-0.5 rounded-full border border-coral-500/30">Banned</span>
                 </div>
                 <p className="text-[11px] text-slate-500 mt-0.5">{u.email ?? '—'} · ID: {u.account_id ?? u.id.slice(0, 8)}</p>
-                {u.registration_ip && <p className="text-[10px] text-slate-600 mt-0.5">IP: {u.registration_ip}</p>}
+                {u.registration_ip && <p className="text-[10px] text-slate-600 mt-0.5">Reg IP: {u.registration_ip}</p>}
               </div>
               <button
                 onClick={() => setUnbanModal(u)}
@@ -251,7 +261,7 @@ export default function BanSectionTab() {
         </div>
       )}
 
-      {/* ── IP Activity ──────────────────────────────────────────────────── */}
+      {/* ── IP Activity (from ip_logs table) ─────────────────────────────── */}
       <div className="panel p-4 space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
@@ -259,83 +269,95 @@ export default function BanSectionTab() {
               <Activity className="w-4 h-4 text-neon-300" /> IP Activity
             </h2>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Accounts grouped by registration IP — only IPs with <span className="text-white font-semibold">2+ accounts</span> are shown.
+              Accounts grouped by login/signup IP — only IPs with <span className="text-white font-semibold">2+ accounts</span> are shown.
             </p>
           </div>
           <span className="text-[10px] bg-neon-500/15 text-neon-300 px-2 py-0.5 rounded-full border border-neon-500/30">
-            {ipGroups.length} multi-account IP{ipGroups.length !== 1 ? 's' : ''}
+            {ipData.length} multi-account IP{ipData.length !== 1 ? 's' : ''}
           </span>
         </div>
 
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-          <input className="input pl-10" placeholder="Search by IP, username, email…" value={ipSearch} onChange={(e) => setIpSearch(e.target.value)} />
+          <input className="input pl-10" placeholder="Search by IP, username, account ID…" value={ipSearch} onChange={(e) => setIpSearch(e.target.value)} />
         </div>
 
-        {loading && <p className="text-xs text-slate-500 text-center py-4">Loading…</p>}
-        {!loading && filteredIpGroups.length === 0 && (
+        {ipLoading && <p className="text-xs text-slate-500 text-center py-4">Loading…</p>}
+        {!ipLoading && filteredIpGroups.length === 0 && (
           <p className="text-xs text-slate-500 text-center py-4">
-            {ipSearch ? 'No IP activity matches your search.' : 'No multi-account IPs detected yet.'}
+            {ipSearch ? 'No IP activity matches your search.' : 'No multi-account IPs detected yet. IPs are tracked on user login & signup.'}
           </p>
         )}
 
         <div className="space-y-3">
-          {filteredIpGroups.map((group) => (
-            <div key={group.ip} className="bg-slatepanel-800 rounded-xl border border-borderline-800 overflow-hidden">
-              {/* IP header */}
-              <div className="flex items-center justify-between px-3 py-2 bg-slatepanel-700 border-b border-borderline-900">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">IP</span>
-                  <span className="font-mono text-sm text-white font-bold">{group.ip}</span>
+          {filteredIpGroups.map((group) => {
+            const userCount = Number(group.user_count);
+            return (
+              <div key={group.ip_address} className="bg-slatepanel-800 rounded-xl border border-borderline-800 overflow-hidden">
+                {/* IP header */}
+                <div className="flex items-center justify-between px-3 py-2 bg-slatepanel-700 border-b border-borderline-900">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">IP</span>
+                    <span className="font-mono text-sm text-white font-bold">{group.ip_address}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-slate-500">Last seen: {new Date(group.last_seen).toLocaleString()}</span>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${userCount >= 3 ? 'bg-coral-500/20 border-coral-500/30 text-coral-300' : 'bg-amberx-500/20 border-amberx-500/30 text-amberx-300'}`}>
+                      {userCount} accounts
+                    </span>
+                  </div>
                 </div>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold ${group.users.length >= 3 ? 'bg-coral-500/20 border-coral-500/30 text-coral-300' : 'bg-amberx-500/20 border-amberx-500/30 text-amberx-300'}`}>
-                  {group.users.length} accounts
-                </span>
-              </div>
 
-              {/* Users under this IP */}
-              <div className="divide-y divide-borderline-900/50">
-                {group.users.map((u) => {
-                  const isBanned = u.is_banned === true || u.is_active === false;
-                  return (
-                    <div key={u.id} className="flex items-center gap-3 px-3 py-2.5">
-                      <div className={`w-7 h-7 rounded-full grid place-items-center flex-shrink-0 ${isBanned ? 'bg-coral-500/20' : 'bg-emeraldwin-500/15'}`}>
-                        {isBanned
-                          ? <ShieldBan className="w-3.5 h-3.5 text-coral-400" />
-                          : <ShieldCheck className="w-3.5 h-3.5 text-emeraldwin-400" />}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-sm font-semibold text-white">{u.username ?? '—'}</span>
-                          <span className={`text-[9px] px-1.5 py-0.5 rounded-full border ${isBanned ? 'bg-coral-500/15 border-coral-500/30 text-coral-300' : 'bg-emeraldwin-500/10 border-emeraldwin-500/20 text-emeraldwin-400'}`}>
-                            {isBanned ? 'Banned' : 'Active'}
-                          </span>
+                {/* Users under this IP */}
+                <div className="divide-y divide-borderline-900/50">
+                  {group.usernames.map((username, idx) => {
+                    const userId = group.user_ids[idx];
+                    const accountId = group.account_ids[idx];
+                    const profile = users.find((u) => u.id === userId);
+                    const isBanned = profile ? (profile.is_banned === true || profile.is_active === false) : false;
+
+                    return (
+                      <div key={userId ?? idx} className="flex items-center gap-3 px-3 py-2.5">
+                        <div className={`w-7 h-7 rounded-full grid place-items-center flex-shrink-0 ${isBanned ? 'bg-coral-500/20' : 'bg-emeraldwin-500/15'}`}>
+                          {isBanned
+                            ? <ShieldBan className="w-3.5 h-3.5 text-coral-400" />
+                            : <ShieldCheck className="w-3.5 h-3.5 text-emeraldwin-400" />}
                         </div>
-                        <p className="text-[10px] text-slate-500">
-                          {u.email ?? '—'} · #{u.account_id ?? '—'} · Registered {new Date(u.created_at).toLocaleString()}
-                        </p>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-semibold text-white">{username ?? '—'}</span>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded-full border ${isBanned ? 'bg-coral-500/15 border-coral-500/30 text-coral-300' : 'bg-emeraldwin-500/10 border-emeraldwin-500/20 text-emeraldwin-400'}`}>
+                              {isBanned ? 'Banned' : 'Active'}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-slate-500">
+                            #{accountId ?? '—'} · ID: {userId?.slice(0, 8) ?? '—'}
+                          </p>
+                        </div>
+                        {userId && (
+                          isBanned ? (
+                            <button
+                              onClick={() => { setIpActionModal({ userId, username: username ?? userId, action: 'unban' }); setIpActionReason(''); }}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-[11px] font-semibold hover:bg-emeraldwin-500/25 transition-colors flex-shrink-0"
+                            >
+                              Unban
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => { setIpActionModal({ userId, username: username ?? userId, action: 'ban' }); setIpActionReason(''); }}
+                              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-coral-500/15 border border-coral-500/30 text-coral-300 text-[11px] font-semibold hover:bg-coral-500/25 transition-colors flex-shrink-0"
+                            >
+                              Ban
+                            </button>
+                          )
+                        )}
                       </div>
-                      {isBanned ? (
-                        <button
-                          onClick={() => { setIpActionModal({ user: u, action: 'unban' }); setIpActionReason(''); }}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emeraldwin-500/15 border border-emeraldwin-500/30 text-emeraldwin-300 text-[11px] font-semibold hover:bg-emeraldwin-500/25 transition-colors flex-shrink-0"
-                        >
-                          Unban
-                        </button>
-                      ) : (
-                        <button
-                          onClick={() => { setIpActionModal({ user: u, action: 'ban' }); setIpActionReason(''); }}
-                          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-coral-500/15 border border-coral-500/30 text-coral-300 text-[11px] font-semibold hover:bg-coral-500/25 transition-colors flex-shrink-0"
-                        >
-                          Ban
-                        </button>
-                      )}
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
@@ -349,7 +371,7 @@ export default function BanSectionTab() {
             </div>
             <p className="text-sm text-slate-400">
               You are {ipActionModal.action === 'ban' ? 'banning' : 'unbanning'}{' '}
-              <span className="text-white font-semibold">{ipActionModal.user.username}</span>. Please provide a reason.
+              <span className="text-white font-semibold">{ipActionModal.username}</span>. Please provide a reason.
             </p>
             <input
               type="text"
