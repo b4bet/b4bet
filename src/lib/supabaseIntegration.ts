@@ -50,28 +50,14 @@ export interface SupabaseProfile {
   total_deposit: number;
   total_withdrawal: number;
   vip_level: number;
-  /** is_admin is read-only — intentionally not exposed to any edit UI */
   is_admin: boolean;
-  is_active: boolean;
-  is_banned: boolean;
-  account_id: string;
-  referral_code: string | null;
-  signup_bonus_granted: boolean;
   created_at: string;
   updated_at: string;
   email?: string;
-}
-
-export interface UserUpdatePayload {
-  username?: string;
-  display_name?: string;
-  phone?: string;
-  email?: string;
-  balance?: number;
-  vip_level?: number;
-  is_active?: boolean;
-  is_banned?: boolean;
   account_id?: string;
+  is_banned?: boolean;
+  is_active?: boolean;
+  registration_ip?: string | null;
 }
 
 export async function supabaseGetUsers(): Promise<SupabaseProfile[]> {
@@ -87,28 +73,28 @@ export async function supabaseUpdateBalance(userId: string, newBalance: number):
   if (error) throw error;
 }
 
-/**
- * Update all editable user fields at once.
- * NOTE: is_admin is deliberately excluded — it can only be changed via direct DB access.
- */
-export async function supabaseUpdateUserFull(userId: string, payload: UserUpdatePayload): Promise<void> {
-  const { error } = await supabase.rpc('admin_update_user_full', {
-    p_user_id:     userId,
-    p_username:    payload.username     ?? null,
-    p_display_name: payload.display_name ?? null,
-    p_phone:       payload.phone        ?? null,
-    p_email:       payload.email        ?? null,
-    p_balance:     payload.balance      != null ? payload.balance : null,
-    p_vip_level:   payload.vip_level    != null ? payload.vip_level : null,
-    p_is_active:   payload.is_active    != null ? payload.is_active : null,
-    p_is_banned:   payload.is_banned    != null ? payload.is_banned : null,
-    p_account_id:  payload.account_id   ?? null,
-  });
+export async function supabaseToggleAdmin(userId: string, isAdmin: boolean): Promise<void> {
+  const { error } = await supabase.rpc('admin_toggle_user_admin', { p_user_id: userId, p_is_admin: isAdmin });
   if (error) throw error;
 }
 
-// supabaseToggleAdmin intentionally removed — admin status must only be
-// changed via direct database access, never through the admin panel UI.
+/** Ban a user by setting is_banned=true and is_active=false in profiles */
+export async function supabaseBanUser(userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ is_banned: true, is_active: false })
+    .eq('id', userId);
+  if (error) throw error;
+}
+
+/** Unban a user by setting is_banned=false and is_active=true in profiles */
+export async function supabaseUnbanUser(userId: string): Promise<void> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({ is_banned: false, is_active: true })
+    .eq('id', userId);
+  if (error) throw error;
+}
 
 // ---- Transactions ----
 export interface SupabaseTransaction {
@@ -271,7 +257,13 @@ export async function supabaseDeleteBanner(id: string): Promise<void> {
 // ---- Support Tickets ----
 export interface SupabaseTicket {
   id: string; user_id: string | null; subject: string; message: string;
-  status: string; admin_reply: string | null; created_at: string; updated_at: string;
+  status: string; priority: string; created_at: string; updated_at: string;
+  replies?: SupabaseTicketReply[];
+}
+
+export interface SupabaseTicketReply {
+  id: string; ticket_id: string; sender: string;
+  message: string; created_at: string;
 }
 
 export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
@@ -282,53 +274,12 @@ export async function supabaseGetTickets(): Promise<SupabaseTicket[]> {
   } catch (e) { console.error('[supabase] getTickets error:', e); return []; }
 }
 
-export async function supabaseReplyTicket(ticketId: string, reply: string): Promise<void> {
-  const { error } = await supabase.rpc('admin_reply_ticket', { p_ticket_id: ticketId, p_reply: reply });
+export async function supabaseReplyToTicket(ticketId: string, message: string): Promise<void> {
+  const { error } = await supabase.rpc('admin_reply_ticket', { p_ticket_id: ticketId, p_message: message });
   if (error) throw error;
 }
 
 export async function supabaseUpdateTicketStatus(ticketId: string, status: string): Promise<void> {
   const { error } = await supabase.rpc('admin_update_ticket_status', { p_ticket_id: ticketId, p_status: status });
   if (error) throw error;
-}
-
-// ---- Payment Methods ----
-export interface SupabasePaymentMethod {
-  id: string; name: string; type: string; min_amount: number; max_amount: number;
-  instructions: string | null; is_active: boolean; sort_order: number;
-  metadata: Record<string, unknown>; created_at: string;
-}
-
-export async function supabaseGetPaymentMethods(): Promise<SupabasePaymentMethod[]> {
-  try {
-    const { data, error } = await supabase.rpc('admin_get_payment_methods');
-    if (error) throw error;
-    return (data ?? []) as SupabasePaymentMethod[];
-  } catch (e) { console.error('[supabase] getPaymentMethods error:', e); return []; }
-}
-
-// ---- Bets ----
-export interface SupabaseBet {
-  id: string;
-  user_id: string | null;
-  bet_amount: number;
-  win_amount: number | null;
-  multiplier: number | null;
-  status: string;
-  bet_details: Record<string, unknown> | null;
-  placed_at: string | null;
-  resolved_at: string | null;
-  created_at: string;
-}
-
-export async function supabaseGetBets(limit = 500): Promise<SupabaseBet[]> {
-  try {
-    const { data, error } = await supabase
-      .from('bets')
-      .select('id, user_id, bet_amount, win_amount, multiplier, status, bet_details, placed_at, resolved_at, created_at')
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (error) throw error;
-    return (data ?? []) as SupabaseBet[];
-  } catch (e) { console.error('[supabase] getBets error:', e); return []; }
 }
