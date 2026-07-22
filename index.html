@@ -14,26 +14,20 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
-      html, body {
-        margin: 0;
-        padding: 0;
-        background: #020617;
-        min-height: 100%;
-      }
-      #root {
-        min-height: 100vh;
-      }
+      html, body { margin: 0; padding: 0; background: #020617; min-height: 100%; }
+      #root { min-height: 100vh; }
     </style>
   </head>
   <body style="margin:0;padding:0;background:#020617;">
     <div id="root"></div>
 
     <!--
-      MAINTENANCE GUARD — runs before React.
-      React is loaded only AFTER we confirm maintenance is OFF.
-      If ON: inject maintenance HTML into #root, never load React.
-      Polls every 8s + on tab-visible so long-lived tabs update instantly.
+      React script is kept here so Vite can hash it correctly for production.
+      It waits for window.__b4betReady or the 'b4bet:ready' event before mounting.
+      The maintenance guard below sets one of those signals after checking Supabase.
     -->
+    <script type="module" src="/src/main.tsx"></script>
+
     <script>
       (function () {
         var SUPA_URL = 'https://qbuanfugtqiljlkenlqo.supabase.co';
@@ -42,24 +36,23 @@
         // Never block admin route
         var loc = window.location.pathname + window.location.hash;
         if (loc.indexOf('aryan') !== -1) {
-          loadReact();
+          signalReady();
           return;
         }
 
-        var reactLoaded = false;
         var maintShown = false;
+        var reactSignalled = false;
 
-        function loadReact() {
-          if (reactLoaded) return;
-          reactLoaded = true;
-          var s = document.createElement('script');
-          s.type = 'module';
-          s.src = '/src/main.tsx';
-          document.body.appendChild(s);
+        function signalReady() {
+          if (reactSignalled) return;
+          reactSignalled = true;
+          window.__b4betReady = true;
+          window.dispatchEvent(new Event('b4bet:ready'));
         }
 
         function renderMaintenance(title, message, eta) {
           maintShown = true;
+          // Do NOT signal React — maintenance page takes over
           var root = document.getElementById('root');
           if (!root) return;
           root.innerHTML = [
@@ -87,21 +80,24 @@
           )
           .then(function(r) { return r.json(); })
           .then(function(rows) {
-            if (!rows || !rows.length) { if (isInitial) loadReact(); return; }
+            if (!rows || !rows.length) { if (isInitial) signalReady(); return; }
             var raw = rows[0].value;
             var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
             if (cfg && cfg.enabled) {
               renderMaintenance(cfg.title, cfg.message, cfg.estimated_time);
             } else {
               if (maintShown) {
+                // Maintenance just turned OFF — reload to get full app
                 window.location.reload();
-              } else if (isInitial) {
-                loadReact();
+              } else {
+                // No maintenance — let React mount
+                if (isInitial) signalReady();
               }
             }
           })
           .catch(function() {
-            if (isInitial) loadReact();
+            // On network error, fail open — let React mount
+            if (isInitial) signalReady();
           });
         }
 
