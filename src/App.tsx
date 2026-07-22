@@ -29,12 +29,20 @@ import SupportChat from './components/SupportChat';
 import AuthModal, { type AuthModalMode } from './components/AuthModal';
 import AdminSupportNotification from './components/AdminSupportNotification';
 import BanPopup from './components/BanPopup';
+import MaintenancePage from './components/MaintenancePage';
 import { bus } from './lib/bus';
 import { crashEngine } from './lib/crashEngine';
 import { startAllPersistentGameEngines } from './lib/persistentGameEngine';
 import { useStaffSession } from './lib/cmsHooks';
 import { auth } from './lib/auth';
 import { supabase } from './integrations/supabase/client';
+
+interface MaintenanceConfig {
+  enabled: boolean;
+  title: string;
+  message: string;
+  estimated_time: string;
+}
 
 export default function App() {
   const staffSession = useStaffSession();
@@ -54,6 +62,7 @@ export default function App() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
 
   useEffect(() => {
     // Initialize login state from current session
@@ -70,6 +79,46 @@ export default function App() {
       }
     });
     return () => subscription.unsubscribe();
+  }, []);
+
+  // Load maintenance mode from Supabase and subscribe to realtime changes
+  useEffect(() => {
+    const loadMaintenance = async () => {
+      try {
+        const { data } = await supabase
+          .from('settings')
+          .select('value')
+          .eq('key', 'maintenance_mode')
+          .single();
+        if (data?.value) {
+          const val = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+          setMaintenance(val as MaintenanceConfig);
+        }
+      } catch {
+        // settings table may not have this key yet — ignore
+      }
+    };
+
+    void loadMaintenance();
+
+    // Realtime subscription — updates maintenance state when admin toggles it
+    const channel = supabase
+      .channel('maintenance_mode_watch')
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'settings', filter: 'key=eq.maintenance_mode' },
+        (payload) => {
+          if (payload.new?.value) {
+            const val = typeof payload.new.value === 'string'
+              ? JSON.parse(payload.new.value)
+              : payload.new.value;
+            setMaintenance(val as MaintenanceConfig);
+          }
+        },
+      )
+      .subscribe();
+
+    return () => { void supabase.removeChannel(channel); };
   }, []);
 
   useEffect(() => {
@@ -95,6 +144,21 @@ export default function App() {
 
   const showHeader = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
   const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
+
+  // Show maintenance page to non-admin users when maintenance mode is enabled
+  const isAdminRoute = route === 'admin';
+  const isStaffLoggedIn = !!staffSession;
+  const showMaintenance = maintenance?.enabled && !isAdminRoute && !isStaffLoggedIn;
+
+  if (showMaintenance) {
+    return (
+      <MaintenancePage
+        title={maintenance?.title}
+        message={maintenance?.message}
+        estimatedTime={maintenance?.estimated_time}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slatepanel-950 text-white">
