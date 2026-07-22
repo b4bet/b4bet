@@ -360,6 +360,28 @@ class Store {
   }
 
   // ---- Admin Config ----
+
+  /**
+   * Load per-game min/max limits from the `games` table and merge them into
+   * perGameLimits so that getGameLimits() always reflects what the admin set
+   * in GameSettingsTab (which writes to `games`, not just admin_config).
+   */
+  async loadGameLimitsFromGamesTable() {
+    try {
+      const { data } = await supabase.from('games').select('slug, min_bet, max_bet, is_active');
+      if (!data) return;
+      const rows = data as { slug: string; min_bet: number; max_bet: number; is_active: boolean }[];
+      const next = { ...this.admin.perGameLimits };
+      for (const row of rows) {
+        if (row.slug && typeof row.min_bet === 'number' && typeof row.max_bet === 'number') {
+          next[row.slug] = { min: row.min_bet, max: row.max_bet };
+        }
+      }
+      this.admin = { ...this.admin, perGameLimits: next };
+      bus.emit(Topics.AdminConfig, this.admin);
+    } catch { /* ignore */ }
+  }
+
   async loadAdminConfigFromSupabase() {
     try {
       const { data } = await supabase.rpc('admin_get_settings');
@@ -406,6 +428,10 @@ class Store {
         }
       }
     } catch { /* ignore */ }
+
+    // Always overlay limits from games table — this is the source of truth for
+    // per-game min/max set via GameSettingsTab.
+    await this.loadGameLimitsFromGamesTable();
   }
 
   setAdmin(patch: Partial<AdminConfig>) {
