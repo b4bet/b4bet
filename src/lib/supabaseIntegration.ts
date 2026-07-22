@@ -154,7 +154,6 @@ export async function supabaseUpdateUserFull(userId: string, payload: UserUpdate
 
 /**
  * Ban a user — uses admin_ban_user RPC which also records the ban in the bans table.
- * Falls back to direct profile update if RPC fails.
  */
 export async function supabaseBanUser(userId: string, reason = 'Banned by admin'): Promise<void> {
   const { error } = await supabase.rpc('admin_ban_user', {
@@ -173,6 +172,32 @@ export async function supabaseUnbanUser(userId: string, reason = 'Unbanned by ad
     p_reason: reason,
   });
   if (error) throw error;
+}
+
+// ---- Bans history ----
+export interface SupabaseBan {
+  id: string;
+  user_id: string | null;
+  username: string;
+  email: string;
+  phone: string;
+  account_id: string;
+  ip: string;
+  ban_reason: string;
+  banned_by: string;
+  ban_date: string;
+  unban_date: string | null;
+  unban_reason: string | null;
+  is_active_ban: boolean;
+}
+
+/** Returns full ban history from the bans table (all bans + unbans) */
+export async function supabaseGetBans(): Promise<SupabaseBan[]> {
+  try {
+    const { data, error } = await supabase.rpc('admin_get_bans');
+    if (error) throw error;
+    return (data ?? []) as SupabaseBan[];
+  } catch (e) { console.error('[supabase] getBans error:', e); return []; }
 }
 
 // ---- Bets ----
