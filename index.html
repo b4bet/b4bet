@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="background:#020617;margin:0;padding:0;">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
@@ -13,13 +13,23 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #020617;
+        min-height: 100%;
+      }
+      #root {
+        min-height: 100vh;
+      }
+    </style>
   </head>
-  <body>
+  <body style="margin:0;padding:0;background:#020617;">
     <div id="root"></div>
 
     <!--
       MAINTENANCE GUARD — runs before React.
-      Fetches maintenance status synchronously-style using async IIFE.
       React is loaded only AFTER we confirm maintenance is OFF.
       If ON: inject maintenance HTML into #root, never load React.
       Polls every 8s + on tab-visible so long-lived tabs update instantly.
@@ -53,7 +63,7 @@
           var root = document.getElementById('root');
           if (!root) return;
           root.innerHTML = [
-            '<div style="min-height:100vh;background:#020617;display:flex;align-items:center;justify-content:center;font-family:Inter,sans-serif;padding:16px;">',
+            '<div style="min-height:100vh;width:100%;background:#020617;display:flex;align-items:center;justify-content:center;font-family:Inter,sans-serif;padding:16px;box-sizing:border-box;">',
             '<div style="max-width:420px;width:100%;text-align:center;">',
             '<div style="width:80px;height:80px;border-radius:50%;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.4);display:flex;align-items:center;justify-content:center;margin:0 auto 24px;">',
             '<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
@@ -66,7 +76,7 @@
             '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4b 1s infinite 150ms;display:inline-block;"></span>',
             '<span style="width:8px;height:8px;border-radius:50%;background:#f59e0b;animation:b4b 1s infinite 300ms;display:inline-block;"></span>',
             '</div></div></div>',
-            '<style>@keyframes b4b{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}</style>',
+            '<style>*{box-sizing:border-box;}html,body{margin:0;padding:0;background:#020617;}@keyframes b4b{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}</style>',
           ].join('');
         }
 
@@ -81,31 +91,22 @@
             var raw = rows[0].value;
             var cfg = typeof raw === 'string' ? JSON.parse(raw) : raw;
             if (cfg && cfg.enabled) {
-              // Show maintenance page — do NOT load React
               renderMaintenance(cfg.title, cfg.message, cfg.estimated_time);
             } else {
               if (maintShown) {
-                // Was showing maint, now OFF — reload to get full app
                 window.location.reload();
               } else if (isInitial) {
-                // No maintenance — load React normally
                 loadReact();
               }
             }
           })
           .catch(function() {
-            // On error, fail open — let React load
             if (isInitial) loadReact();
           });
         }
 
-        // Initial check — React only loads after this resolves
         check(true);
-
-        // Poll every 8s for long-lived tabs
         setInterval(function() { check(false); }, 8000);
-
-        // Instant update when user switches back to this tab
         document.addEventListener('visibilitychange', function() {
           if (document.visibilityState === 'visible') check(false);
         });
