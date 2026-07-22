@@ -138,10 +138,10 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
     : '…';
 
   return (
-    <div className="flex flex-col h-full w-full bg-slatepanel-950 select-none">
+    <div className="flex flex-col h-full w-full bg-slatepanel-950 select-none px-3">
 
       {/* ── Top header row ── */}
-      <div className="flex items-center justify-between px-3 pt-2 pb-1 flex-shrink-0">
+      <div className="flex items-center justify-between pt-2 pb-1 flex-shrink-0">
 
         {/* Left: JetX brand name — text-2xl */}
         <div className="flex items-center gap-2 min-w-0">
@@ -178,7 +178,7 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
       <CrashSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} buttonRef={settingsButtonRef} />
 
       {/* ── Recent Crash History Bar ── */}
-      <div className="flex flex-col px-2 pb-1 flex-shrink-0 gap-0.5">
+      <div className="flex flex-col pb-1 flex-shrink-0 gap-0.5">
         <div
           className="flex items-center gap-1 flex-nowrap overflow-x-auto"
           style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
