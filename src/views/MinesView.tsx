@@ -269,7 +269,7 @@ export default function MinesView() {
   const isDisabled = loading;
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <div className="space-y-4 animate-fade-in px-3">
       {/* pt-4 gives breathing room from the main app header */}
       <div className="flex items-center gap-2 pt-4">
         <div className="w-9 h-9 rounded-xl bg-coral-500/20 border border-coral-500/40 grid place-items-center">
