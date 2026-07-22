@@ -27,18 +27,18 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const [utr, setUtr] = useState('');
   const [destination, setDestination] = useState('');
   const [details, setDetails] = useState('');
-  // Amount-limit alert popup (min/max violation). Auto-dismisses after exactly 2 seconds.
-  const [limitAlert, setLimitAlert] = useState<string | null>(null);
-  const limitAlertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Validation alert popup — shown above all overlays. Auto-dismisses after 2 s.
+  const [alertPopup, setAlertPopup] = useState<{ title: string; body: string } | null>(null);
+  const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showLimitAlert = (message: string) => {
-    if (limitAlertTimer.current) clearTimeout(limitAlertTimer.current);
-    setLimitAlert(message);
-    limitAlertTimer.current = setTimeout(() => setLimitAlert(null), 2000);
+  const showAlert = (title: string, body: string) => {
+    if (alertTimer.current) clearTimeout(alertTimer.current);
+    setAlertPopup({ title, body });
+    alertTimer.current = setTimeout(() => setAlertPopup(null), 2000);
   };
 
   useEffect(() => () => {
-    if (limitAlertTimer.current) clearTimeout(limitAlertTimer.current);
+    if (alertTimer.current) clearTimeout(alertTimer.current);
   }, []);
 
   useEffect(() => {
@@ -84,22 +84,22 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     const limits = getEffectiveLimits();
 
     if (!amt || amt <= 0) {
-      cms.toast({ title: 'Enter amount', body: 'Amount must be greater than 0.', kind: 'alert' });
+      showAlert('Enter Amount', 'Amount must be greater than 0.');
       return;
     }
 
     // Validate min/max against the amount configured in the payment method settings.
     if (limits.min > 0 && amt < limits.min) {
-      showLimitAlert(`Minimum ${flow} amount is ${store.currency}${limits.min}.`);
+      showAlert('Invalid Amount', `Minimum ${flow} amount is ${store.currency}${limits.min}.`);
       return;
     }
     if (limits.max > 0 && limits.max < Infinity && amt > limits.max) {
-      showLimitAlert(`Maximum ${flow} amount is ${store.currency}${limits.max}.`);
+      showAlert('Invalid Amount', `Maximum ${flow} amount is ${store.currency}${limits.max}.`);
       return;
     }
 
     if (flow === 'withdrawal' && amt > balance) {
-      cms.toast({ title: 'Insufficient balance', body: `Available: ${store.currency}${balance.toFixed(2)}`, kind: 'alert' });
+      showAlert('Insufficient Balance', `Available: ${store.currency}${balance.toFixed(2)}`);
       return;
     }
 
@@ -109,25 +109,25 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
     if (selected.kind === 'upi') {
       if (flow === 'withdrawal' && !destination.trim()) {
-        cms.toast({ title: 'UPI ID required', body: 'Enter your UPI ID.', kind: 'alert' });
+        showAlert('UPI ID Required', 'Enter your UPI ID.');
         return;
       }
       destLabel = selected.label;
       if (destination.trim()) destDetails = { ...destDetails, upiId: destination.trim() };
     } else if (selected.kind === 'bank') {
       if (flow === 'withdrawal' && !destination.trim()) {
-        cms.toast({ title: 'Account details required', body: 'Enter your bank account number.', kind: 'alert' });
+        showAlert('Account Details Required', 'Enter your bank account number.');
         return;
       }
       destLabel = selected.label;
       if (destination.trim()) destDetails = { ...destDetails, accountNumber: destination.trim(), ifsc: details.trim() };
     } else if (selected.kind === 'crypto') {
       if (!selectedCrypto) {
-        cms.toast({ title: 'Select currency', body: 'Please select a crypto currency.', kind: 'alert' });
+        showAlert('Select Currency', 'Please select a crypto currency.');
         return;
       }
       if (flow === 'withdrawal' && !destination.trim()) {
-        cms.toast({ title: 'Wallet address required', body: 'Enter your withdrawal wallet address.', kind: 'alert' });
+        showAlert('Wallet Address Required', 'Enter your withdrawal wallet address.');
         return;
       }
       destLabel = `${selected.label} - ${selectedCrypto.name} (${selectedCrypto.network})`;
@@ -142,7 +142,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
     if (flow === 'deposit') {
       if (!utr.trim()) {
-        cms.toast({ title: 'UTR/Ref required', body: 'Enter your UTR / Transaction Reference ID.', kind: 'alert' });
+        showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.');
         return;
       }
       cms.submitDeposit(user, amt, destLabel, utr.trim(), JSON.stringify(destDetails), session?.userId);
@@ -493,13 +493,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
         </button>
       </form>
 
-      {/* Amount-limit alert popup — auto-dismisses after exactly 2 seconds */}
-      {limitAlert && (
+      {/* Validation alert popup — z-[300] ensures it appears above all deposit overlays */}
+      {alertPopup && (
         <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 px-6">
           <div className="panel border border-coral-500/50 bg-midnight-900/95 backdrop-blur-xl px-6 py-5 max-w-xs w-full text-center shadow-2xl animate-fade-in">
             <AlertTriangle className="w-8 h-8 text-coral-300 mx-auto mb-2" />
-            <p className="font-display font-bold text-white">Invalid Amount</p>
-            <p className="text-sm text-slate-300 mt-1">{limitAlert}</p>
+            <p className="font-display font-bold text-white">{alertPopup.title}</p>
+            <p className="text-sm text-slate-300 mt-1">{alertPopup.body}</p>
           </div>
         </div>
       )}
