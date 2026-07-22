@@ -21,7 +21,6 @@ const BETTING_DURATION = 15;
 const YEAR_PREFIX      = 2026;
 const PAYOUTS: Record<BetChoice, number> = { sun: 1, moon: 1, tie: 8 };
 
-// Quick stakes — clicking ADDS the value to current bet amount
 const QUICK_STAKE_AMOUNTS = [100, 200, 300, 500];
 
 function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: number }) {
@@ -69,7 +68,7 @@ function BetButton({
         'flex flex-col items-center justify-center gap-1 rounded-2xl border-2 transition-all duration-200 py-3 px-2 flex-1',
         'active:scale-95',
         disabled ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer',
-        selected ? 'border-opacity-100 scale-[1.04]' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.07]',
+        selected ? 'scale-[1.04]' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.07]',
       ].join(' ')}
       style={{
         borderColor:     selected ? glowColor : undefined,
@@ -83,7 +82,10 @@ function BetButton({
   );
 }
 
-/* Full-screen result overlay — covers entire viewport so main game stays hidden */
+/**
+ * Result overlay — covers ONLY the game card (absolute inset-0 inside relative parent).
+ * History sections below remain fully visible.
+ */
 function ResultOverlay({
   visible, result, won, payout, choice,
 }: {
@@ -95,12 +97,13 @@ function ResultOverlay({
   const labels: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
 
   return (
-    <div className="fixed inset-0 z-[999] flex flex-col items-center justify-center bg-black/85 backdrop-blur-md">
-      <div className="flex flex-col items-center gap-5 px-8 py-10 rounded-3xl bg-slatepanel-900/95 border border-borderline-900 shadow-2xl max-w-xs w-full mx-4">
+    /* absolute inset-0 — fills exactly the game card box, rounded to match card */
+    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-3xl overflow-hidden bg-black/80 backdrop-blur-sm">
+      <div className="flex flex-col items-center gap-4 px-6 py-8 w-full">
         <img
           src={images[result]}
           alt={labels[result]}
-          className="w-24 h-24 object-contain drop-shadow-2xl"
+          className="w-20 h-20 object-contain drop-shadow-2xl"
         />
         <div className="text-center">
           <p className="text-slate-400 text-xs uppercase tracking-widest mb-1">Result</p>
@@ -109,19 +112,19 @@ function ResultOverlay({
 
         {choice ? (
           won ? (
-            <div className="w-full bg-emeraldwin-500/20 border border-emeraldwin-500/40 rounded-2xl px-6 py-4 text-center">
+            <div className="w-full max-w-[200px] bg-emeraldwin-500/20 border border-emeraldwin-500/40 rounded-2xl px-6 py-4 text-center">
               <p className="text-emeraldwin-400 font-black text-2xl">+₹{payout.toLocaleString()}</p>
               <p className="text-sm text-emeraldwin-300/80 mt-1">YOU WIN!</p>
             </div>
           ) : (
-            <div className="w-full bg-coral-500/20 border border-coral-500/40 rounded-2xl px-6 py-4 text-center">
+            <div className="w-full max-w-[200px] bg-coral-500/20 border border-coral-500/40 rounded-2xl px-6 py-4 text-center">
               <p className="text-coral-400 font-black text-2xl">LOST</p>
               <p className="text-sm text-coral-300/80 mt-1">Better luck next round</p>
             </div>
           )
         ) : (
-          <div className="w-full bg-slate-800/60 rounded-2xl px-6 py-4 text-center">
-            <p className="text-slate-400 text-sm">No bet placed this round</p>
+          <div className="w-full max-w-[200px] bg-slate-800/60 rounded-2xl px-6 py-4 text-center">
+            <p className="text-slate-400 text-sm">No bet placed</p>
           </div>
         )}
 
@@ -312,15 +315,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   return (
     <div className="relative space-y-4 animate-fade-in px-3">
 
-      {/* Full-screen result overlay — fixed, covers entire viewport */}
-      <ResultOverlay
-        visible={phase === 'revealed'}
-        result={result}
-        won={lastWon}
-        payout={lastPayout}
-        choice={betPlaced ? selectedChoice : null}
-      />
-
       {/* ── Header ── */}
       <div className="flex items-center justify-between mt-2 mb-1">
         <div className="flex items-center gap-2">
@@ -355,8 +349,18 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         </div>
       </div>
 
-      {/* ── Game area ── */}
-      <div className="rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden">
+      {/* ── Game card — relative so overlay stays inside it ── */}
+      <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden">
+
+        {/* Result overlay — absolute, covers only this card */}
+        <ResultOverlay
+          visible={phase === 'revealed'}
+          result={result}
+          won={lastWon}
+          payout={lastPayout}
+          choice={betPlaced ? selectedChoice : null}
+        />
+
         <div className="p-4 space-y-4">
 
           {/* Timer / Processing */}
@@ -378,7 +382,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             ) : null}
           </div>
 
-          {/* Direction selector — only image + payout, no text above */}
+          {/* Direction selector buttons */}
           {phase !== 'processing' && (
             <div className="flex items-stretch gap-2">
               <BetButton
@@ -399,7 +403,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             </div>
           )}
 
-          {/* Amount controls — only when betting and not yet placed */}
+          {/* Amount controls */}
           {phase === 'betting' && !betPlaced && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
@@ -426,8 +430,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold"
                 >+</button>
               </div>
-
-              {/* Quick stakes — each click ADDS the amount */}
               <div className="flex gap-2">
                 {QUICK_STAKE_AMOUNTS.map((s) => (
                   <button
@@ -474,7 +476,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         </div>
       </div>
 
-      {/* ── History section ── */}
+      {/* ── History — always visible, even during result overlay ── */}
       <div className="rounded-2xl bg-slatepanel-900 border border-borderline-900 p-4 space-y-4">
         <div className="flex gap-1 bg-slatepanel-800/60 rounded-xl p-1">
           {(['rounds', 'my'] as const).map((tab) => (
@@ -503,7 +505,9 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   <img src={`/${b.result}.png`} alt={b.result} className="w-8 h-8 object-contain flex-shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-bold text-white">#{b.round}</p>
-                    <p className="text-[10px] text-slate-400">Bet {b.bet === 'tie' ? 'ECLIPSE' : b.bet.toUpperCase()} · Result {b.result === 'tie' ? 'ECLIPSE' : b.result.toUpperCase()}</p>
+                    <p className="text-[10px] text-slate-400">
+                      Bet {b.bet === 'tie' ? 'ECLIPSE' : b.bet.toUpperCase()} · Result {b.result === 'tie' ? 'ECLIPSE' : b.result.toUpperCase()}
+                    </p>
                   </div>
                   <div className="text-right flex-shrink-0">
                     <p className={`text-sm font-black ${b.win > 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
