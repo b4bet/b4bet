@@ -50,6 +50,12 @@ export interface IpMultiAccount {
   user_ids: string[];
   usernames: string[];
   account_ids: string[];
+  /** Email for each user (same index as user_ids). Empty string if not available. */
+  emails: string[];
+  /** Phone for each user (same index as user_ids). Empty string if not available. */
+  phones: string[];
+  /** Signup/first-seen timestamp for each user (same index as user_ids). */
+  signup_times: string[];
   last_seen: string;
 }
 
