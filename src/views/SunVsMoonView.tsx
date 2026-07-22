@@ -288,14 +288,14 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
   return (
     <div className="relative space-y-4 animate-fade-in px-3">
-      {/* ── Header ── */}
-      <div className="flex items-center gap-2">
-        {onBack && (
-          <button onClick={onBack} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/40 transition-colors">
-            <ArrowLeft className="w-4 h-4 text-slate-300" />
-          </button>
-        )}
-        <div className="flex items-center gap-2 flex-1">
+      {/* ── Header with logo + back + balance ── */}
+      <div className="flex items-center justify-between mt-2 mb-1">
+        <div className="flex items-center gap-2">
+          {onBack && (
+            <button onClick={onBack} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/40 transition-colors">
+              <ArrowLeft className="w-4 h-4 text-slate-300" />
+            </button>
+          )}
           {gameLogos["sunvsmoon"] && (
             <div className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center overflow-hidden">
               <img src={gameLogos["sunvsmoon"]} alt="Sun vs Moon" className="w-7 h-7 object-contain" />
@@ -305,6 +305,12 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             <p className="text-sm font-black text-white leading-none">Sun vs Moon</p>
             <p className="text-[9px] text-slate-400 mt-0.5">Round #{roundNumber}</p>
           </div>
+        </div>
+        {/* Balance */}
+        <div className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-slatepanel-800 border border-borderline-900">
+          <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
+            {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+          </span>
         </div>
       </div>
 
