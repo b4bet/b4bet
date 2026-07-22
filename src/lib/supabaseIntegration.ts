@@ -24,6 +24,44 @@ export async function logoutUser(): Promise<void> {
   await supabase.auth.signOut();
 }
 
+// ---- IP Logging ----
+/** Log a user's IP address on login or signup */
+export async function logUserIp(userId: string, ipAddress: string, action: 'login' | 'signup' = 'login'): Promise<void> {
+  try {
+    const { error } = await supabase.rpc('log_user_ip', {
+      p_user_id: userId,
+      p_ip_address: ipAddress,
+      p_action: action,
+      p_device_info: {
+        userAgent: navigator.userAgent,
+        timestamp: new Date().toISOString(),
+      },
+    });
+    if (error) console.error('[supabase] logUserIp error:', error);
+  } catch (e) {
+    console.error('[supabase] logUserIp exception:', e);
+  }
+}
+
+// ---- IP Multi-accounts (admin) ----
+export interface IpMultiAccount {
+  ip_address: string;
+  user_count: number;
+  user_ids: string[];
+  usernames: string[];
+  account_ids: string[];
+  last_seen: string;
+}
+
+/** Returns IPs that have 2+ accounts linked to them (from ip_logs table) */
+export async function supabaseGetIpMultiAccounts(): Promise<IpMultiAccount[]> {
+  try {
+    const { data, error } = await supabase.rpc('admin_get_ip_multi_accounts', { p_limit: 200 });
+    if (error) throw error;
+    return (data ?? []) as IpMultiAccount[];
+  } catch (e) { console.error('[supabase] getIpMultiAccounts error:', e); return []; }
+}
+
 // ---- Stats ----
 export async function supabaseGetStats(): Promise<{ onlineUsers: number; topWin: number; paidOut: number }> {
   try {
