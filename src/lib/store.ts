@@ -551,7 +551,7 @@ class Store {
   getAdminHistory(opts: { game?: AdminHistoryGame | 'all'; search?: string; period?: 'all' | 'day' | 'week' | 'month' | 'year' } = {}): AdminHistoryRecord[] {
     let rows = [...this.adminHistory];
     if (opts.game && opts.game !== 'all') rows = rows.filter(r => r.game === opts.game);
-    if (opts.search) { const s = opts.search.toLowerCase(); rows = rows.filter(r => r.username.toLowerCase().includes(s) || r.userId.includes(s)); }
+    if (opts.search) { const s = opts.search.toLowerCase(); rows = rows.filter(r => r.username.toLowerCase().includes(r.userId) || r.userId.includes(s)); }
     if (opts.period && opts.period !== 'all') {
       const now = Date.now();
       const ms = { day: 86400000, week: 604800000, month: 2592000000, year: 31536000000 } as const;
@@ -643,13 +643,61 @@ class Store {
     } catch { /* ignore */ }
   }
 
-  private persistRedeemCodesToSupabase() {
-    void supabase.rpc('admin_update_setting', {
+  private async persistRedeemCodesToSupabase(): Promise<void> {
+    await supabase.rpc('admin_update_setting', {
       p_key: 'redeem_codes',
       p_value: this.redeemCodes as unknown as string,
-    }).catch(() => {});
+    });
   }
 
+  /**
+   * applyRedeemCodeAsync — Supabase-backed redeem with real userId tracking.
+   * 1. Loads fresh codes from Supabase to prevent race conditions.
+   * 2. Validates and records usage with real userId.
+   * 3. Credits balance via Supabase.
+   * 4. Saves updated codes back to Supabase.
+   */
+  async applyRedeemCodeAsync(code: string, userId: string): Promise<{ status: 'success' | 'used' | 'invalid'; bonus: number }> {
+    // Always fetch fresh from Supabase to avoid stale local state
+    await this.loadRedeemCodesFromSupabase();
+
+    const upper = code.trim().toUpperCase();
+    const entry = this.redeemCodes[upper];
+    if (!entry) return { status: 'invalid', bonus: 0 };
+
+    const uses = entry.usageByUser[userId] ?? 0;
+    if (uses >= entry.maxUsesPerUser) return { status: 'used', bonus: 0 };
+
+    // Check total user limit
+    const totalUses = Object.keys(entry.usageByUser).length;
+    if (totalUses >= entry.userLimit) return { status: 'used', bonus: 0 };
+
+    // Record usage
+    entry.usageByUser[userId] = uses + 1;
+
+    // Credit balance via Supabase
+    const session = auth.getSession();
+    if (session?.username) {
+      this.creditUser(session.username, entry.bonus);
+    } else {
+      this.credit(entry.bonus);
+    }
+
+    // Push notification
+    this.pushNotification({
+      title: 'Redeem Code Applied!',
+      body: `Code ${upper} unlocked ${this.currency}${entry.bonus} bonus credits.`,
+      kind: 'success',
+    });
+
+    // Persist to Supabase
+    bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+    await this.persistRedeemCodesToSupabase();
+
+    return { status: 'success', bonus: entry.bonus };
+  }
+
+  /** Legacy sync wrapper — kept for backward compat, now delegates to async */
   applyRedeemCode(code: string, accountId: string): { status: 'success' | 'used' | 'invalid'; bonus: number } {
     const upper = code.trim().toUpperCase();
     const entry = this.redeemCodes[upper];
@@ -660,7 +708,7 @@ class Store {
     this.credit(entry.bonus);
     this.pushNotification({ title: 'Redeem Code Applied!', body: `Code ${upper} unlocked ${this.currency}${entry.bonus} bonus credits.`, kind: 'success' });
     bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
-    this.persistRedeemCodesToSupabase();
+    void this.persistRedeemCodesToSupabase();
     return { status: 'success', bonus: entry.bonus };
   }
 
@@ -673,13 +721,13 @@ class Store {
     if (!upper) return;
     this.redeemCodes[upper] = { code: upper, bonus: Math.max(0, bonus), maxUsesPerUser: Math.max(1, maxUsesPerUser), userLimit: Math.max(1, userLimit), createdAt: Date.now(), usageByUser: {} };
     bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
-    this.persistRedeemCodesToSupabase();
+    void this.persistRedeemCodesToSupabase();
   }
 
   deleteRedeemCode(code: string) {
     delete this.redeemCodes[code.trim().toUpperCase()];
     bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
-    this.persistRedeemCodesToSupabase();
+    void this.persistRedeemCodesToSupabase();
   }
 
   listRedeemCodes(): RedeemCode[] {
