@@ -88,14 +88,28 @@ export interface SupabaseProfile {
   total_deposit: number;
   total_withdrawal: number;
   vip_level: number;
+  /** is_admin is read-only — intentionally not exposed to any edit UI */
   is_admin: boolean;
+  is_active: boolean;
+  is_banned: boolean;
+  account_id: string;
+  referral_code: string | null;
+  signup_bonus_granted: boolean;
   created_at: string;
   updated_at: string;
   email?: string;
-  account_id?: string;
-  is_banned?: boolean;
+}
+
+export interface UserUpdatePayload {
+  username?: string;
+  display_name?: string;
+  phone?: string;
+  email?: string;
+  balance?: number;
+  vip_level?: number;
   is_active?: boolean;
-  registration_ip?: string | null;
+  is_banned?: boolean;
+  account_id?: string;
 }
 
 export async function supabaseGetUsers(): Promise<SupabaseProfile[]> {
@@ -111,28 +125,28 @@ export async function supabaseUpdateBalance(userId: string, newBalance: number):
   if (error) throw error;
 }
 
-export async function supabaseToggleAdmin(userId: string, isAdmin: boolean): Promise<void> {
-  const { error } = await supabase.rpc('admin_toggle_user_admin', { p_user_id: userId, p_is_admin: isAdmin });
+/**
+ * Update all editable user fields at once.
+ * NOTE: is_admin is deliberately excluded — it can only be changed via direct DB access.
+ */
+export async function supabaseUpdateUserFull(userId: string, payload: UserUpdatePayload): Promise<void> {
+  const { error } = await supabase.rpc('admin_update_user_full', {
+    p_user_id: userId,
+    p_username: payload.username ?? null,
+    p_display_name: payload.display_name ?? null,
+    p_phone: payload.phone ?? null,
+    p_email: payload.email ?? null,
+    p_balance: payload.balance != null ? payload.balance : null,
+    p_vip_level: payload.vip_level != null ? payload.vip_level : null,
+    p_is_active: payload.is_active != null ? payload.is_active : null,
+    p_is_banned: payload.is_banned != null ? payload.is_banned : null,
+    p_account_id: payload.account_id ?? null,
+  });
   if (error) throw error;
 }
 
-/** Ban a user by setting is_banned=true and is_active=false in profiles */
-export async function supabaseBanUser(userId: string): Promise<void> {
-  const { error } = await supabase
-    .from('profiles')
-    .update({ is_banned: true, is_active: false })
-    .eq('id', userId);
-  if (error) throw error;
-}
-
-/** Unban a user by setting is_banned=false and is_active=true in profiles */
-export async function supabaseUnbanUser(userId: string): Promise<void> {
-  const { error } = await supabase
-    .from('profiles')
-    .update({ is_banned: false, is_active: true })
-    .eq('id', userId);
-  if (error) throw error;
-}
+// supabaseToggleAdmin intentionally removed — admin status must only be
+// changed via direct database access, never through the admin panel UI.
 
 // ---- Transactions ----
 export interface SupabaseTransaction {
