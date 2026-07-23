@@ -285,6 +285,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           </div>
         </div>
         <Sidebar
+          phase={phase}
+          multiplier={multiplier}
           allBets={allBets}
           myBets={myBets}
           chat={chat}
