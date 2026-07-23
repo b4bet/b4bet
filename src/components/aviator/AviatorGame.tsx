@@ -85,7 +85,15 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
    */
   const placeBetQueueRef = useRef<Promise<void>>(Promise.resolve());
 
-  const handlePlaceBet = useCallback(async (amount: number): Promise<{ ok: boolean; betId: string | null }> => {
+  /**
+   * @param amount     - Bet amount in currency units
+   * @param placedAtMs - Timestamp (ms) when the user actually clicked BET.
+   *   Passed to the server so it can validate timing using the client click
+   *   time rather than the Edge Function execution time (which may be 2-4s
+   *   later due to cold-start latency, causing false "betting window closed"
+   *   rejections near the end of the waiting phase).
+   */
+  const handlePlaceBet = useCallback(async (amount: number, placedAtMs: number): Promise<{ ok: boolean; betId: string | null }> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
       cms.toast({
@@ -119,6 +127,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         session.userId,
         amount,
         aviatorLoop.getRoundUuid(),
+        placedAtMs,
       );
 
       if (!result.success) {
@@ -277,7 +286,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               countdown={countdown}
               roundId={roundId}
               balance={balance}
-              onPlaceBet={handlePlaceBet}
+              onPlaceBet={(amount, placedAtMs) => handlePlaceBet(amount, placedAtMs)}
               onCancelBet={(amount) => handleCancelBet(0, amount)}
               onCashOut={handleCashOut}
               onWin={handleWin}
@@ -292,7 +301,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               countdown={countdown}
               roundId={roundId}
               balance={balance}
-              onPlaceBet={handlePlaceBet}
+              onPlaceBet={(amount, placedAtMs) => handlePlaceBet(amount, placedAtMs)}
               onCancelBet={(amount) => handleCancelBet(1, amount)}
               onCashOut={handleCashOut}
               onWin={handleWin}
