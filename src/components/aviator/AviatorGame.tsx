@@ -87,7 +87,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   const handlePlaceBet = useCallback(async (
     amount: number,
-    _placedAtMs: number,
+    placedAtMs: number,
   ): Promise<{ ok: boolean; betId: string | null; reason?: string | null }> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
@@ -117,13 +117,13 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         session.userId,
         amount,
         aviatorLoop.getRoundUuid(),
+        placedAtMs, // pass exact client timestamp for server grace-window check
       );
 
       if (result.success) {
         return { ok: true, betId: result.bet_id ?? null, reason: null };
       }
 
-      // Server rejected
       return { ok: false, betId: null, reason: 'phase_closed' };
 
     } catch {
