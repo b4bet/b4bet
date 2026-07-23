@@ -4,9 +4,9 @@ import { HistoryBar } from './HistoryBar';
 import { FlightCanvas, type CashoutNotice, type InsufficientBalanceNotice, type TimeoutNotice } from './FlightCanvas';
 import { useGameAudio } from './game/useGameAudio';
 import { BettingPanel, createInitialBet, type BetState } from './BettingPanel';
-import { Sidebar, makeSimBet, type BetRecord, type ChatMessage } from './Sidebar';
+import { Sidebar, type BetRecord, type ChatMessage } from './Sidebar';
 import { useAviatorGame } from './game/useAviatorGame';
-import { formatMoney, randomAvatarColor, randomName } from './game/format';
+import { formatMoney } from './game/format';
 import { useBalance } from '../../lib/hooks';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
@@ -75,16 +75,16 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, [roundId]);
 
   /**
-   * Called by BettingPanel when the player clicks BET.
+   * Place-bet serialization queue.
    *
-   * Returns { ok, betId, reason } where:
-   *   ok     — true if bet was accepted by the server
-   *   betId  — server-assigned bet ID (for direct cashout lookup)
-   *   reason — 'insufficient_balance' | 'phase_closed' | 'network' | null
+   * Problem: Both panels hit aviator_place_bet in parallel → server reads the
+   * same balance for both → only one deduction actually happens in Supabase.
    *
-   * Uses the server (aviator_place_bet) to deduct balance — the server is the
-   * source of truth. debitLocalOnly() is NOT used here to avoid double-deduction.
+   * Fix: Chain every server call. Panel 1 waits for Panel 0 to finish so
+   * Supabase has already committed the first deduction before the second read.
    */
+  const placeBetQueueRef = useRef<Promise<void>>(Promise.resolve());
+
   const handlePlaceBet = useCallback(async (
     amount: number,
     placedAtMs: number,
@@ -104,6 +104,14 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       return { ok: false, betId: null, reason: 'unauthenticated' };
     }
 
+    // Serialize requests so two panels don't race on the same DB balance read
+    let resolveQueue!: () => void;
+    const myTurn = new Promise<void>((res) => { resolveQueue = res; });
+    const prevQueue = placeBetQueueRef.current;
+    placeBetQueueRef.current = myTurn;
+
+    await prevQueue;
+
     try {
       const result = await GameService.aviatorPlaceBet(
         session.userId,
@@ -113,24 +121,22 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       );
 
       if (result.success) {
-        // Server deducted balance — sync local balance display
         if (result.balance_after !== null) {
           store.setBalance(result.balance_after);
         }
         return { ok: true, betId: result.bet_id ?? null, reason: null };
       }
 
-      // Server rejected: figure out why
       const errMsg = (result.error ?? '').toLowerCase();
       if (errMsg.includes('insufficient') || errMsg.includes('balance')) {
         return { ok: false, betId: null, reason: 'insufficient_balance' };
       }
-      // phase_closed, round already ended, etc.
       return { ok: false, betId: null, reason: 'phase_closed' };
 
     } catch {
-      // Network / server error
       return { ok: false, betId: null, reason: 'network' };
+    } finally {
+      resolveQueue();
     }
   }, []);
 
@@ -151,8 +157,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCashoutNotice]);
 
-  const handleWin = useCallback((win: number) => {
-    store.credit(win);
+  const handleWin = useCallback((_win: number) => {
+    // intentionally empty — balance synced from server in doCashOut
   }, []);
 
   const recordPlayerBet = useCallback(
@@ -228,30 +234,35 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-ink-900 text-white overflow-hidden">
+    <div className="flex min-h-screen flex-col bg-ink-900 text-white">
       <Header
+        balance={balance}
         soundOn={soundOn}
         musicOn={musicOn}
         animationOn={animationOn}
-        onSoundToggle={() => setSoundOn((v) => !v)}
-        onMusicToggle={() => setMusicOn((v) => !v)}
-        onAnimationToggle={() => setAnimationOn((v) => !v)}
+        onToggleSound={setSoundOn}
+        onToggleMusic={setMusicOn}
+        onToggleAnimation={setAnimationOn}
         onBack={onBack}
       />
-      <HistoryBar history={history} lastCrash={lastCrash} />
-      <div className="flex flex-1 min-h-0 gap-2 p-2">
-        <div className="flex flex-col flex-1 min-w-0 gap-2">
+      <HistoryBar history={history} />
+      <main className="mx-auto flex w-full max-w-[1500px] flex-1 flex-col gap-3 p-3 lg:flex-row lg:gap-4 lg:p-4">
+        <div className="flex flex-1 flex-col gap-3 min-w-0">
           <FlightCanvas
             phase={phase}
             multiplier={multiplier}
             countdown={countdown}
             lastCrash={lastCrash}
-            animationOn={animationOn}
             cashouts={cashoutNotices}
             insufficientBalanceNotices={insufficientBalanceNotices}
             timeoutNotices={timeoutNotices}
+            animationOn={animationOn}
+            activeBetAmount={
+              (bet0.placed && bet0.cashedOutAt === null ? bet0.amount : 0) +
+              (bet1.placed && bet1.cashedOutAt === null ? bet1.amount : 0)
+            }
           />
-          <div className="flex gap-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <BettingPanel
               bet={bet0}
               setBet={wrapSetBet(0)}
@@ -284,20 +295,22 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
             />
           </div>
         </div>
-        <Sidebar
-          phase={phase}
-          multiplier={multiplier}
-          allBets={allBets}
-          myBets={myBets}
-          chat={chat}
-          canShareBet={canShareBet}
-          onSendChat={handleSendChat}
-          onShareBet={handleShareBet}
-        />
-      </div>
-      <div className="py-1 text-center text-[10px] text-gray-600 select-none">
-        🔒 Official Live Game&nbsp;&nbsp;·&nbsp;&nbsp;Secure &amp; Provably Fair&nbsp;&nbsp;·&nbsp;&nbsp;18+ Responsible Play
-      </div>
+        <div className="h-auto max-h-[420px] lg:max-h-none lg:h-auto lg:w-[340px] lg:shrink-0 overflow-hidden">
+          <Sidebar
+            phase={phase}
+            multiplier={multiplier}
+            allBets={allBets}
+            myBets={myBets}
+            chat={chat}
+            onSendChat={handleSendChat}
+            onShareBet={handleShareBet}
+            canShareBet={canShareBet}
+          />
+        </div>
+      </main>
+      <footer className="footer-note px-4 py-3 text-center text-[11px] text-gray-500 border-t border-ink-800">
+        🔒 Official Live Game &nbsp;·&nbsp; Secure &amp; Provably Fair &nbsp;·&nbsp; 18+ Responsible Play
+      </footer>
     </div>
   );
 }
