@@ -83,24 +83,41 @@ serve(async (req) => {
     }
 
     // ── aviator_cancel_bet ───────────────────────────────────────────────────
-    // Called when player cancels a placed bet during the waiting phase.
+    // Called when player cancels a placed bet during the waiting phase OR
+    // within the 2-second grace window after flying starts.
     // Refunds the bet amount to Supabase balance and deletes/voids the bet record.
     if (action === "aviator_cancel_bet") {
       const { user_id, bet_amount, bet_id } = payload;
       const betNum = Number(bet_amount);
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
-      // Only allow cancel if the round is still in waiting phase
+      // Allow cancel during waiting phase OR within 2-second grace window after flying starts
+      const CANCEL_GRACE_MS = 2000;
+
       const { data: currentRound } = await supabase
         .from("aviator_current_round")
-        .select("phase")
+        .select("phase, phase_started_at")
         .eq("id", 1)
         .single();
 
       if (currentRound && currentRound.phase === "flying") {
-        // Round already flying — cancel not allowed (bet is locked in)
+        const phaseStartedAt = new Date(currentRound.phase_started_at).getTime();
+        const elapsedSinceFlying = Date.now() - phaseStartedAt;
+
+        if (elapsedSinceFlying > CANCEL_GRACE_MS) {
+          // Grace window expired — cancel not allowed
+          return new Response(
+            JSON.stringify({ success: false, error: "Round already started, cannot cancel" }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+          );
+        }
+        // Within 2s grace window — allow cancel
+      }
+
+      // Crashed phase — cancel not allowed
+      if (currentRound && currentRound.phase === "crashed") {
         return new Response(
-          JSON.stringify({ success: false, error: "Round already started, cannot cancel" }),
+          JSON.stringify({ success: false, error: "Round already ended, cannot cancel" }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
         );
       }
