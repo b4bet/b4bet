@@ -91,11 +91,30 @@ export interface AviatorRoundStatusResult {
 
 // ── Helper ────────────────────────────────────────────────────────────────────
 
+/**
+ * Get the current Supabase JWT access token.
+ * The process-bet Edge Function has verify_jwt:true — every request MUST include
+ * a valid Bearer token or the function returns 401, causing the client to
+ * refund the bet locally (the "bet doesn't deduct" bug).
+ */
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const headers: Record<string, string> = {
+    'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
 async function get<T>(params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams(params).toString();
+  const headers = await getAuthHeaders();
   const res = await fetch(`${EDGE_FN}?${qs}`, {
     method: "GET",
-    headers: { "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY },
+    headers,
   });
   const data = await res.json() as T & { error?: string };
   if (!res.ok || data.error) throw new Error((data as { error?: string }).error ?? "Server error");
@@ -103,11 +122,12 @@ async function get<T>(params: Record<string, string>): Promise<T> {
 }
 
 async function post<T>(body: Record<string, unknown>): Promise<T> {
+  const headers = await getAuthHeaders();
   const res = await fetch(EDGE_FN, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+      ...headers,
     },
     body: JSON.stringify(body),
   });
