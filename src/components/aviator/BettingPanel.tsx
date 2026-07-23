@@ -49,8 +49,14 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
-  /** Returns { ok, betId } — betId is the server-assigned ID for this bet. */
-  onPlaceBet: (amount: number) => Promise<{ ok: boolean; betId: string | null }>;
+  /**
+   * Returns { ok, betId } — betId is the server-assigned ID for this bet.
+   * @param amount     - Bet amount
+   * @param placedAtMs - Client-side timestamp (ms) when user clicked BET.
+   *   Used by the server to validate timing without being affected by
+   *   Edge Function cold-start latency.
+   */
+  onPlaceBet: (amount: number, placedAtMs: number) => Promise<{ ok: boolean; betId: string | null }>;
   onCancelBet: (amount: number) => void;
   onCashOut: (amount: number, at: number) => void;
   onWin: (amount: number) => void;
@@ -98,11 +104,14 @@ export function BettingPanel({
             nextRound.pendingNextRound = false;
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
+            // Capture click timestamp NOW before async call so server gets
+            // the accurate time even if the Edge Function cold-starts slowly.
+            const nowMs = Date.now();
             // Optimistically mark as placed immediately so CASH OUT shows up
             // even if waiting→flying happens while server call is in-flight
             nextRound.placed = true;
-            nextRound.placedAtMs = Date.now();
-            void onPlaceBet(b.amount).then(({ ok, betId }) => {
+            nextRound.placedAtMs = nowMs;
+            void onPlaceBet(b.amount, nowMs).then(({ ok, betId }) => {
               if (ok) {
                 setBet((bb) => ({ ...bb, betId: betId ?? null }));
               } else {
@@ -185,9 +194,11 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
+        // Capture click timestamp before async call
+        const nowMs = Date.now();
         // Optimistically mark placed so UI locks immediately
-        setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
-        void onPlaceBet(bet.amount).then(({ ok, betId }) => {
+        setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: nowMs }));
+        void onPlaceBet(bet.amount, nowMs).then(({ ok, betId }) => {
           if (ok) {
             setBet((b) => ({ ...b, betId: betId ?? null }));
           } else {
@@ -215,10 +226,13 @@ export function BettingPanel({
         return;
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
+      // Capture click timestamp BEFORE the async call — this is the exact
+      // moment the user clicked, which the server needs for accurate timing.
+      const nowMs = Date.now();
       // Optimistically mark placed immediately — CASH OUT will show even if
       // waiting→flying happens while the server call is still in-flight
-      setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
-      void onPlaceBet(bet.amount).then(({ ok, betId }) => {
+      setBet((b) => ({ ...b, placed: true, placedAtMs: nowMs }));
+      void onPlaceBet(bet.amount, nowMs).then(({ ok, betId }) => {
         if (ok) {
           setBet((b) => ({ ...b, betId: betId ?? null }));
         } else {
