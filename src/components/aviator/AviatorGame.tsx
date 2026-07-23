@@ -245,8 +245,9 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
             phase={phase}
             multiplier={multiplier}
             countdown={countdown}
+            lastCrash={lastCrash}
             animationOn={animationOn}
-            cashoutNotices={cashoutNotices}
+            cashouts={cashoutNotices}
             insufficientBalanceNotices={insufficientBalanceNotices}
             timeoutNotices={timeoutNotices}
           />
