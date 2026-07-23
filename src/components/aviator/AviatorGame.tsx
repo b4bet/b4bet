@@ -16,7 +16,11 @@ import { aviatorLoop } from '../../lib/persistentGameEngine';
 
 const PLAYER_NAME = 'You';
 
-/** Grace window (ms) after round starts flying — cancel is still allowed */
+/**
+ * Grace window (ms) after round starts flying.
+ * During this window: cancel is still allowed.
+ * After this window: auto-cancel fires and bet is re-queued for next round.
+ */
 const FLYING_GRACE_MS = 2000;
 
 interface AviatorGameProps {
@@ -49,17 +53,33 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const flyingGraceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevPhase = useRef<string>(phase);
 
+  // handleCancelBet ref so we can call it inside timers without stale closure
+  const handleCancelBetRef = useRef<(panel: 0 | 1, amount: number, betId: string | null, requeue?: boolean) => void>(
+    () => {}
+  );
+
   useEffect(() => {
     if (phase === 'flying' && prevPhase.current !== 'flying') {
       // Flying just started — open 2s grace window
       setFlyingGrace(true);
       if (flyingGraceTimer.current) clearTimeout(flyingGraceTimer.current);
+
+      // Capture current bet states at the moment flying starts
+      const snap0 = bet0;
+      const snap1 = bet1;
+
       flyingGraceTimer.current = setTimeout(() => {
         setFlyingGrace(false);
+        // Auto-cancel any bet that is still placed (wasn't manually cashed out or cancelled)
+        if (snap0.placed && snap0.cashedOutAt === null) {
+          handleCancelBetRef.current(0, snap0.amount, snap0.betId, true);
+        }
+        if (snap1.placed && snap1.cashedOutAt === null) {
+          handleCancelBetRef.current(1, snap1.amount, snap1.betId, true);
+        }
       }, FLYING_GRACE_MS);
     }
     if (phase !== 'flying') {
-      // Reset grace when not flying
       setFlyingGrace(false);
       if (flyingGraceTimer.current) {
         clearTimeout(flyingGraceTimer.current);
@@ -67,6 +87,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       }
     }
     prevPhase.current = phase;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
   const showCashoutNotice = useCallback((amount: number, at: number) => {
@@ -101,16 +122,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
-
-  useEffect(() => {
-    if (phase !== 'flying') return;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, roundId]);
-
-  useEffect(() => {
-    if (phase !== 'flying') return;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multiplier, phase]);
 
   /**
    * Called by BettingPanel when the player clicks BET.
@@ -152,12 +163,11 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   /**
-   * Called by BettingPanel when the player cancels a placed bet during waiting
-   * phase OR within the 2-second flying grace window.
-   * Refunds locally AND calls the server to refund Supabase balance.
+   * Cancel a placed bet and optionally requeue for next round (auto-cancel after grace window).
+   * requeue=true means the bet will auto-fire again on the next round start.
    */
   const handleCancelBet = useCallback(
-    (panel: 0 | 1, amount: number, betId: string | null) => {
+    (panel: 0 | 1, amount: number, betId: string | null, requeue = false) => {
       // Refund local balance display
       store.credit(amount);
 
@@ -167,7 +177,17 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       setMyBets((prev) => prev.filter((b) => b.id !== id));
       pendingPlayerBets.current = pendingPlayerBets.current.filter((p) => p.panel !== panel);
 
-      // Call server to refund Supabase balance (fire-and-forget with error handling)
+      // If requeue: mark pendingNextRound so bet fires again on next round
+      const setter = panel === 0 ? setBet0 : setBet1;
+      setter((b) => ({
+        ...b,
+        placed: false,
+        betId: null,
+        cashedOutAt: null,
+        pendingNextRound: requeue ? true : b.pendingNextRound,
+      }));
+
+      // Call server to refund Supabase balance
       const session = auth.getSession();
       if (session) {
         void GameService.aviatorCancelBet(
@@ -176,17 +196,18 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           betId,
         ).then((res) => {
           if (res.success) {
-            // Sync balance from server to ensure accuracy
             store.setBalance(res.balance_after);
           }
-        }).catch(() => {
-          // Non-fatal: local credit already applied above.
-          // On next balance sync the server balance will be authoritative.
-        });
+        }).catch(() => {});
       }
     },
     [roundId],
   );
+
+  // Keep ref in sync so the grace timeout can call the latest version
+  useEffect(() => {
+    handleCancelBetRef.current = handleCancelBet;
+  }, [handleCancelBet]);
 
   const handleCashOut = useCallback((amount: number, at: number) => {
     showCashoutNotice(amount, at);
@@ -305,7 +326,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               balance={balance}
               flyingGrace={flyingGrace}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
+              onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId, false)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
@@ -321,7 +342,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               balance={balance}
               flyingGrace={flyingGrace}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
+              onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId, false)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
