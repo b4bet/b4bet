@@ -136,13 +136,20 @@ serve(async (req) => {
       const roundUuid = payload.round_uuid ?? null;
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
+      // Use the client-side timestamp (when user actually clicked BET) for timing validation.
+      // This prevents false rejections caused by Supabase Edge Function cold-start latency
+      // (cold starts can add 2-4s delay, making Date.now() appear much later than the click).
+      // Falls back to Date.now() if not provided (e.g. older clients).
+      const clientPlacedAtMs = payload.placed_at_ms ? Number(payload.placed_at_ms) : Date.now();
+
       // Verify the round is still in waiting/betting phase before accepting the bet
       const { data: currentRound } = await supabase.from("aviator_current_round").select("phase, phase_started_at, crash_point").eq("id", 1).single();
       if (currentRound && currentRound.phase === "flying") {
-        // Round already flying — check if it has already been running for more than 500ms
-        // (i.e. the plane has already taken off, reject late bets)
-        const elapsedMs = Date.now() - new Date(currentRound.phase_started_at).getTime();
-        if (elapsedMs > 500) {
+        // Reject only if the user actually clicked BET after the flying phase started.
+        // Allow 2s grace window to cover network latency and client/server clock skew.
+        // This correctly handles cold-start delays unlike the old Date.now() approach.
+        const phaseStartedAt = new Date(currentRound.phase_started_at).getTime();
+        if (clientPlacedAtMs > phaseStartedAt + 2000) {
           return new Response(JSON.stringify({ success: false, error: "Betting window closed", balance_after: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
         }
       }
