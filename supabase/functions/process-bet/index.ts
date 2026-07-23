@@ -137,40 +137,85 @@ serve(async (req) => {
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
       // Use the client-side timestamp (when user actually clicked BET) for timing validation.
-      // This prevents false rejections caused by Supabase Edge Function cold-start latency
-      // (cold starts can add 2-4s delay, making Date.now() appear much later than the click).
-      // Falls back to Date.now() if not provided (e.g. older clients).
+      // Falls back to Date.now() for older clients that don't send placed_at_ms.
       const clientPlacedAtMs = payload.placed_at_ms ? Number(payload.placed_at_ms) : Date.now();
 
-      // Verify the round is still in waiting/betting phase before accepting the bet
-      const { data: currentRound } = await supabase.from("aviator_current_round").select("phase, phase_started_at, crash_point").eq("id", 1).single();
-      if (currentRound && currentRound.phase === "flying") {
-        // Reject only if the user actually clicked BET after the flying phase started.
-        // Allow 2s grace window to cover network latency and client/server clock skew.
-        // This correctly handles cold-start delays unlike the old Date.now() approach.
+      // Read current round phase from DB
+      const { data: currentRound } = await supabase
+        .from("aviator_current_round")
+        .select("phase, phase_started_at, crash_point")
+        .eq("id", 1)
+        .single();
+
+      if (currentRound) {
         const phaseStartedAt = new Date(currentRound.phase_started_at).getTime();
-        if (clientPlacedAtMs > phaseStartedAt + 2000) {
-          return new Response(JSON.stringify({ success: false, error: "Betting window closed", balance_after: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
+
+        if (currentRound.phase === "flying") {
+          // Accept the bet if the user clicked BEFORE flying started.
+          // Use 5s grace window to cover:
+          //   - Edge Function cold-start (up to 4s)
+          //   - Network round-trip (up to 1s)
+          //   - Client/server clock skew
+          // If clientPlacedAtMs is before (phaseStartedAt + 5s), it's a valid waiting-phase bet.
+          const gracePeriodMs = 5000;
+          if (clientPlacedAtMs > phaseStartedAt + gracePeriodMs) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Betting window closed", balance_after: null }),
+              { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+            );
+          }
+          // else: fall through and accept the bet — user clicked during waiting
         }
-      }
-      if (currentRound && currentRound.phase === "crashed") {
-        return new Response(JSON.stringify({ success: false, error: "Round already ended", balance_after: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
+
+        if (currentRound.phase === "crashed") {
+          // If user clicked during waiting phase but edge fn ran after crash,
+          // accept if placed_at_ms is before (phaseStartedAt + 5s grace).
+          // This covers the worst-case cold-start scenario.
+          const gracePeriodMs = 5000;
+          if (clientPlacedAtMs > phaseStartedAt + gracePeriodMs) {
+            return new Response(
+              JSON.stringify({ success: false, error: "Round already ended", balance_after: null }),
+              { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+            );
+          }
+          // else: user clicked just before crash — accept the bet
+        }
       }
 
       const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
       if (profileError || !profile) throw new Error("User profile not found");
 
       if (profile.balance < betNum) {
-        return new Response(JSON.stringify({ success: false, error: "Insufficient balance", balance_after: profile.balance }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
+        return new Response(
+          JSON.stringify({ success: false, error: "Insufficient balance", balance_after: profile.balance }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        );
       }
 
       const newBalance = profile.balance - betNum;
       const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
       if (updateError) throw new Error(`Balance deduction failed: ${updateError.message}`);
 
-      const { data: betRecord } = await supabase.from("bets").insert({ user_id, round_id: null, bet_amount: betNum, win_amount: 0, multiplier: 0, status: "pending", bet_details: { game: "aviator", round_id: round_id ?? null, round_uuid: roundUuid }, placed_at: new Date().toISOString() }).select("id").maybeSingle().catch(() => ({ data: null }));
+      const { data: betRecord } = await supabase
+        .from("bets")
+        .insert({
+          user_id,
+          round_id: null,
+          bet_amount: betNum,
+          win_amount: 0,
+          multiplier: 0,
+          status: "pending",
+          bet_details: { game: "aviator", round_id: round_id ?? null, round_uuid: roundUuid },
+          placed_at: new Date().toISOString(),
+        })
+        .select("id")
+        .maybeSingle()
+        .catch(() => ({ data: null }));
 
-      return new Response(JSON.stringify({ success: true, balance_after: newBalance, bet_id: (betRecord as { id?: string } | null)?.id ?? null }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(
+        JSON.stringify({ success: true, balance_after: newBalance, bet_id: (betRecord as { id?: string } | null)?.id ?? null }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     // ── aviator_settle / aviator_settle_lost ─────────────────────────────────
