@@ -18,9 +18,9 @@ export interface BetState {
   autoBetEnabled: boolean;
   pendingNextRound: boolean;
   roundId: number;
-  /** Timestamp (ms) when the bet was placed — sent to server for timing validation */
+  /** Timestamp (ms) when the bet was placed */
   placedAtMs: number;
-  /** Server-assigned bet ID returned by aviator_place_bet. Used for direct cashout lookup. */
+  /** Server-assigned bet ID returned by aviator_place_bet */
   betId: string | null;
 }
 
@@ -48,7 +48,7 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
-  /** True during the 2-second grace window after flying starts — cancel still allowed */
+  /** True during the 2-second grace window after flying starts — cancel still allowed, multiplier shown */
   flyingGrace: boolean;
   onPlaceBet: (amount: number) => Promise<boolean>;
   onCancelBet: (amount: number, betId: string | null) => void;
@@ -58,7 +58,6 @@ interface BettingPanelProps {
   onTimeout?: () => void;
 }
 
-// Quick-bet buttons — replace amount
 const QUICK_ADDS: { label: string; value: number }[] = [
   { label: '200', value: 200 },
   { label: '500', value: 500 },
@@ -119,7 +118,7 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  // Auto cash-out trigger — calls server-validated cashout.
+  // Auto cash-out — only fires after grace window ends
   useEffect(() => {
     if (
       bet.placed &&
@@ -134,25 +133,16 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multiplier, phase, flyingGrace]);
 
-  // Round crashed without cash-out — bet is lost.
+  // Round crashed without cash-out — bet is lost
   useEffect(() => {
     if (phase === 'crashed' && bet.placed && bet.cashedOutAt === null) {
-      // Settle the lost bet server-side (fire-and-forget)
       const session = auth.getSession();
       if (session) {
         const roundUuid = aviatorLoop.getRoundUuid();
         void import('../../lib/game-service').then(({ GameService }) => {
-          void GameService.aviatorSettle(
-            session.userId,
-            roundUuid,
-            bet.amount,
-          )
-            .then((res) => {
-              if (res.crash_point) {
-                aviatorLoop.reportServerCrash(res.crash_point);
-              }
-            })
-            .catch(() => { /* non-fatal */ });
+          void GameService.aviatorSettle(session.userId, roundUuid, bet.amount)
+            .then((res) => { if (res.crash_point) aviatorLoop.reportServerCrash(res.crash_point); })
+            .catch(() => {});
         });
       }
       setBet((b) => ({ ...b, placed: false, betId: null }));
@@ -160,7 +150,8 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // Allow cancel during waiting phase OR during 2s flying grace window
+  // Derived flags
+  // During grace: cancel is still allowed (shows multiplier on button)
   const canCancel = (phase === 'waiting' || flyingGrace) && bet.placed && bet.cashedOutAt === null;
   const canPlace = phase === 'waiting' && !bet.placed && bet.amount <= balance && countdown > 0;
   const canCashOut = phase === 'flying' && !flyingGrace && bet.placed && bet.cashedOutAt === null;
@@ -241,14 +232,10 @@ export function BettingPanel({
     onCancelBet(amt, betId);
   }
 
-  /**
-   * Server-validated cash out.
-   */
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
     const at = atOverride ?? multiplier;
     setBet((b) => ({ ...b, cashedOutAt: at }));
-
     try {
       const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs, at, bet.betId);
       if (res.won && res.win > 0) {
@@ -256,9 +243,7 @@ export function BettingPanel({
         onCashOut(bet.amount, res.cashout_at ?? at);
         onWin(res.win);
       } else {
-        if (res.crash_point !== null) {
-          aviatorLoop.reportServerCrash(res.crash_point);
-        }
+        if (res.crash_point !== null) aviatorLoop.reportServerCrash(res.crash_point);
       }
     } catch {
       cms.toast({ title: 'Cashout error', body: 'Could not confirm cashout. Please check your balance.', kind: 'alert' });
@@ -289,13 +274,19 @@ export function BettingPanel({
     );
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
     betShadow = 'shadow-btn-red';
-  } else if (canCancel) {
-    betLabel = flyingGrace ? (
+  } else if (canCancel && flyingGrace) {
+    // Grace window: show CANCEL with current multiplier — exactly like original cash-out style
+    const livePayout = bet.amount * multiplier;
+    betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span>CANCEL</span>
-        <span className="text-xs font-normal">2s window</span>
+        <span className="text-xs font-normal">{multiplier.toFixed(2)}x · {formatMoney(livePayout)}</span>
       </span>
-    ) : 'CANCEL';
+    );
+    betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
+    betShadow = 'shadow-btn-red';
+  } else if (canCancel) {
+    betLabel = 'CANCEL';
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
     betShadow = 'shadow-btn-red';
   } else if (phase === 'flying' && bet.placed && bet.cashedOutAt !== null) {
@@ -320,7 +311,7 @@ export function BettingPanel({
 
   return (
     <div className="flex flex-col gap-2 p-2 rounded-xl bg-ink-800 border border-ink-600">
-      {/* Top row: checkboxes + auto-withdraw multiplier input */}
+      {/* Top row: auto cashout + auto bet */}
       <div className="flex items-center gap-3 px-1">
         <label className="flex items-center gap-1.5 text-xs text-ink-300 cursor-pointer select-none">
           <input
@@ -407,7 +398,7 @@ export function BettingPanel({
         ))}
       </div>
 
-      {/* Main BET / CASH OUT / CANCEL button */}
+      {/* Main action button */}
       <button
         className={`w-full py-3 rounded-lg font-bold text-white text-sm transition-all ${betShade} ${betShadow} disabled:opacity-50 disabled:cursor-not-allowed`}
         onClick={handleBetClick}
