@@ -48,6 +48,8 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
+  /** True during the 2-second grace window after flying starts — cancel still allowed */
+  flyingGrace: boolean;
   onPlaceBet: (amount: number) => Promise<boolean>;
   onCancelBet: (amount: number, betId: string | null) => void;
   onCashOut: (amount: number, at: number) => void;
@@ -72,6 +74,7 @@ export function BettingPanel({
   countdown,
   roundId,
   balance,
+  flyingGrace,
   onPlaceBet,
   onCancelBet,
   onCashOut,
@@ -123,12 +126,13 @@ export function BettingPanel({
       bet.cashedOutAt === null &&
       bet.autoCashoutEnabled &&
       phase === 'flying' &&
+      !flyingGrace &&
       multiplier >= bet.autoCashoutValue
     ) {
       void doCashOut(bet.autoCashoutValue);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multiplier, phase]);
+  }, [multiplier, phase, flyingGrace]);
 
   // Round crashed without cash-out — bet is lost.
   useEffect(() => {
@@ -156,11 +160,12 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
+  // Allow cancel during waiting phase OR during 2s flying grace window
+  const canCancel = (phase === 'waiting' || flyingGrace) && bet.placed && bet.cashedOutAt === null;
   const canPlace = phase === 'waiting' && !bet.placed && bet.amount <= balance && countdown > 0;
-  const canCashOut = phase === 'flying' && bet.placed && bet.cashedOutAt === null;
-  const canCancel = phase === 'waiting' && bet.placed && bet.cashedOutAt === null;
+  const canCashOut = phase === 'flying' && !flyingGrace && bet.placed && bet.cashedOutAt === null;
   const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
-  const canQueueNextRound = phase === 'flying' && !bet.placed && bet.cashedOutAt === null;
+  const canQueueNextRound = phase === 'flying' && !flyingGrace && !bet.placed && bet.cashedOutAt === null;
   const canCancelQueue = phase === 'flying' && !bet.placed && bet.pendingNextRound;
 
   function adjustAmount(delta: number) {
@@ -285,7 +290,12 @@ export function BettingPanel({
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
     betShadow = 'shadow-btn-red';
   } else if (canCancel) {
-    betLabel = 'CANCEL';
+    betLabel = flyingGrace ? (
+      <span className="flex flex-col items-center leading-tight">
+        <span>CANCEL</span>
+        <span className="text-xs font-normal">2s window</span>
+      </span>
+    ) : 'CANCEL';
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
     betShadow = 'shadow-btn-red';
   } else if (phase === 'flying' && bet.placed && bet.cashedOutAt !== null) {
