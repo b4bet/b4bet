@@ -16,6 +16,9 @@ import { aviatorLoop } from '../../lib/persistentGameEngine';
 
 const PLAYER_NAME = 'You';
 
+/** Grace window (ms) after round starts flying — cancel is still allowed */
+const FLYING_GRACE_MS = 2000;
+
 interface AviatorGameProps {
   onBack?: () => void;
 }
@@ -40,6 +43,31 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const [cashoutNotices, setCashoutNotices] = useState<CashoutNotice[]>([]);
   const [insufficientBalanceNotices, setInsufficientBalanceNotices] = useState<InsufficientBalanceNotice[]>([]);
   const [timeoutNotices, setTimeoutNotices] = useState<TimeoutNotice[]>([]);
+
+  // Track whether we're inside the 2-second grace window after flying starts
+  const [flyingGrace, setFlyingGrace] = useState(false);
+  const flyingGraceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevPhase = useRef<string>(phase);
+
+  useEffect(() => {
+    if (phase === 'flying' && prevPhase.current !== 'flying') {
+      // Flying just started — open 2s grace window
+      setFlyingGrace(true);
+      if (flyingGraceTimer.current) clearTimeout(flyingGraceTimer.current);
+      flyingGraceTimer.current = setTimeout(() => {
+        setFlyingGrace(false);
+      }, FLYING_GRACE_MS);
+    }
+    if (phase !== 'flying') {
+      // Reset grace when not flying
+      setFlyingGrace(false);
+      if (flyingGraceTimer.current) {
+        clearTimeout(flyingGraceTimer.current);
+        flyingGraceTimer.current = null;
+      }
+    }
+    prevPhase.current = phase;
+  }, [phase]);
 
   const showCashoutNotice = useCallback((amount: number, at: number) => {
     const id = Date.now() + Math.random();
@@ -124,7 +152,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   /**
-   * Called by BettingPanel when the player cancels a placed bet during waiting phase.
+   * Called by BettingPanel when the player cancels a placed bet during waiting
+   * phase OR within the 2-second flying grace window.
    * Refunds locally AND calls the server to refund Supabase balance.
    */
   const handleCancelBet = useCallback(
@@ -274,6 +303,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               countdown={countdown}
               roundId={roundId}
               balance={balance}
+              flyingGrace={flyingGrace}
               onPlaceBet={handlePlaceBet}
               onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
               onCashOut={handleCashOut}
@@ -289,6 +319,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               countdown={countdown}
               roundId={roundId}
               balance={balance}
+              flyingGrace={flyingGrace}
               onPlaceBet={handlePlaceBet}
               onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
               onCashOut={handleCashOut}
