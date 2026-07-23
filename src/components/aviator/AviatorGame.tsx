@@ -86,14 +86,18 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const placeBetQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   /**
-   * @param amount     - Bet amount in currency units
-   * @param placedAtMs - Timestamp (ms) when the user actually clicked BET.
-   *   Passed to the server so it can validate timing using the client click
-   *   time rather than the Edge Function execution time (which may be 2-4s
-   *   later due to cold-start latency, causing false "betting window closed"
-   *   rejections near the end of the waiting phase).
+   * Returns { ok, betId, reason } so BettingPanel can decide
+   * whether to disable autobet or just silently retry next round.
+   *
+   * reason values:
+   *   'insufficient_balance' — user has no money → disable autobet
+   *   'phase_closed'         — round transitioned before server got request → keep autobet, retry
+   *   'network'              — network/unexpected error → keep autobet, retry
    */
-  const handlePlaceBet = useCallback(async (amount: number, placedAtMs: number): Promise<{ ok: boolean; betId: string | null }> => {
+  const handlePlaceBet = useCallback(async (
+    amount: number,
+    placedAtMs: number,
+  ): Promise<{ ok: boolean; betId: string | null; reason: string | null }> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
       cms.toast({
@@ -101,17 +105,17 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`,
         kind: 'alert',
       });
-      return { ok: false, betId: null };
+      return { ok: false, betId: null, reason: 'out_of_range' };
     }
 
     // Deduct balance locally so UI updates instantly
     const ok = store.debitLocalOnly(amount);
-    if (!ok) return { ok: false, betId: null };
+    if (!ok) return { ok: false, betId: null, reason: 'insufficient_balance' };
 
     const session = auth.getSession();
     if (!session) {
       store.credit(amount);
-      return { ok: false, betId: null };
+      return { ok: false, betId: null, reason: 'unauthenticated' };
     }
 
     // Serialize requests so two panels don't race on the same DB balance read
@@ -131,9 +135,13 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       );
 
       if (!result.success) {
-        // Server rejected (e.g. phase changed) — refund and abort
+        // Server rejected — determine reason
         store.credit(amount);
-        return { ok: false, betId: null };
+        const serverError = (result as { error?: string }).error ?? '';
+        const reason = serverError.toLowerCase().includes('insufficient')
+          ? 'insufficient_balance'
+          : 'phase_closed';
+        return { ok: false, betId: null, reason };
       }
 
       // Sync server-confirmed balance to prevent client/server drift
@@ -141,11 +149,11 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         store.setBalance(result.balance_after);
       }
 
-      return { ok: true, betId: result.bet_id ?? null };
+      return { ok: true, betId: result.bet_id ?? null, reason: null };
     } catch {
-      // Network error — refund locally
+      // Network error — refund locally, keep autobet for retry
       store.credit(amount);
-      return { ok: false, betId: null };
+      return { ok: false, betId: null, reason: 'network' };
     } finally {
       resolveQueue();
     }
