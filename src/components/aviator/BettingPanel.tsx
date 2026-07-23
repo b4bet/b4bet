@@ -49,7 +49,8 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
-  onPlaceBet: (amount: number) => Promise<boolean>;
+  /** Returns { ok, betId } — betId is the server-assigned ID for this bet. */
+  onPlaceBet: (amount: number) => Promise<{ ok: boolean; betId: string | null }>;
   onCancelBet: (amount: number) => void;
   onCashOut: (amount: number, at: number) => void;
   onWin: (amount: number) => void;
@@ -98,8 +99,11 @@ export function BettingPanel({
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
             // Fire the async bet placement; update betId when server confirms
-            void onPlaceBet(b.amount).then((ok) => {
-              if (!ok) {
+            void onPlaceBet(b.amount).then(({ ok, betId }) => {
+              if (ok) {
+                // Save the server-assigned betId so cashout can use it directly
+                setBet((bb) => ({ ...bb, betId: betId ?? null }));
+              } else {
                 setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
                 onInsufficientBalance?.();
               }
@@ -180,9 +184,9 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
-        void onPlaceBet(bet.amount).then((ok) => {
+        void onPlaceBet(bet.amount).then(({ ok, betId }) => {
           if (ok) {
-            setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
+            setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
           } else {
             onInsufficientBalance?.();
           }
@@ -207,9 +211,10 @@ export function BettingPanel({
         return;
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
-      void onPlaceBet(bet.amount).then((ok) => {
+      void onPlaceBet(bet.amount).then(({ ok, betId }) => {
         if (ok) {
-          setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
+          // Save betId so cashout can find the bet directly on the server
+          setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
         } else {
           onInsufficientBalance?.();
         }

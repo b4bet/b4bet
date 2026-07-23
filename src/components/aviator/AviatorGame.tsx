@@ -11,7 +11,7 @@ import { useBalance } from '../../lib/hooks';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
 import { auth } from '../../lib/auth';
-import { GameService, type AviatorCashoutResult } from '../../lib/game-service';
+import { GameService } from '../../lib/game-service';
 import { aviatorLoop } from '../../lib/persistentGameEngine';
 
 const PLAYER_NAME = 'You';
@@ -85,18 +85,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
    */
   const placeBetQueueRef = useRef<Promise<void>>(Promise.resolve());
 
-  /**
-   * Cash-out serialization queue.
-   *
-   * Same race condition as place-bet, but at cashout time:
-   * Panel 0 and Panel 1 both call aviator_cashout simultaneously.
-   * Server reads old balance for both → one win gets overwritten.
-   *
-   * Fix: Same promise-chain pattern — Panel 1 waits for Panel 0's cashout
-   * to complete before hitting Supabase, so each balance_after is correct.
-   */
-  const cashoutQueueRef = useRef<Promise<void>>(Promise.resolve());
-
   const handlePlaceBet = useCallback(async (amount: number): Promise<{ ok: boolean; betId: string | null }> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
@@ -134,37 +122,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     } catch {
       store.credit(amount);
       return { ok: false, betId: null };
-    } finally {
-      resolveQueue();
-    }
-  }, []);
-
-  /**
-   * Serialized server cashout — called by BettingPanel via onServerCashOut prop.
-   *
-   * Both panels share this single function. The cashoutQueueRef ensures they
-   * never run concurrently against Supabase, so both balance_after values are
-   * computed from the correct sequential balances.
-   */
-  const handleServerCashOut = useCallback(async (
-    amount: number,
-    placedAtMs: number,
-    at: number,
-    betId: string | null,
-  ): Promise<AviatorCashoutResult> => {
-    const session = auth.getSession();
-    if (!session) throw new Error('Not authenticated');
-
-    let resolveQueue!: () => void;
-    const myTurn = new Promise<void>((res) => { resolveQueue = res; });
-    const prevQueue = cashoutQueueRef.current;
-    cashoutQueueRef.current = myTurn;
-
-    // Wait for any concurrent cashout to finish first
-    await prevQueue;
-
-    try {
-      return await aviatorLoop.cashoutBet(amount, placedAtMs, at, betId);
     } finally {
       resolveQueue();
     }
@@ -307,7 +264,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               balance={balance}
               onPlaceBet={handlePlaceBet}
               onCancelBet={(amount) => handleCancelBet(0, amount)}
-              onServerCashOut={handleServerCashOut}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
@@ -323,7 +279,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               balance={balance}
               onPlaceBet={handlePlaceBet}
               onCancelBet={(amount) => handleCancelBet(1, amount)}
-              onServerCashOut={handleServerCashOut}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}

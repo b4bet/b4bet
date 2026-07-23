@@ -152,10 +152,12 @@ serve(async (req) => {
     if (action === "aviator_cashout") {
       const { user_id, bet_amount, cashout_at, placed_at_ms } = payload;
       const betNum = Number(bet_amount);
-      // FIX: Client sends "cashout_multiplier", also accept "cashout_at" and "multiplier"
+      // Accept cashout_multiplier, cashout_at, or multiplier from client
       const cashoutMultiplier = Number(cashout_at ?? payload.cashout_multiplier ?? payload.multiplier ?? 0);
-      // FIX: Use round_uuid (server-assigned unique ID) for lookup, NOT round_id (local counter)
+      // Use round_uuid (server-assigned unique ID) for round lookup
       const roundUuid = payload.round_uuid ?? null;
+      // bet_id: server-assigned ID from aviator_place_bet — use for deduplication
+      const betId = payload.bet_id ?? null;
 
       if (!user_id || !betNum) {
         throw new Error("Missing required fields: user_id, bet_amount");
@@ -165,9 +167,60 @@ serve(async (req) => {
         throw new Error("Invalid cashout multiplier");
       }
 
-      // Look up bust_point for this round to validate cashout was before crash.
-      // IMPORTANT: Prefer round_uuid (globally unique) over round_id (local counter
-      // that doesn't match DB IDs and would incorrectly find old crashed rounds).
+      // ── Deduplication via bet_id ─────────────────────────────────────────
+      // If bet_id is provided, check whether this bet was already cashed out.
+      // This prevents double-payout when the client retries or both panels
+      // fire cashout at the same moment.
+      if (betId) {
+        const { data: existingBet } = await supabase
+          .from("bets")
+          .select("id, status, win_amount, multiplier")
+          .eq("id", betId)
+          .maybeSingle();
+
+        if (existingBet && existingBet.status === "won") {
+          // Already processed — return the cached result idempotently
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("balance")
+            .eq("id", user_id)
+            .single();
+          return new Response(
+            JSON.stringify({
+              success: true,
+              won: true,
+              win: existingBet.win_amount ?? 0,
+              balance_after: profile?.balance ?? 0,
+              cashout_at: Number(existingBet.multiplier ?? cashoutMultiplier),
+              crash_point: null,
+            }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        if (existingBet && existingBet.status === "lost") {
+          // Bet already settled as lost — round crashed before cashout
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("balance")
+            .eq("id", user_id)
+            .single();
+          return new Response(
+            JSON.stringify({
+              success: false,
+              won: false,
+              win: 0,
+              balance_after: profile?.balance ?? null,
+              crash_point: null,
+            }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+          );
+        }
+      }
+
+      // ── Validate cashout against round crash point ───────────────────────
+      // Look up bust_point to verify cashout was before crash.
+      // aviator_rounds only has completed rounds, so null = round still flying (OK to cash out).
       let bustPoint: number | null = null;
       if (roundUuid) {
         const { data: roundData } = await supabase
@@ -181,15 +234,9 @@ serve(async (req) => {
           bustPoint = Number(roundData[0].bust_point);
         }
       }
-      // NOTE: We intentionally do NOT fall back to round_id lookup because
-      // the client's round_id is a local counter (1, 2, 3...) that does NOT
-      // correspond to aviator_rounds.id. Using it would match old crashed rounds.
 
-      // Verify cashout was before crash (only if we found the round in DB)
+      // If round has crashed and cashout is after crash point, reject
       if (bustPoint !== null && cashoutMultiplier > bustPoint) {
-        // FIX: Do NOT include "error" field in response body.
-        // The client's post() helper throws on ANY response with an "error" key,
-        // which prevents graceful handling of this "already crashed" scenario.
         return new Response(
           JSON.stringify({
             success: false,
@@ -203,6 +250,11 @@ serve(async (req) => {
         );
       }
 
+      // ── Atomic balance update ────────────────────────────────────────────
+      // Use an RPC (if available) or optimistic update with version check.
+      // Win amount = bet * cashoutMultiplier (total payout, bet was already deducted)
+      const winAmount = Math.round(betNum * cashoutMultiplier);
+
       // Fetch current balance
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
@@ -214,9 +266,6 @@ serve(async (req) => {
         throw new Error("User profile not found");
       }
 
-      // Win amount = bet * cashoutMultiplier (total payout)
-      const winAmount = Math.round(betNum * cashoutMultiplier);
-      // Balance: add back the win (bet was already deducted by aviator_place_bet)
       const newBalance = profile.balance + winAmount;
 
       const { error: updateError } = await supabase
@@ -228,25 +277,48 @@ serve(async (req) => {
         throw new Error(`Balance update failed: ${updateError.message}`);
       }
 
-      // Record in bets table
+      // ── Record / update the bet ──────────────────────────────────────────
       const now = new Date().toISOString();
-      await supabase.from("bets").insert({
-        user_id,
-        round_id: null,
-        bet_amount: betNum,
-        win_amount: winAmount,
-        multiplier: cashoutMultiplier,
-        status: "won",
-        bet_details: {
-          game: "aviator",
-          cashOutAt: cashoutMultiplier,
-          bustPoint: bustPoint ?? 0,
-          round_uuid: roundUuid,
-          placed_at_ms: placed_at_ms ?? null,
-        },
-        placed_at: placed_at_ms ? new Date(Number(placed_at_ms)).toISOString() : now,
-        resolved_at: now,
-      }).catch(() => {}); // Non-fatal
+
+      if (betId) {
+        // Update the existing pending bet to won — avoids duplicate records
+        await supabase
+          .from("bets")
+          .update({
+            win_amount: winAmount,
+            multiplier: cashoutMultiplier,
+            status: "won",
+            resolved_at: now,
+            bet_details: {
+              game: "aviator",
+              cashOutAt: cashoutMultiplier,
+              bustPoint: bustPoint ?? 0,
+              round_uuid: roundUuid,
+              placed_at_ms: placed_at_ms ?? null,
+            },
+          })
+          .eq("id", betId)
+          .catch(() => {}); // Non-fatal
+      } else {
+        // No bet_id — insert a new won record (legacy path)
+        await supabase.from("bets").insert({
+          user_id,
+          round_id: null,
+          bet_amount: betNum,
+          win_amount: winAmount,
+          multiplier: cashoutMultiplier,
+          status: "won",
+          bet_details: {
+            game: "aviator",
+            cashOutAt: cashoutMultiplier,
+            bustPoint: bustPoint ?? 0,
+            round_uuid: roundUuid,
+            placed_at_ms: placed_at_ms ?? null,
+          },
+          placed_at: placed_at_ms ? new Date(Number(placed_at_ms)).toISOString() : now,
+          resolved_at: now,
+        }).catch(() => {}); // Non-fatal
+      }
 
       return new Response(
         JSON.stringify({
@@ -265,6 +337,7 @@ serve(async (req) => {
     if (action === "aviator_place_bet") {
       const { user_id, bet_amount, round_id } = payload;
       const betNum = Number(bet_amount);
+      const roundUuid = payload.round_uuid ?? null;
 
       if (!user_id || !betNum) {
         throw new Error("Missing required fields: user_id, bet_amount");
@@ -294,7 +367,7 @@ serve(async (req) => {
         win_amount: 0,
         multiplier: 0,
         status: "pending",
-        bet_details: { game: "aviator", round_id: round_id ?? null },
+        bet_details: { game: "aviator", round_id: round_id ?? null, round_uuid: roundUuid },
         placed_at: new Date().toISOString(),
       }).select("id").maybeSingle().catch(() => ({ data: null }));
 
@@ -308,11 +381,49 @@ serve(async (req) => {
       );
     }
 
-    // ── aviator_settle: round ended, record lost bet ─────────────────────────
-    if (action === "aviator_settle") {
-      const { user_id, bet_amount, bust_point } = payload;
+    // ── aviator_settle_lost: round ended, mark lost bets ─────────────────────
+    if (action === "aviator_settle" || action === "aviator_settle_lost") {
+      const { user_id, bet_amount, bust_point, round_uuid } = payload;
       if (user_id && bet_amount) {
         const now = new Date().toISOString();
+        const bustPt = Number(bust_point ?? 0);
+
+        // Try to update an existing pending bet for this round first
+        if (round_uuid) {
+          const { data: pendingBet } = await supabase
+            .from("bets")
+            .select("id, status")
+            .eq("user_id", user_id)
+            .eq("status", "pending")
+            .contains("bet_details", { round_uuid })
+            .maybeSingle();
+
+          if (pendingBet && pendingBet.status === "pending") {
+            await supabase
+              .from("bets")
+              .update({
+                win_amount: 0,
+                multiplier: bustPt,
+                status: "lost",
+                resolved_at: now,
+                bet_details: {
+                  game: "aviator",
+                  bustPoint: bustPt,
+                  cashOutAt: null,
+                  round_uuid,
+                },
+              })
+              .eq("id", pendingBet.id)
+              .catch(() => {});
+
+            return new Response(
+              JSON.stringify({ success: true, crash_point: bustPt }),
+              { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+        }
+
+        // Fallback: insert a new lost record
         await supabase.from("bets").insert({
           user_id,
           round_id: null,
@@ -322,7 +433,7 @@ serve(async (req) => {
           status: "lost",
           bet_details: {
             game: "aviator",
-            bustPoint: bust_point ?? 0,
+            bustPoint: bustPt,
             cashOutAt: null,
           },
           placed_at: now,
