@@ -4,6 +4,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { bus, Topics } from './bus';
 import { auth } from './auth';
+import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export interface PerGameLimit {
   min: number;
@@ -15,6 +16,7 @@ export interface GameHandlerConfig {
   targetWinProbability: number;
   houseEdge: number;
   manualResult: string;
+  manualCrashPoint?: number;
   manualTargetRoundId: number | null;
   quickStakes: number[];
 }
@@ -127,49 +129,56 @@ export interface RedeemCode {
   usageByUser: Record<string, number>;
 }
 
-export const globalRounds: Record<string, number> = { wingo: 1, k3: 1, fived: 1, sunvsmoon: 1 };
-
-function seedLeaderboard(prefix: string): { user: string; earnings: number; ts: number }[] {
-  const names = ['NeonHawk','PixelFox','CyberLynx','QuantumOwl','AstroBee','NovaWolf','EchoFalcon','TurboKoi','GlitchRavn','PrismTiger','OrbitMoth','VoltGecko'];
-  const now = Date.now();
-  const rows: { user: string; earnings: number; ts: number }[] = [];
-  for (let i = 0; i < 40; i++) {
-    rows.push({
-      user: names[i % names.length] + (Math.floor(i / names.length) || ''),
-      earnings: Math.round((Math.random() * 9000 + 500) * 100) / 100,
-      ts: now - Math.floor(Math.random() * 365 * 24 * 60 * 60 * 1000),
-    });
-  }
-  return rows.map(r => ({ ...r, user: r.user + (prefix === 'mines' ? '\u00B7M' : '') }));
+/** Returned by computeAutoOutcome — human-readable outcome for admin preview */
+export interface RoundOutcomePreview {
+  outcome: string;
+  detail: string;
 }
 
+export const globalRounds: Record<string, number> = { wingo: 1, k3: 1, fived: 1, sunvsmoon: 1 };
+
+const GAME_HANDLER_KEYS = ['crash', 'aviator', 'wingo', 'k3', 'fived', 'sunvsmoon', 'trading', 'mines'] as const;
+
+const DEFAULT_CRASH_HANDLER: GameHandlerConfig = {
+  mode: 'AUTO', targetWinProbability: 55, houseEdge: 4,
+  manualResult: '2.00', manualCrashPoint: 2.0,
+  manualTargetRoundId: null, quickStakes: [200, 500, 1000, 2000],
+};
+
+const DEFAULT_ADMIN_CONFIG: AdminConfig = {
+  mode: 'AUTO', targetWinProbability: 55, manualCrashPoint: 2.0, houseEdge: 4,
+  crashQuickStakes: [200, 500, 1000, 2000], manualTargetRoundId: null, minBet: 10, maxBet: 100000,
+  perGameLimits: {},
+  gameHandlers: {
+    crash: DEFAULT_CRASH_HANDLER,
+    aviator: { mode: 'AUTO', targetWinProbability: 55, houseEdge: 4, manualResult: '2.00', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
+    wingo: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '5', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
+    k3: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '3,3,3', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
+    fived: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '00000', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
+    sunvsmoon: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 6, manualResult: 'sun', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
+    mines: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '', manualTargetRoundId: null, quickStakes: [100, 500, 1000, 5000] },
+    trading: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '', manualTargetRoundId: null, quickStakes: [100, 500, 1000, 5000] },
+  },
+};
+
 class Store {
-  balance = 0;
+  // Balance starts at -1 (sentinel) to distinguish "not loaded yet" from actual 0.
+  // UI should show a loading skeleton while balance === -1.
+  balance = -1;
   currency = '\u20B9'; // ₹
 
   notifications: NotificationItem[] = [];
 
-  admin: AdminConfig = {
-    mode: 'AUTO', targetWinProbability: 55, manualCrashPoint: 2.0, houseEdge: 4,
-    crashQuickStakes: [200, 500, 1000, 2000], manualTargetRoundId: null, minBet: 10, maxBet: 100000,
-    perGameLimits: {},
-    gameHandlers: {
-      aviator: { mode: 'AUTO', targetWinProbability: 55, houseEdge: 4, manualResult: '2.00', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
-      wingo: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '5', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
-      k3: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '3,3,3', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
-      fived: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '00000', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] },
-      sunvsmoon: { mode: 'AUTO', targetWinProbability: 50, houseEdge: 6, manualResult: 'sun', manualTargetRoundId: null, quickStakes: [10, 50, 100, 500] },
-    },
-  };
+  admin: AdminConfig = { ...DEFAULT_ADMIN_CONFIG, gameHandlers: { ...DEFAULT_ADMIN_CONFIG.gameHandlers } };
 
-  // Per-user history (mock single-user app)
   crashMyBets: CrashBetRecord[] = [];
   minesMyHistory: MinesRoundRecord[] = [];
   sunMoonHistory: SunMoonRoundRecord[] = [];
   tradingHistory: TradingBetRecord[] = [];
 
-  crashLeaderboard = seedLeaderboard('crash');
-  minesLeaderboard = seedLeaderboard('mines');
+  // Leaderboards are populated from real player data only
+  crashLeaderboard: { user: string; earnings: number; ts: number }[] = [];
+  minesLeaderboard: { user: string; earnings: number; ts: number }[] = [];
 
   adminHistory: AdminHistoryRecord[] = [];
   balanceHistory: BalanceHistoryRecord[] = [];
@@ -177,35 +186,78 @@ class Store {
   private balancesByUser: Record<string, number> = {};
   private static BALANCES_KEY = 'b4bet.balances';
 
+  private userBalanceChannel: RealtimeChannel | null = null;
+
   signupBonus = 100;
   signupBonusHistory: SignupBonusRecord[] = [];
   private static SIGNUP_BONUS_KEY = 'b4bet.signupBonus';
   private static SIGNUP_BONUS_HISTORY_KEY = 'b4bet.signupBonusHistory';
-  private static SIGNUP_BONUS_GRANTED_KEY = 'b4bet.signupBonusGranted';
-  private signupBonusGranted: Record<string, number> = {};
+  private signupBonusGrantedCache: Set<string> = new Set();
 
-  redeemCodes: Record<string, RedeemCode> = {
-    WELCOME50: { code: 'WELCOME50', bonus: 50, maxUsesPerUser: 1, userLimit: 100, createdAt: Date.now(), usageByUser: {} },
-    BONUS100: { code: 'BONUS100', bonus: 100, maxUsesPerUser: 1, userLimit: 100, createdAt: Date.now(), usageByUser: {} },
-  };
+  // No hardcoded codes — all codes come from Supabase only
+  redeemCodes: Record<string, RedeemCode> = {};
 
   constructor() {
     this.restoreBalances();
     this.restoreSignupBonus();
+    void this.loadRedeemCodesFromSupabase();
+    void this.loadAdminConfigFromSupabase();
 
     bus.on(Topics.AuthState, async (payload: unknown) => {
-      const session = payload as { username?: string } | null;
+      const session = payload as { userId?: string; username?: string } | null;
+
+      if (this.userBalanceChannel) {
+        await supabase.removeChannel(this.userBalanceChannel);
+        this.userBalanceChannel = null;
+      }
+
       if (session && session.username) {
-        // Load balance from Supabase
-        const { data: profile } = await supabase.from('profiles')
-          .select('balance').eq('username', session.username).single();
+        const { data: profile, error: profileErr } = session.userId
+          ? await supabase.from('profiles').select('balance').eq('id', session.userId).single()
+          : await supabase.from('profiles').select('balance').eq('username', session.username).single();
         if (profile) {
-          this.balance = (profile as { balance: number }).balance || 0;
+          // Coerce to number — Supabase REST returns bigint as number, but
+          // some paths may return it as string depending on the client config.
+          this.balance = Number((profile as { balance: number | string }).balance) || 0;
+        } else if (profileErr) {
+          console.warn('[store] failed to load profile balance:', profileErr.message);
+          // On error, fall back to 0 so UI doesn't hang on loading state forever
+          this.balance = 0;
+        }
+        bus.emit(Topics.Balance, this.balance);
+
+        if (session.userId) {
+          this.userBalanceChannel = supabase
+            .channel(`user_profile_${session.userId}`)
+            .on(
+              'postgres_changes',
+              {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'profiles',
+                filter: `id=eq.${session.userId}`,
+              },
+              (evt) => {
+                const row = evt.new as { balance?: number | string };
+                // Supabase Realtime sends bigint columns as strings — coerce
+                // to number with Number() and validate with isFinite()
+                const parsed = Number(row.balance);
+                if (isFinite(parsed)) {
+                  this.balance = parsed;
+                  if (session.username) {
+                    this.balancesByUser[session.username.toLowerCase()] = parsed;
+                    this.persistBalances();
+                  }
+                  bus.emit(Topics.Balance, this.balance);
+                }
+              },
+            )
+            .subscribe();
         }
       } else {
         this.balance = 0;
+        bus.emit(Topics.Balance, this.balance);
       }
-      bus.emit(Topics.Balance, this.balance);
     });
   }
 
@@ -213,14 +265,7 @@ class Store {
   private restoreBalances() {
     try {
       const raw = localStorage.getItem(Store.BALANCES_KEY);
-      if (raw) this.balancesByUser = JSON.parse(raw) as Record<string, number>;
-    } catch { /* ignore */ }
-    try {
-      const session = auth.getSession();
-      if (session) {
-        const key = session.username.toLowerCase();
-        this.balance = this.balancesByUser[key] ?? 0;
-      }
+      if (raw) this.balancesByUser = JSON.parse(raw);
     } catch { /* ignore */ }
   }
 
@@ -243,8 +288,7 @@ class Store {
       this.balance = next;
       bus.emit(Topics.Balance, this.balance);
     }
-    // Also update Supabase profile
-    supabase.from('profiles').update({ balance: next }).eq('username', username).then(() => {}).catch(() => {});
+    supabase.rpc('admin_credit_balance', { p_username: username, p_amount: amount }).then(() => {}).catch(() => {});
   }
 
   setBalance(next: number) {
@@ -254,14 +298,29 @@ class Store {
       if (session) {
         this.balancesByUser[session.username.toLowerCase()] = this.balance;
         this.persistBalances();
-        // Update Supabase
-        supabase.from('profiles').update({ balance: this.balance }).eq('username', session.username).then(() => {}).catch(() => {});
+        if (session.userId) {
+          supabase.from('profiles')
+            .update({ balance: this.balance })
+            .eq('id', session.userId)
+            .then(({ error }) => {
+              if (error) console.warn('[store] setBalance Supabase update failed:', error.message);
+            })
+            .catch((err) => { console.warn('[store] setBalance Supabase update error:', err); });
+        } else {
+          supabase.from('profiles')
+            .update({ balance: this.balance })
+            .eq('username', session.username)
+            .then(({ error }) => {
+              if (error) console.warn('[store] setBalance Supabase update (username) failed:', error.message);
+            })
+            .catch((err) => { console.warn('[store] setBalance Supabase update error:', err); });
+        }
       }
-    } catch { /* ignore */ }
+    } catch (err) { console.warn('[store] setBalance error:', err); }
     bus.emit(Topics.Balance, this.balance);
   }
 
-  credit(amount: number) { this.setBalance(this.balance + amount); }
+  credit(amount: number) { this.setBalance(Math.max(0, this.balance) + amount); }
 
   debit(amount: number): boolean {
     if (!auth.getSession()) {
@@ -291,14 +350,12 @@ class Store {
     if (amount > this.balance) return false;
     const next = Math.max(0, Math.round((this.balance - amount) * 100) / 100);
     this.balance = next;
-    try {
-      const session = auth.getSession();
-      if (session) {
-        this.balancesByUser[session.username.toLowerCase()] = next;
-        this.persistBalances();
-        // Do NOT write to Supabase — the Edge Function handles the DB deduction
-      }
-    } catch { /* ignore */ }
+    const session = auth.getSession();
+    if (session) {
+      this.balancesByUser[session.username.toLowerCase()] = next;
+      this.persistBalances();
+      // Do NOT write to Supabase — the Edge Function handles the DB deduction
+    }
     bus.emit(Topics.Balance, this.balance);
     return true;
   }
@@ -319,9 +376,131 @@ class Store {
   }
 
   // ---- Admin Config ----
+
+  /**
+   * Load per-game min/max limits from the `games` table and merge them into
+   * perGameLimits so that getGameLimits() always reflects what the admin set
+   * in GameSettingsTab (which writes to `games`, not just admin_config).
+   */
+  async loadGameLimitsFromGamesTable() {
+    try {
+      const { data } = await supabase.from('games').select('slug, min_bet, max_bet, is_active');
+      if (!data) return;
+      const rows = data as { slug: string; min_bet: number; max_bet: number; is_active: boolean }[];
+      const next = { ...this.admin.perGameLimits };
+      for (const row of rows) {
+        if (row.slug && typeof row.min_bet === 'number' && typeof row.max_bet === 'number') {
+          next[row.slug] = { min: row.min_bet, max: row.max_bet };
+        }
+      }
+      this.admin = { ...this.admin, perGameLimits: next };
+      bus.emit(Topics.AdminConfig, this.admin);
+    } catch { /* ignore */ }
+  }
+
+  async loadAdminConfigFromSupabase() {
+    try {
+      const { data } = await supabase.rpc('admin_get_settings');
+      if (data) {
+        const rows = data as { key: string; value: unknown }[];
+        const row = rows.find(r => r.key === 'admin_config');
+        if (row?.value && typeof row.value === 'object') {
+          const loaded = row.value as Record<string, unknown>;
+
+          this.admin = { ...DEFAULT_ADMIN_CONFIG, gameHandlers: { ...DEFAULT_ADMIN_CONFIG.gameHandlers } };
+
+          const { gameHandlers: _gh, ...topLevel } = loaded;
+          Object.assign(this.admin, topLevel);
+
+          if (_gh && typeof _gh === 'object') {
+            const gh = _gh as Record<string, unknown>;
+            for (const key of Object.keys(gh)) {
+              if (gh[key] && typeof gh[key] === 'object') {
+                this.admin.gameHandlers[key] = {
+                  ...this.getGameHandler(key),
+                  ...(gh[key] as Partial<GameHandlerConfig>),
+                };
+              }
+            }
+          }
+
+          for (const key of GAME_HANDLER_KEYS) {
+            const rootVal = loaded[key];
+            if (rootVal && typeof rootVal === 'object') {
+              this.admin.gameHandlers[key] = {
+                ...this.getGameHandler(key),
+                ...(rootVal as Partial<GameHandlerConfig>),
+              };
+            }
+          }
+
+          // Keep crashQuickStakes in sync with crash handler's quickStakes
+          const crashHandler = this.admin.gameHandlers['crash'];
+          if (crashHandler?.quickStakes?.length) {
+            this.admin.crashQuickStakes = crashHandler.quickStakes;
+          }
+
+          bus.emit(Topics.AdminConfig, this.admin);
+        }
+      }
+    } catch { /* ignore */ }
+
+    // Always overlay limits from games table — this is the source of truth for
+    // per-game min/max set via GameSettingsTab.
+    await this.loadGameLimitsFromGamesTable();
+  }
+
   setAdmin(patch: Partial<AdminConfig>) {
     this.admin = { ...this.admin, ...patch };
     bus.emit(Topics.AdminConfig, this.admin);
+    void this._persistAdminConfig();
+  }
+
+  private _buildDbPayload(): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      mode: this.admin.mode,
+      targetWinProbability: this.admin.targetWinProbability,
+      manualCrashPoint: this.admin.manualCrashPoint,
+      houseEdge: this.admin.houseEdge,
+      crashQuickStakes: this.admin.crashQuickStakes,
+      manualTargetRoundId: this.admin.manualTargetRoundId,
+      minBet: this.admin.minBet,
+      maxBet: this.admin.maxBet,
+      perGameLimits: this.admin.perGameLimits,
+      gameHandlers: this.admin.gameHandlers,
+    };
+    for (const key of GAME_HANDLER_KEYS) {
+      const handler = this.admin.gameHandlers[key];
+      if (handler) payload[key] = handler;
+    }
+    return payload;
+  }
+
+  private _persistAdminConfig() {
+    return supabase.rpc('admin_update_setting', {
+      p_key: 'admin_config',
+      p_value: this._buildDbPayload() as unknown as string,
+    }).catch(() => {});
+  }
+
+  async setGameHandlerAsync(gameKey: string, patch: Partial<GameHandlerConfig>): Promise<void> {
+    const current = this.getGameHandler(gameKey);
+    const updated = { ...current, ...patch };
+    const nextHandlers = { ...this.admin.gameHandlers, [gameKey]: updated };
+    this.admin = { ...this.admin, gameHandlers: nextHandlers };
+    if (gameKey === 'crash') {
+      if (patch.mode !== undefined) this.admin.mode = patch.mode;
+      if (patch.manualCrashPoint !== undefined) this.admin.manualCrashPoint = patch.manualCrashPoint;
+      if (patch.houseEdge !== undefined) this.admin.houseEdge = patch.houseEdge;
+      if (patch.targetWinProbability !== undefined) this.admin.targetWinProbability = patch.targetWinProbability;
+      if (patch.quickStakes !== undefined) this.admin.crashQuickStakes = patch.quickStakes;
+    }
+    bus.emit(Topics.AdminConfig, this.admin);
+    const { error } = await supabase.rpc('admin_update_setting', {
+      p_key: 'admin_config',
+      p_value: this._buildDbPayload() as unknown as string,
+    });
+    if (error) throw new Error(error.message);
   }
 
   getGameLimits(gameKey: string): { min: number; max: number } {
@@ -340,113 +519,394 @@ class Store {
   getGameHandler(gameKey: string): GameHandlerConfig {
     const existing = this.admin.gameHandlers[gameKey];
     if (existing) return existing;
+    if (gameKey === 'crash') return { ...DEFAULT_CRASH_HANDLER };
     return { mode: 'AUTO', targetWinProbability: 50, houseEdge: 5, manualResult: '', manualTargetRoundId: null, quickStakes: [10, 100, 1000, 10000] };
   }
 
   setGameHandler(gameKey: string, patch: Partial<GameHandlerConfig>) {
     const current = this.getGameHandler(gameKey);
-    const next = { ...this.admin.gameHandlers, [gameKey]: { ...current, ...patch } };
-    this.setAdmin({ gameHandlers: next });
+    const updated = { ...current, ...patch };
+    const nextHandlers = { ...this.admin.gameHandlers, [gameKey]: updated };
+    this.admin = { ...this.admin, gameHandlers: nextHandlers };
+    if (gameKey === 'crash') {
+      if (patch.mode !== undefined) this.admin.mode = patch.mode;
+      if (patch.manualCrashPoint !== undefined) this.admin.manualCrashPoint = patch.manualCrashPoint;
+      if (patch.houseEdge !== undefined) this.admin.houseEdge = patch.houseEdge;
+      if (patch.targetWinProbability !== undefined) this.admin.targetWinProbability = patch.targetWinProbability;
+      if (patch.quickStakes !== undefined) this.admin.crashQuickStakes = patch.quickStakes;
+    }
+    bus.emit(Topics.AdminConfig, this.admin);
+    void this._persistAdminConfig();
   }
 
   getGameRound(gameKey: string): number { return globalRounds[gameKey] ?? 1; }
   advanceGameRound(gameKey: string): number {
-    globalRounds[gameKey] = (globalRounds[gameKey] ?? 1) + 1;
+    if (globalRounds[gameKey] === undefined) globalRounds[gameKey] = 1;
+    globalRounds[gameKey]++;
+    bus.emit(Topics.GameRound, { gameKey, round: globalRounds[gameKey] });
     return globalRounds[gameKey];
   }
-
-  // ---- Crash bets ----
-  addCrashBet(bet: CrashBetRecord) {
-    this.crashMyBets = [bet, ...this.crashMyBets].slice(0, 50);
+  resetGameRound(gameKey: string, to: number = 1) {
+    globalRounds[gameKey] = to;
+    bus.emit(Topics.GameRound, { gameKey, round: to });
   }
 
-  // ---- Mines history ----
-  addMinesRound(round: MinesRoundRecord) {
-    this.minesMyHistory = [round, ...this.minesMyHistory].slice(0, 50);
+  // ---- History ----
+  private currentUserHistoryMeta(): { userId: string; username: string } {
+    const session = auth.getSession();
+    if (session) return { userId: session.userId, username: session.username };
+    return { userId: 'anon', username: 'player_anon' };
   }
 
-  // ---- Sun/Moon history ----
-  addSunMoonRound(round: SunMoonRoundRecord) {
-    this.sunMoonHistory = [round, ...this.sunMoonHistory].slice(0, 50);
+  pushBalanceHistory(rec: Omit<BalanceHistoryRecord, 'id' | 'ts'>) {
+    const item: BalanceHistoryRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.balanceHistory = [item, ...this.balanceHistory].slice(0, 500);
+    supabase.from('transactions').insert({
+      user_id: rec.userId, type: rec.type, amount: rec.amount, status: 'completed',
+      balance_before: this.balance, balance_after: this.balance, reference: rec.reason,
+    }).then(() => {}).catch(() => {});
   }
 
-  // ---- Trading history ----
-  addTradingBet(bet: TradingBetRecord) {
-    this.tradingHistory = [bet, ...this.tradingHistory].slice(0, 50);
+  getBalanceHistory(opts: { search?: string } = {}): BalanceHistoryRecord[] {
+    let rows = [...this.balanceHistory];
+    if (opts.search) { const s = opts.search.toLowerCase(); rows = rows.filter(r => r.username.toLowerCase().includes(s) || r.userId.includes(s)); }
+    return rows.slice(0, 200);
   }
 
-  // ---- Admin history ----
-  addAdminHistory(record: AdminHistoryRecord) {
-    this.adminHistory = [record, ...this.adminHistory].slice(0, 200);
+  private pushAdminHistory(rec: Omit<AdminHistoryRecord, 'id' | 'ts'>) {
+    const item: AdminHistoryRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.adminHistory = [item, ...this.adminHistory].slice(0, 500);
     bus.emit(Topics.AdminHistory, this.adminHistory);
   }
 
-  addBalanceHistory(record: BalanceHistoryRecord) {
-    this.balanceHistory = [record, ...this.balanceHistory].slice(0, 200);
+  getAdminHistory(opts: { game?: AdminHistoryGame | 'all'; search?: string; period?: 'all' | 'day' | 'week' | 'month' | 'year' } = {}): AdminHistoryRecord[] {
+    let rows = [...this.adminHistory];
+    if (opts.game && opts.game !== 'all') rows = rows.filter(r => r.game === opts.game);
+    if (opts.search) { const s = opts.search.toLowerCase(); rows = rows.filter(r => r.username.toLowerCase().includes(s) || r.userId.includes(s)); }
+    if (opts.period && opts.period !== 'all') {
+      const now = Date.now();
+      const ms = { day: 86400000, week: 604800000, month: 2592000000, year: 31536000000 } as const;
+      rows = rows.filter(r => now - r.ts <= ms[opts.period as 'day' | 'week' | 'month' | 'year']);
+    }
+    return rows.slice(0, 200);
   }
 
-  // ---- Signup bonus ----
+  recordCrashBet(rec: Omit<CrashBetRecord, 'id' | 'ts'>) {
+    const item: CrashBetRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.crashMyBets = [item, ...this.crashMyBets].slice(0, 100);
+    bus.emit(Topics.CrashMyBets, this.crashMyBets);
+    const meta = this.currentUserHistoryMeta();
+    this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'crash', amount: rec.amount, win: rec.win,
+      result: rec.cashOutAt ? `${rec.cashOutAt.toFixed(2)}x cashout` : `${rec.bustPoint.toFixed(2)}x bust` });
+    supabase.from('bets').insert({
+      user_id: meta.userId, bet_amount: rec.amount, win_amount: rec.win,
+      multiplier: rec.cashOutAt || rec.bustPoint, status: rec.win > 0 ? 'won' : 'lost',
+      bet_details: { cashOutAt: rec.cashOutAt, bustPoint: rec.bustPoint },
+    }).then(() => {}).catch(() => {});
+  }
+
+  recordMinesRound(rec: Omit<MinesRoundRecord, 'id' | 'ts'>) {
+    const item: MinesRoundRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.minesMyHistory = [item, ...this.minesMyHistory].slice(0, 100);
+    bus.emit(Topics.MinesMyHistory, this.minesMyHistory);
+    const meta = this.currentUserHistoryMeta();
+    this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'mines', amount: rec.stake, win: rec.win,
+      result: rec.busted ? 'busted' : `${rec.multiplier.toFixed(2)}x` });
+    if (!rec.busted && rec.win > 0) {
+      const session = auth.getSession();
+      const username = session?.username ?? meta.username;
+      this.minesLeaderboard = [
+        ...this.minesLeaderboard,
+        { user: username, earnings: rec.win, ts: Date.now() },
+      ];
+    }
+    supabase.from('bets').insert({
+      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
+      multiplier: rec.multiplier, status: rec.busted ? 'lost' : 'won',
+      bet_details: { mines: rec.mines, gems: rec.gems },
+    }).then(() => {}).catch(() => {});
+  }
+
+  recordSunMoonRound(rec: Omit<SunMoonRoundRecord, 'id' | 'ts'>) {
+    const item: SunMoonRoundRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.sunMoonHistory = [item, ...this.sunMoonHistory].slice(0, 100);
+    bus.emit(Topics.SunMoonHistory, this.sunMoonHistory);
+    const meta = this.currentUserHistoryMeta();
+    this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'sunvsmoon', amount: rec.stake, win: rec.win,
+      result: `${rec.bet === 'tie' ? 'Eclipse' : rec.bet.toUpperCase()} \u2192 ${rec.result === 'tie' ? 'Eclipse' : rec.result.toUpperCase()}` });
+    supabase.from('bets').insert({
+      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
+      multiplier: rec.payout, status: rec.win > 0 ? 'won' : 'lost',
+      bet_details: { bet: rec.bet, result: rec.result },
+    }).then(() => {}).catch(() => {});
+  }
+
+  recordTradingBet(rec: Omit<TradingBetRecord, 'id' | 'ts'>) {
+    const item: TradingBetRecord = { ...rec, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.tradingHistory = [item, ...this.tradingHistory].slice(0, 100);
+    bus.emit(Topics.TradingHistory, this.tradingHistory);
+    const meta = this.currentUserHistoryMeta();
+    this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'trading', amount: rec.stake, win: rec.win,
+      result: `${rec.symbol} ${rec.direction} \u00B7 ${rec.won ? 'win' : 'loss'}` });
+    supabase.from('bets').insert({
+      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
+      multiplier: rec.payout, status: rec.won ? 'won' : 'lost',
+      bet_details: { symbol: rec.symbol, direction: rec.direction, entryPrice: rec.entryPrice, exitPrice: rec.exitPrice },
+    }).then(() => {}).catch(() => {});
+  }
+
+  // ---- Redeem Codes ----
+  async loadRedeemCodesFromSupabase() {
+    try {
+      const { data } = await supabase.rpc('admin_get_settings');
+      if (data) {
+        const rows = data as { key: string; value: unknown }[];
+        const row = rows.find(r => r.key === 'redeem_codes');
+        if (row?.value && typeof row.value === 'object') {
+          const loaded = row.value as Record<string, RedeemCode>;
+          this.redeemCodes = loaded;
+          bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  private async persistRedeemCodesToSupabase(): Promise<void> {
+    await supabase.rpc('admin_update_setting', {
+      p_key: 'redeem_codes',
+      p_value: this.redeemCodes as unknown as string,
+    });
+  }
+
+  /**
+   * applyRedeemCodeAsync — Supabase-backed redeem with real userId tracking.
+   * 1. Loads fresh codes from Supabase to prevent race conditions.
+   * 2. Validates and records usage with real userId.
+   * 3. Credits balance via Supabase.
+   * 4. Saves updated codes back to Supabase.
+   */
+  async applyRedeemCodeAsync(code: string, userId: string): Promise<{ status: 'success' | 'used' | 'invalid'; bonus: number }> {
+    await this.loadRedeemCodesFromSupabase();
+
+    const upper = code.trim().toUpperCase();
+    const entry = this.redeemCodes[upper];
+    if (!entry) return { status: 'invalid', bonus: 0 };
+
+    const uses = entry.usageByUser[userId] ?? 0;
+    if (uses >= entry.maxUsesPerUser) return { status: 'used', bonus: 0 };
+
+    const totalUses = Object.keys(entry.usageByUser).length;
+    if (totalUses >= entry.userLimit) return { status: 'used', bonus: 0 };
+
+    entry.usageByUser[userId] = uses + 1;
+
+    const session = auth.getSession();
+    if (session?.username) {
+      this.creditUser(session.username, entry.bonus);
+    } else {
+      this.credit(entry.bonus);
+    }
+
+    this.pushNotification({
+      title: 'Redeem Code Applied!',
+      body: `Code ${upper} unlocked ${this.currency}${entry.bonus} bonus credits.`,
+      kind: 'success',
+    });
+
+    bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+    await this.persistRedeemCodesToSupabase();
+
+    return { status: 'success', bonus: entry.bonus };
+  }
+
+  /** Legacy sync wrapper — kept for backward compat */
+  applyRedeemCode(code: string, accountId: string): { status: 'success' | 'used' | 'invalid'; bonus: number } {
+    const upper = code.trim().toUpperCase();
+    const entry = this.redeemCodes[upper];
+    if (!entry) return { status: 'invalid', bonus: 0 };
+    const uses = entry.usageByUser[accountId] ?? 0;
+    if (uses >= entry.maxUsesPerUser) return { status: 'used', bonus: 0 };
+    entry.usageByUser[accountId] = uses + 1;
+    this.credit(entry.bonus);
+    this.pushNotification({ title: 'Redeem Code Applied!', body: `Code ${upper} unlocked ${this.currency}${entry.bonus} bonus credits.`, kind: 'success' });
+    bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+    void this.persistRedeemCodesToSupabase();
+    return { status: 'success', bonus: entry.bonus };
+  }
+
+  applyPromoCode(code: string): number {
+    return this.applyRedeemCode(code, 'u_self').bonus;
+  }
+
+  addRedeemCode(code: string, bonus: number, userLimit = 10, maxUsesPerUser = 1) {
+    const upper = code.trim().toUpperCase();
+    if (!upper) return;
+    this.redeemCodes[upper] = { code: upper, bonus: Math.max(0, bonus), maxUsesPerUser: Math.max(1, maxUsesPerUser), userLimit: Math.max(1, userLimit), createdAt: Date.now(), usageByUser: {} };
+    bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+    void this.persistRedeemCodesToSupabase();
+  }
+
+  deleteRedeemCode(code: string) {
+    delete this.redeemCodes[code.trim().toUpperCase()];
+    bus.emit(Topics.RedeemCodes, this.listRedeemCodes());
+    void this.persistRedeemCodesToSupabase();
+  }
+
+  listRedeemCodes(): RedeemCode[] {
+    return Object.values(this.redeemCodes).sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  listPromoCodes(): { code: string; bonus: number; redeemed: boolean }[] {
+    return this.listRedeemCodes().map(rc => ({
+      code: rc.code, bonus: rc.bonus,
+      redeemed: (rc.usageByUser['u_self'] ?? 0) >= rc.maxUsesPerUser,
+    }));
+  }
+
+  // ---- Signup Bonus ----
   private restoreSignupBonus() {
     try {
-      const raw = localStorage.getItem(Store.SIGNUP_BONUS_KEY);
-      if (raw) this.signupBonus = JSON.parse(raw) as number;
+      const b = localStorage.getItem(Store.SIGNUP_BONUS_KEY);
+      if (b) this.signupBonus = Math.max(0, Number(JSON.parse(b)) || 0);
+      const h = localStorage.getItem(Store.SIGNUP_BONUS_HISTORY_KEY);
+      if (h) this.signupBonusHistory = JSON.parse(h);
     } catch { /* ignore */ }
+    void this.loadSignupBonusFromSupabase();
+  }
+
+  private persistSignupBonus() {
     try {
-      const raw = localStorage.getItem(Store.SIGNUP_BONUS_HISTORY_KEY);
-      if (raw) this.signupBonusHistory = JSON.parse(raw) as SignupBonusRecord[];
+      localStorage.setItem(Store.SIGNUP_BONUS_KEY, JSON.stringify(this.signupBonus));
+      localStorage.setItem(Store.SIGNUP_BONUS_HISTORY_KEY, JSON.stringify(this.signupBonusHistory));
     } catch { /* ignore */ }
+  }
+
+  async loadSignupBonusFromSupabase() {
     try {
-      const raw = localStorage.getItem(Store.SIGNUP_BONUS_GRANTED_KEY);
-      if (raw) this.signupBonusGranted = JSON.parse(raw) as Record<string, number>;
+      const { data } = await supabase.rpc('admin_get_settings');
+      if (data) {
+        const rows = data as { key: string; value: unknown }[];
+        const row = rows.find(r => r.key === 'signup_bonus');
+        if (row && typeof row.value === 'number' && row.value >= 0) {
+          this.signupBonus = row.value;
+          try { localStorage.setItem(Store.SIGNUP_BONUS_KEY, JSON.stringify(this.signupBonus)); } catch { /* ignore */ }
+          bus.emit(Topics.SignupBonus, { amount: this.signupBonus, history: this.signupBonusHistory });
+        }
+      }
     } catch { /* ignore */ }
   }
 
   setSignupBonus(amount: number) {
-    this.signupBonus = amount;
-    try { localStorage.setItem(Store.SIGNUP_BONUS_KEY, JSON.stringify(amount)); } catch { /* ignore */ }
-    bus.emit(Topics.AdminConfig, this.admin);
+    this.signupBonus = Math.max(0, Math.round(amount * 100) / 100);
+    this.persistSignupBonus();
+    bus.emit(Topics.SignupBonus, { amount: this.signupBonus, history: this.signupBonusHistory });
+    void supabase.rpc('admin_update_setting', { p_key: 'signup_bonus', p_value: this.signupBonus as unknown as string })
+      .then(() => {}).catch(() => {});
   }
 
-  grantSignupBonus(userId: string, username: string): boolean {
-    const alreadyGranted = this.signupBonusGranted[userId] ?? 0;
-    if (alreadyGranted > 0) return false;
-    this.signupBonusGranted[userId] = this.signupBonus;
-    try { localStorage.setItem(Store.SIGNUP_BONUS_GRANTED_KEY, JSON.stringify(this.signupBonusGranted)); } catch { /* ignore */ }
-    const record: SignupBonusRecord = {
-      id: Math.random().toString(36).slice(2),
-      userId,
-      username,
-      amount: this.signupBonus,
-      ts: Date.now(),
-    };
-    this.signupBonusHistory = [record, ...this.signupBonusHistory].slice(0, 200);
-    try { localStorage.setItem(Store.SIGNUP_BONUS_HISTORY_KEY, JSON.stringify(this.signupBonusHistory)); } catch { /* ignore */ }
-    return true;
+  async grantSignupBonusAsync(userId: string, username: string, ip?: string): Promise<number> {
+    if (!userId || !username) return 0;
+    if (this.signupBonusGrantedCache.has(userId)) return 0;
+    try {
+      const { data } = await supabase.from('profiles')
+        .select('signup_bonus_granted').eq('id', userId).single();
+      const row = data as { signup_bonus_granted: boolean } | null;
+      if (row?.signup_bonus_granted) {
+        this.signupBonusGrantedCache.add(userId);
+        return 0;
+      }
+    } catch { /* ignore */ }
+    if (ip) {
+      try {
+        const { data: alreadyUsed, error } = await supabase.rpc('check_ip_signup_bonus', { p_ip: ip });
+        if (!error && alreadyUsed) {
+          this.signupBonusGrantedCache.add(userId);
+          void supabase.rpc('mark_signup_bonus_granted', { p_user_id: userId }).catch(() => {});
+          return 0;
+        }
+      } catch { /* ignore */ }
+    }
+    const amount = this.signupBonus;
+    if (amount > 0) {
+      this.creditUser(username, amount);
+      const rec: SignupBonusRecord = { id: Math.random().toString(36).slice(2), userId, username, amount, ts: Date.now() };
+      this.signupBonusHistory = [rec, ...this.signupBonusHistory].slice(0, 1000);
+      this.pushBalanceHistory({ userId, username, type: 'credit', amount, reason: 'Signup bonus (auto)' });
+    }
+    void supabase.rpc('mark_signup_bonus_granted', { p_user_id: userId }).catch(() => {});
+    this.signupBonusGrantedCache.add(userId);
+    this.persistSignupBonus();
+    bus.emit(Topics.SignupBonus, { amount: this.signupBonus, history: this.signupBonusHistory });
+    return amount;
   }
 
-  hasSignupBonusBeenGranted(userId: string): boolean {
-    return (this.signupBonusGranted[userId] ?? 0) > 0;
+  grantSignupBonus(userId: string, username: string, ip?: string): number {
+    void this.grantSignupBonusAsync(userId, username, ip);
+    return this.signupBonus;
   }
 
-  // ---- Redeem codes ----
-  createRedeemCode(code: string, bonus: number, maxUsesPerUser: number, userLimit: number) {
-    this.redeemCodes[code] = { code, bonus, maxUsesPerUser, userLimit, createdAt: Date.now(), usageByUser: {} };
-  }
-
-  deleteRedeemCode(code: string) {
-    delete this.redeemCodes[code];
-  }
-
-  redeemCode(code: string, userId: string): { success: boolean; bonus: number; error?: string } {
-    const rc = this.redeemCodes[code];
-    if (!rc) return { success: false, bonus: 0, error: 'Invalid code' };
-    const used = rc.usageByUser[userId] ?? 0;
-    if (used >= rc.maxUsesPerUser) return { success: false, bonus: 0, error: 'Code already used' };
-    const totalUsed = Object.values(rc.usageByUser).reduce((a, b) => a + b, 0);
-    if (totalUsed >= rc.userLimit) return { success: false, bonus: 0, error: 'Code limit reached' };
-    rc.usageByUser[userId] = used + 1;
-    return { success: true, bonus: rc.bonus };
+  getSignupBonusHistory(opts: { search?: string; period?: 'all' | 'today' | 'day' | 'week' | 'month' | 'year' } = {}): SignupBonusRecord[] {
+    let rows = [...this.signupBonusHistory];
+    if (opts.search) { const s = opts.search.toLowerCase(); rows = rows.filter(r => r.username.toLowerCase().includes(s) || r.userId.toLowerCase().includes(s)); }
+    if (opts.period && opts.period !== 'all') {
+      const now = Date.now();
+      if (opts.period === 'today') {
+        const start = new Date(); start.setHours(0, 0, 0, 0);
+        rows = rows.filter(r => r.ts >= start.getTime());
+      } else {
+        const ms = { day: 86400000, week: 604800000, month: 2592000000, year: 31536000000 } as const;
+        rows = rows.filter(r => now - r.ts <= ms[opts.period as 'day' | 'week' | 'month' | 'year']);
+      }
+    }
+    return rows;
   }
 }
 
 export const store = new Store();
+
+export function computeAutoOutcome(
+  gameKey: string,
+  config: { targetWinProbability: number; houseEdge: number },
+): RoundOutcomePreview {
+  const winChance = (config.targetWinProbability - config.houseEdge) / 100;
+  const roll = Math.random();
+
+  if (gameKey === 'crash' || gameKey === 'aviator') {
+    let outcome: string;
+    if (roll < winChance) {
+      const point = 1 + Math.floor(Math.random() * 100) / 10;
+      outcome = point.toFixed(2) + 'x';
+    } else {
+      outcome = (1 + Math.floor(Math.random() * 20) / 100).toFixed(2) + 'x';
+    }
+    return { outcome, detail: `Win-prob ${config.targetWinProbability}% \u00b7 Edge ${config.houseEdge}%` };
+  }
+  if (gameKey === 'mines') {
+    const outcome = roll < winChance ? 'win' : 'bust';
+    return { outcome, detail: `Win-prob ${config.targetWinProbability}%` };
+  }
+  if (gameKey === 'sunvsmoon') {
+    let outcome: string;
+    if (roll < winChance) outcome = 'sun';
+    else if (roll < winChance * 2) outcome = 'moon';
+    else outcome = 'eclipse';
+    return { outcome, detail: `Auto engine \u00b7 edge ${config.houseEdge}%` };
+  }
+  if (gameKey === 'wingo') {
+    const outcome = String(Math.floor(Math.random() * 10));
+    return { outcome, detail: `Digit 0\u20139 \u00b7 win-prob ${config.targetWinProbability}%` };
+  }
+  if (gameKey === 'k3') {
+    const outcome = `${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1},${Math.floor(Math.random() * 6) + 1}`;
+    return { outcome, detail: 'Three dice \u00b7 auto engine' };
+  }
+  if (gameKey === 'fived') {
+    const outcome = String(Math.floor(Math.random() * 100000)).padStart(5, '0');
+    return { outcome, detail: '5-digit result \u00b7 auto engine' };
+  }
+  if (gameKey === 'trading') {
+    const outcome = roll < winChance ? 'UP' : 'DOWN';
+    return { outcome, detail: `Win-prob ${config.targetWinProbability}%` };
+  }
+  return { outcome: '0', detail: 'Unknown game' };
+}
