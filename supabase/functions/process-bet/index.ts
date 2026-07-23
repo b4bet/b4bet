@@ -101,9 +101,12 @@ serve(async (req) => {
       }
 
       const balanceBefore = profile.balance;
+      // NOTE: The client already deducted the stake via store.debitLocalOnly(),
+      // so balanceBefore already has the stake subtracted.
+      // We only need to add winnings (total payout) if the user won.
       const newBalance = won
-        ? balanceBefore - stakeNum + winAmount
-        : balanceBefore - stakeNum;
+        ? balanceBefore + winAmount
+        : balanceBefore;
 
       const { error: updateError } = await supabase
         .from("profiles")
@@ -149,7 +152,8 @@ serve(async (req) => {
     if (action === "aviator_cashout") {
       const { user_id, round_id, bet_amount, cashout_at, placed_at_ms } = payload;
       const betNum = Number(bet_amount);
-      const cashoutMultiplier = Number(cashout_at ?? payload.multiplier ?? 0);
+      // FIX: Client sends "cashout_multiplier", also accept "cashout_at" and "multiplier"
+      const cashoutMultiplier = Number(cashout_at ?? payload.cashout_multiplier ?? payload.multiplier ?? 0);
 
       if (!user_id || !betNum) {
         throw new Error("Missing required fields: user_id, bet_amount");

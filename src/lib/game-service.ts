@@ -234,10 +234,14 @@ export const GameService = {
   ): Promise<AviatorCashoutResult> {
     type RawResponse = {
       success?: boolean;
+      won?: boolean;
+      win?: number;
       win_amount?: number;
       balance_after?: number;
       multiplier?: number;
+      cashout_at?: number;
       bustPoint?: number | null;
+      crash_point?: number | null;
       error?: string;
     };
     const raw = await post<RawResponse>({
@@ -252,12 +256,12 @@ export const GameService = {
       ...(betId ? { bet_id: betId } : {}),
     });
     return {
-      success:      raw.success      ?? false,
-      won:          raw.success      ?? false,
-      cashout_at:   raw.multiplier   ?? cashoutMultiplier,
-      win:          raw.win_amount   ?? 0,
+      success:       raw.success       ?? false,
+      won:           raw.won           ?? raw.success ?? false,
+      cashout_at:    raw.cashout_at    ?? raw.multiplier ?? cashoutMultiplier,
+      win:           raw.win           ?? raw.win_amount ?? 0,
       balance_after: raw.balance_after ?? 0,
-      crash_point:  raw.bustPoint    ?? null,
+      crash_point:   raw.crash_point   ?? raw.bustPoint ?? null,
     };
   },
 

@@ -279,7 +279,10 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       bus.emit(Topics.InsufficientBalance);
       return;
     }
-    store.debit(stake);
+    // FIX: Use debitLocalOnly to only update local UI immediately.
+    // The server will handle the actual Supabase balance deduction in sunMoonSettle.
+    // Previously store.debit() was used which also updated Supabase, causing double deduction.
+    store.debitLocalOnly(stake);
     setBetPlaced(true);
   }, [phase, betPlaced, selectedChoice, balance, limits]);
 
