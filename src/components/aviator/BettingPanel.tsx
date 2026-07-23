@@ -50,11 +50,12 @@ interface BettingPanelProps {
   roundId: number;
   balance: number;
   /**
-   * Returns { ok, betId } — betId is the server-assigned ID for this bet.
+   * Returns { ok, betId, reason } — betId is the server-assigned ID for this bet.
+   * reason: 'insufficient_balance' | 'phase_closed' | 'network' | null
    * @param amount     - Bet amount
    * @param placedAtMs - Client-side timestamp (ms) when user clicked BET.
    */
-  onPlaceBet: (amount: number, placedAtMs: number) => Promise<{ ok: boolean; betId: string | null }>;
+  onPlaceBet: (amount: number, placedAtMs: number) => Promise<{ ok: boolean; betId: string | null; reason?: string | null }>;
   onCancelBet: (amount: number) => void;
   onCashOut: (amount: number, at: number) => void;
   onWin: (amount: number) => void;
@@ -98,7 +99,9 @@ export function BettingPanel({
     if (bet.roundId === roundId) return;
 
     const prevAmount = bet.amount;
-    const shouldPlace = (bet.autoBetEnabled || bet.pendingNextRound)
+    const prevAutoBetEnabled = bet.autoBetEnabled;
+    const prevPendingNextRound = bet.pendingNextRound;
+    const shouldPlace = (prevAutoBetEnabled || prevPendingNextRound)
       && prevAmount >= limits.min
       && prevAmount <= limits.max
       && prevAmount <= balance;
@@ -111,32 +114,52 @@ export function BettingPanel({
       roundId,
       placed: shouldPlace,
       cashedOutAt: null,
+      // Keep autoBetEnabled as-is — do NOT disable it here.
+      // Only disable if balance is truly insufficient (handled below).
       pendingNextRound: false,
       betId: null,
       placedAtMs: shouldPlace ? nowMs : 0,
     }));
 
-    // 2. Kick off the server call AFTER the state update (not inside the updater)
     if (shouldPlace) {
+      // 2. Server call AFTER the state update (not inside the updater)
       onPlaceBet(prevAmount, nowMs)
-        .then(({ ok, betId }) => {
+        .then(({ ok, betId, reason }) => {
           if (ok) {
             setBet((bb) => ({ ...bb, betId: betId ?? null }));
           } else {
-            // Server rejected — roll back optimistic placed state
-            setBet((bb) => ({ ...bb, placed: false, autoBetEnabled: false, pendingNextRound: false, betId: null }));
-            onInsufficientBalance?.();
+            // Roll back optimistic placed state
+            setBet((bb) => ({
+              ...bb,
+              placed: false,
+              betId: null,
+              // Only disable autobet if balance was insufficient.
+              // For phase-closed or network errors, keep autobet ON so
+              // the next round will retry automatically.
+              autoBetEnabled: reason === 'insufficient_balance' ? false : bb.autoBetEnabled,
+              pendingNextRound: reason === 'insufficient_balance' ? false : bb.pendingNextRound,
+            }));
+            if (reason === 'insufficient_balance') {
+              onInsufficientBalance?.();
+            }
+            // For phase_closed / network errors: silently retry next round.
+            // The balance was already refunded by handlePlaceBet.
           }
         })
         .catch(() => {
-          // Network / unexpected error — roll back so bet isn't stuck
+          // Network / unexpected error — roll back, keep autobet enabled for retry
           setBet((bb) => ({ ...bb, placed: false, betId: null }));
         });
-    } else if (bet.autoBetEnabled || bet.pendingNextRound) {
-      // shouldPlace was blocked by validation — disable auto/pending
-      setBet((b) => ({ ...b, autoBetEnabled: false, pendingNextRound: false }));
+    } else if (prevAutoBetEnabled || prevPendingNextRound) {
+      // shouldPlace was blocked locally — validate why
       if (prevAmount < limits.min || prevAmount > limits.max) {
+        // Bet amount out of range — disable autobet
+        setBet((b) => ({ ...b, autoBetEnabled: false, pendingNextRound: false }));
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
+      } else if (prevAmount > balance) {
+        // Insufficient balance — disable autobet
+        setBet((b) => ({ ...b, autoBetEnabled: false, pendingNextRound: false }));
+        onInsufficientBalance?.();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,15 +232,20 @@ export function BettingPanel({
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
         const nowMs = Date.now();
-        // Optimistically mark placed so UI locks immediately
         setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: nowMs }));
         onPlaceBet(bet.amount, nowMs)
-          .then(({ ok, betId }) => {
+          .then(({ ok, betId, reason }) => {
             if (ok) {
               setBet((b) => ({ ...b, betId: betId ?? null }));
             } else {
-              setBet((b) => ({ ...b, placed: false, autoBetEnabled: false, betId: null }));
-              onInsufficientBalance?.();
+              setBet((b) => ({
+                ...b,
+                placed: false,
+                betId: null,
+                // Only turn off autobet if truly out of balance
+                autoBetEnabled: reason === 'insufficient_balance' ? false : b.autoBetEnabled,
+              }));
+              if (reason === 'insufficient_balance') onInsufficientBalance?.();
             }
           })
           .catch(() => {
@@ -244,20 +272,17 @@ export function BettingPanel({
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
       const nowMs = Date.now();
-      // Optimistically mark placed immediately
       setBet((b) => ({ ...b, placed: true, placedAtMs: nowMs }));
       onPlaceBet(bet.amount, nowMs)
         .then(({ ok, betId }) => {
           if (ok) {
             setBet((b) => ({ ...b, betId: betId ?? null }));
           } else {
-            // Server rejected — undo optimistic placed
             setBet((b) => ({ ...b, placed: false, betId: null }));
             onInsufficientBalance?.();
           }
         })
         .catch(() => {
-          // Network / unexpected error — roll back
           setBet((b) => ({ ...b, placed: false, betId: null }));
         });
       return;
