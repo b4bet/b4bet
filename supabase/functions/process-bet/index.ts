@@ -150,10 +150,12 @@ serve(async (req) => {
 
     // ── aviator_cashout: player cashes out before crash ──────────────────────
     if (action === "aviator_cashout") {
-      const { user_id, round_id, bet_amount, cashout_at, placed_at_ms } = payload;
+      const { user_id, bet_amount, cashout_at, placed_at_ms } = payload;
       const betNum = Number(bet_amount);
       // FIX: Client sends "cashout_multiplier", also accept "cashout_at" and "multiplier"
       const cashoutMultiplier = Number(cashout_at ?? payload.cashout_multiplier ?? payload.multiplier ?? 0);
+      // FIX: Use round_uuid (server-assigned unique ID) for lookup, NOT round_id (local counter)
+      const roundUuid = payload.round_uuid ?? null;
 
       if (!user_id || !betNum) {
         throw new Error("Missing required fields: user_id, bet_amount");
@@ -163,27 +165,31 @@ serve(async (req) => {
         throw new Error("Invalid cashout multiplier");
       }
 
-      // Look up bust_point for this round to validate cashout was before crash
+      // Look up bust_point for this round to validate cashout was before crash.
+      // IMPORTANT: Prefer round_uuid (globally unique) over round_id (local counter
+      // that doesn't match DB IDs and would incorrectly find old crashed rounds).
       let bustPoint: number | null = null;
-      if (round_id) {
-        const isNumeric = !isNaN(Number(round_id));
-        const query = supabase
+      if (roundUuid) {
+        const { data: roundData } = await supabase
           .from("aviator_rounds")
           .select("bust_point")
+          .eq("round_uuid", roundUuid)
           .order("id", { ascending: false })
           .limit(1);
 
-        const { data: roundData } = isNumeric
-          ? await query.eq("id", Number(round_id))
-          : await query.eq("round_uuid", round_id);
-
-        if (roundData && roundData.length > 0) {
+        if (roundData && roundData.length > 0 && roundData[0].bust_point != null) {
           bustPoint = Number(roundData[0].bust_point);
         }
       }
+      // NOTE: We intentionally do NOT fall back to round_id lookup because
+      // the client's round_id is a local counter (1, 2, 3...) that does NOT
+      // correspond to aviator_rounds.id. Using it would match old crashed rounds.
 
-      // Verify cashout was before crash
+      // Verify cashout was before crash (only if we found the round in DB)
       if (bustPoint !== null && cashoutMultiplier > bustPoint) {
+        // FIX: Do NOT include "error" field in response body.
+        // The client's post() helper throws on ANY response with an "error" key,
+        // which prevents graceful handling of this "already crashed" scenario.
         return new Response(
           JSON.stringify({
             success: false,
@@ -191,7 +197,7 @@ serve(async (req) => {
             win: 0,
             balance_after: null,
             crash_point: bustPoint,
-            error: `Cashout at ${cashoutMultiplier}x is after crash at ${bustPoint}x`,
+            reason: `Cashout at ${cashoutMultiplier}x is after crash at ${bustPoint}x`,
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
         );
@@ -210,7 +216,7 @@ serve(async (req) => {
 
       // Win amount = bet * cashoutMultiplier (total payout)
       const winAmount = Math.round(betNum * cashoutMultiplier);
-      // Balance: add back the win (bet was already deducted client-side)
+      // Balance: add back the win (bet was already deducted by aviator_place_bet)
       const newBalance = profile.balance + winAmount;
 
       const { error: updateError } = await supabase
@@ -235,6 +241,7 @@ serve(async (req) => {
           game: "aviator",
           cashOutAt: cashoutMultiplier,
           bustPoint: bustPoint ?? 0,
+          round_uuid: roundUuid,
           placed_at_ms: placed_at_ms ?? null,
         },
         placed_at: placed_at_ms ? new Date(Number(placed_at_ms)).toISOString() : now,
