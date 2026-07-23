@@ -223,17 +223,24 @@ export const GameService = {
    * Register a bet on the server during the waiting phase.
    * Returns bet_id which should be stored and passed to aviatorCashout
    * for direct bet lookup (avoids round_uuid race condition).
+   *
+   * @param placedAtMs - Client-side timestamp (ms) when user clicked BET.
+   *   Sent to server to fix cold-start false rejections: the Edge Function
+   *   may take 2-4s to start, so Date.now() on the server would be much
+   *   later than the actual click. The server uses this to validate timing.
    */
   aviatorPlaceBet(
     userId: string,
     betAmount: number,
     roundUuid: string | null,
+    placedAtMs: number,
   ): Promise<AviatorPlaceBetResult> {
     return post<AviatorPlaceBetResult>({
       action: 'aviator_place_bet',
       user_id: userId,
       bet_amount: betAmount,
       round_uuid: roundUuid,
+      placed_at_ms: placedAtMs,
     });
   },
 
