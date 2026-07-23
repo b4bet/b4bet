@@ -5,6 +5,7 @@ import { useDynamicPages, useHasUnreadAgentMessage, useSocialLinks } from '../li
 import { store } from '../lib/store';
 import { getOrCreateAccountId } from '../lib/accountId';
 import { auth } from '../lib/auth';
+import { setReferralTab } from '../lib/referralTab';
 import DynamicPagePopup from './DynamicPagePopup';
 import PaymentMethodFlow from './PaymentMethodFlow';
 import { RedeemCodeSection } from '../views/ProfileView';
@@ -92,7 +93,7 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
   const [redeemOpen, setRedeemOpen] = useState(false);
   const [withdrawalOpen, setWithdrawalOpen] = useState(false);
 
-  // Lock body scroll when drawer is open — prevents page scroll and bottom nav flicker
+  // Lock body scroll when drawer is open
   useEffect(() => {
     if (open) {
       const prev = document.body.style.overflow;
@@ -103,18 +104,20 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
 
   const go = (r: Route) => { onClose(); onNavigate(r); };
 
+  const handleReferral = (tab: 'refer' | 'affiliate') => {
+    setReferralTab(tab);
+    go('referral');
+  };
+
   return (
     <>
-      {/* Backdrop */}
       {open && <div className="fixed inset-0 bg-black/60 z-40" onClick={onClose} />}
 
-      {/* Drawer — slides in from the LEFT */}
       <div className={`fixed left-0 top-0 bottom-0 w-80 max-w-[92vw] bg-slatepanel-900 border-r border-borderline-900 z-50 flex flex-col transition-transform duration-300 ${
         open ? 'translate-x-0' : '-translate-x-full'
       }`}>
         {/* ── FIXED TOP: Header + Profile card ── */}
         <div className="shrink-0">
-          {/* Header */}
           <div className="flex items-center justify-between px-4 py-4 border-b border-borderline-900">
             <span className="font-bold text-white text-sm">Menu</span>
             <button onClick={onClose} className="w-8 h-8 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors">
@@ -122,7 +125,6 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
             </button>
           </div>
 
-          {/* Profile card — always visible at top */}
           {session ? (
             <div className="mx-3 mt-3 mb-2 rounded-2xl bg-slatepanel-800 border border-borderline-900 p-4">
               <div className="flex items-center gap-3">
@@ -132,7 +134,9 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-white font-bold text-sm truncate">{session.username}</span>
-                    <span className="text-[10px] bg-emeraldwin-500/15 text-emeraldwin-400 border border-emeraldwin-500/40 px-1.5 py-0.5 rounded-full">Verified</span>
+                    <span className="text-[10px] bg-emeraldwin-500/15 text-emeraldwin-400 border border-emeraldwin-500/40 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
+                      <ShieldCheck className="w-2.5 h-2.5" /> Verified
+                    </span>
                   </div>
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-slate-500 text-xs"><Hash className="w-3 h-3 inline" /> {accountId}</span>
@@ -171,6 +175,7 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
         {/* ── SCROLLABLE MIDDLE: Menu items ── */}
         <div className="flex-1 overflow-y-auto">
           <div className="rounded-2xl mx-3 mb-2 bg-slatepanel-800 border border-borderline-900 overflow-hidden">
+
             {session && (
               <>
                 <button onClick={() => go('profile')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
@@ -179,18 +184,21 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
                   <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
                 </button>
                 <div className="border-t border-borderline-900" />
+
                 <button onClick={() => go('history')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
                   <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><History className="w-4 h-4 text-slate-400" /></div>
                   <span className="text-white text-sm font-medium">History</span>
                   <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
                 </button>
                 <div className="border-t border-borderline-900" />
+
                 <button onClick={() => { setWithdrawalOpen(true); }} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
                   <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><Wallet className="w-4 h-4 text-slate-400" /></div>
                   <span className="text-white text-sm font-medium">Withdrawal</span>
                   <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
                 </button>
                 <div className="border-t border-borderline-900" />
+
                 <button onClick={() => setRedeemOpen(s => !s)} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
                   <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><TicketPercent className="w-4 h-4 text-slate-400" /></div>
                   <span className="text-white text-sm font-medium">Redeem Code</span>
@@ -202,7 +210,8 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
                   </div>
                 )}
                 <div className="border-t border-borderline-900" />
-                <button onClick={() => go('referral')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
+
+                <button onClick={() => handleReferral('refer')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
                   <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><Users className="w-4 h-4 text-slate-400" /></div>
                   <span className="text-white text-sm font-medium">Refer &amp; Earn</span>
                   <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
@@ -212,18 +221,20 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
             )}
 
             {/* Affiliate — always visible (guest + logged in) */}
-            <button onClick={() => go('affiliate')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
+            <button onClick={() => handleReferral('affiliate')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
               <div className="w-8 h-8 rounded-xl bg-purple-500/20 grid place-items-center"><TrendingUp className="w-4 h-4 text-purple-400" /></div>
               <span className="text-white text-sm font-medium">Affiliate</span>
               <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
             </button>
 
-            {/* Dynamic Pages — always visible */}
+            {/* Dynamic Pages — immediately below Affiliate */}
             {dynamicPages.map((page) => (
               <div key={page.id}>
                 <div className="border-t border-borderline-900" />
-                <button onClick={() => { setSelectedPage(page); setPagePopupOpen(true); }}
-                  className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
+                <button
+                  onClick={() => { setSelectedPage(page); setPagePopupOpen(true); }}
+                  className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors"
+                >
                   <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><FileText className="w-4 h-4 text-slate-400" /></div>
                   <span className="text-white text-sm font-medium">{page.title}</span>
                   <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
@@ -233,12 +244,9 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
           </div>
         </div>
 
-        {/* ── FIXED BOTTOM: Social icons + Support 24/7 ── */}
+        {/* ── FIXED BOTTOM: Social icons + Support ── */}
         <div className="shrink-0 border-t border-borderline-900">
-          {/* Social icons row */}
           <SocialIconsRow links={socialLinks} />
-
-          {/* Support 24/7 */}
           <button onClick={() => { onClose(); onOpenSupport(); }}
             className="w-full flex items-center gap-3 px-4 py-4 hover:bg-slatepanel-800 transition-colors">
             <div className="relative">
