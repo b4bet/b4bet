@@ -82,6 +82,61 @@ serve(async (req) => {
       return new Response(JSON.stringify({ success: true, won, result: roundResult, profit, balance_after: newBalance }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    // ── aviator_cancel_bet ───────────────────────────────────────────────────
+    // Called when player cancels a placed bet during the waiting phase.
+    // Refunds the bet amount to Supabase balance and deletes/voids the bet record.
+    if (action === "aviator_cancel_bet") {
+      const { user_id, bet_amount, bet_id } = payload;
+      const betNum = Number(bet_amount);
+      if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
+
+      // Only allow cancel if the round is still in waiting phase
+      const { data: currentRound } = await supabase
+        .from("aviator_current_round")
+        .select("phase")
+        .eq("id", 1)
+        .single();
+
+      if (currentRound && currentRound.phase === "flying") {
+        // Round already flying — cancel not allowed (bet is locked in)
+        return new Response(
+          JSON.stringify({ success: false, error: "Round already started, cannot cancel" }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      // Refund balance
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("balance")
+        .eq("id", user_id)
+        .single();
+      if (profileError || !profile) throw new Error("User profile not found");
+
+      const newBalance = profile.balance + betNum;
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update({ balance: newBalance })
+        .eq("id", user_id);
+      if (updateError) throw new Error(`Balance refund failed: ${updateError.message}`);
+
+      // Delete the pending bet record if we have an ID
+      if (bet_id) {
+        await supabase
+          .from("bets")
+          .delete()
+          .eq("id", bet_id)
+          .eq("user_id", user_id)
+          .eq("status", "pending")
+          .catch(() => {});
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, balance_after: newBalance }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // ── aviator_cashout ──────────────────────────────────────────────────────
     if (action === "aviator_cashout") {
       const { user_id, bet_amount, cashout_at, placed_at_ms } = payload;
@@ -136,11 +191,8 @@ serve(async (req) => {
       const roundUuid = payload.round_uuid ?? null;
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
-      // Use the client-side timestamp (when user actually clicked BET) for timing validation.
-      // Falls back to Date.now() for older clients that don't send placed_at_ms.
       const clientPlacedAtMs = payload.placed_at_ms ? Number(payload.placed_at_ms) : Date.now();
 
-      // Read current round phase from DB
       const { data: currentRound } = await supabase
         .from("aviator_current_round")
         .select("phase, phase_started_at, crash_point")
@@ -151,12 +203,6 @@ serve(async (req) => {
         const phaseStartedAt = new Date(currentRound.phase_started_at).getTime();
 
         if (currentRound.phase === "flying") {
-          // Accept the bet if the user clicked BEFORE flying started.
-          // Use 5s grace window to cover:
-          //   - Edge Function cold-start (up to 4s)
-          //   - Network round-trip (up to 1s)
-          //   - Client/server clock skew
-          // If clientPlacedAtMs is before (phaseStartedAt + 5s), it's a valid waiting-phase bet.
           const gracePeriodMs = 5000;
           if (clientPlacedAtMs > phaseStartedAt + gracePeriodMs) {
             return new Response(
@@ -164,13 +210,9 @@ serve(async (req) => {
               { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
             );
           }
-          // else: fall through and accept the bet — user clicked during waiting
         }
 
         if (currentRound.phase === "crashed") {
-          // If user clicked during waiting phase but edge fn ran after crash,
-          // accept if placed_at_ms is before (phaseStartedAt + 5s grace).
-          // This covers the worst-case cold-start scenario.
           const gracePeriodMs = 5000;
           if (clientPlacedAtMs > phaseStartedAt + gracePeriodMs) {
             return new Response(
@@ -178,7 +220,6 @@ serve(async (req) => {
               { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
             );
           }
-          // else: user clicked just before crash — accept the bet
         }
       }
 
