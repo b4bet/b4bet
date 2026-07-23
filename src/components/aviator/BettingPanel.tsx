@@ -226,16 +226,14 @@ export function BettingPanel({
                 ...b,
                 placed: false,
                 betId: null,
+                // autoBetEnabled stays true so next round it auto-fires
                 autoBetEnabled: reason === 'insufficient_balance' ? false : b.autoBetEnabled,
               }));
               if (reason === 'insufficient_balance') onInsufficientBalance?.();
-              else {
-                // phase_closed on autobet enable — queue for next round
-                setBet((b) => ({ ...b, pendingNextRound: true }));
-              }
+              // Do NOT set pendingNextRound here — autoBetEnabled already handles next round
             }
           })
-          .catch(() => { setBet((b) => ({ ...b, placed: false, betId: null, pendingNextRound: true })); });
+          .catch(() => { setBet((b) => ({ ...b, placed: false, betId: null })); });
       } else {
         setBet((b) => ({ ...b, autoBetEnabled: true }));
       }
@@ -271,19 +269,21 @@ export function BettingPanel({
             setBet((b) => ({ ...b, placed: false, betId: null }));
             onInsufficientBalance?.();
           } else {
-            // phase_closed / network — bet arrived too late or network error.
-            // Queue for next round automatically.
-            setBet((b) => ({ ...b, placed: false, betId: null, pendingNextRound: true }));
+            // phase_closed / network error — bet arrived too late.
+            // Simply undo the placed state. Do NOT auto-queue for next round —
+            // user never explicitly asked to bet next round.
+            setBet((b) => ({ ...b, placed: false, betId: null }));
             onTimeout?.();
           }
         })
         .catch(() => {
-          // Network error — queue for next round
-          setBet((b) => ({ ...b, placed: false, betId: null, pendingNextRound: true }));
+          // Network error — undo placed state only, no auto-queue
+          setBet((b) => ({ ...b, placed: false, betId: null }));
         });
       return;
     }
 
+    // Flying phase: user explicitly clicks BET = queue for next round
     if (canQueueNextRound) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
