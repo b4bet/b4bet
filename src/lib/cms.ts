@@ -46,7 +46,7 @@ export interface AdminUser {
   vipLevel: number; isAdmin: boolean; createdAt: string;
 }
 export interface Country { id: string; name: string; code: string; isActive: boolean; currency: string; manualDepositMethods: string[]; manualWithdrawalMethods: string[]; }
-export interface ReferralConfig { rewardAmount: number; minDeposit: number; tierPercent: number; tierThreshold: number; }
+export interface ReferralConfig { rewardAmount: number; minDeposit: number; tierPercent: number; tierThreshold: number; model?: string; cpaAmount?: number; revSharePercent?: number; }
 export interface Referral {
   id: string; referrerId: string; referredUserId: string; referredUsername: string;
   depositAmount: number; firstDepositApproved: boolean;
@@ -599,7 +599,7 @@ class Cms {
     const page: DynamicPage = { id: 'dp_' + Math.random().toString(36).slice(2), title, html, ts: Date.now() };
     this.dynamicPages = [...this.dynamicPages, page];
     this.emitDynamicPages();
-    // FIX: persist was missing here — pages were only saved in memory, not Supabase
+    // Persist to Supabase so pages survive page reloads
     this.persistDynamicPagesToSupabase();
   }
   updateDynamicPage(id: string, patch: Partial<Pick<DynamicPage, 'title' | 'html'>>) {
@@ -899,6 +899,56 @@ class Cms {
   updateCountry(id: string, patch: Partial<Country>) {
     this.countries = this.countries.map(c => c.id === id ? { ...c, ...patch } : c);
     bus.emit(Topics.Countries, this.countries);
+  }
+
+  /** Returns true if the detected country is inactive (geo-blocked). */
+  isGeoBlocked(): boolean {
+    const c = this.countries.find(x => x.id === this.detectedCountryId);
+    if (!c) return false;
+    return !c.isActive;
+  }
+
+  /** Returns the detected country object, or undefined if not found. */
+  detectedCountry(): Country | undefined {
+    return this.countries.find(x => x.id === this.detectedCountryId);
+  }
+
+  // ---- Referrals ----
+  recordReferralSignup(referred: AuthUser, referrerId: string) {
+    const rec: Referral = {
+      id: Math.random().toString(36).slice(2),
+      referrerId,
+      referredUserId: referred.id,
+      referredUsername: referred.username,
+      depositAmount: 0,
+      firstDepositApproved: false,
+      rewardPaid: false,
+      rewardCredited: false,
+      rewardAmount: 0,
+      createdAt: Date.now(),
+      ts: Date.now(),
+    };
+    this.referrals = [rec, ...this.referrals];
+    this.emitReferrals();
+  }
+
+  getAffiliates(): AffiliateApplication[] { return this.affiliates; }
+  submitAffiliateApplication(app: Omit<AffiliateApplication, 'id' | 'ts' | 'status' | 'revSharePct' | 'stats'>) {
+    const rec: AffiliateApplication = {
+      ...app, id: Math.random().toString(36).slice(2), ts: Date.now(),
+      status: 'pending', revSharePct: 0,
+      stats: { clicks: 0, registered: 0, deposits: 0, revenueShare: 0 },
+    };
+    this.affiliates = [rec, ...this.affiliates];
+    bus.emit(Topics.Affiliates, this.affiliates);
+  }
+  approveAffiliate(id: string, revSharePct: number) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status: 'approved' as const, revSharePct } : a);
+    bus.emit(Topics.Affiliates, this.affiliates);
+  }
+  rejectAffiliate(id: string) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status: 'rejected' as const } : a);
+    bus.emit(Topics.Affiliates, this.affiliates);
   }
 }
 
