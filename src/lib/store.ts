@@ -216,7 +216,9 @@ class Store {
           ? await supabase.from('profiles').select('balance').eq('id', session.userId).single()
           : await supabase.from('profiles').select('balance').eq('username', session.username).single();
         if (profile) {
-          this.balance = (profile as { balance: number }).balance ?? 0;
+          // Coerce to number — Supabase REST returns bigint as number, but
+          // some paths may return it as string depending on the client config.
+          this.balance = Number((profile as { balance: number | string }).balance) || 0;
         } else if (profileErr) {
           console.warn('[store] failed to load profile balance:', profileErr.message);
           // On error, fall back to 0 so UI doesn't hang on loading state forever
@@ -236,11 +238,14 @@ class Store {
                 filter: `id=eq.${session.userId}`,
               },
               (evt) => {
-                const row = evt.new as { balance?: number };
-                if (typeof row.balance === 'number') {
-                  this.balance = row.balance;
+                const row = evt.new as { balance?: number | string };
+                // Supabase Realtime sends bigint columns as strings — coerce
+                // to number with Number() and validate with isFinite()
+                const parsed = Number(row.balance);
+                if (isFinite(parsed)) {
+                  this.balance = parsed;
                   if (session.username) {
-                    this.balancesByUser[session.username.toLowerCase()] = row.balance;
+                    this.balancesByUser[session.username.toLowerCase()] = parsed;
                     this.persistBalances();
                   }
                   bus.emit(Topics.Balance, this.balance);
