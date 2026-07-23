@@ -186,10 +186,12 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  const canPlace = phase === 'waiting' && !bet.placed && bet.amount <= balance && countdown > 0;
+  // Allow betting throughout waiting phase — server has a 5s grace window after
+  // countdown reaches 0 to accept bets placed just before takeoff.
+  const canPlace = phase === 'waiting' && !bet.placed && bet.amount <= balance;
   const canCashOut = phase === 'flying' && bet.placed && bet.cashedOutAt === null;
   const canCancel = phase === 'waiting' && bet.placed && bet.cashedOutAt === null;
-  const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
+  const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance;
   const canQueueNextRound = phase === 'flying' && !bet.placed && bet.cashedOutAt === null;
   const canCancelQueue = phase === 'flying' && !bet.placed && bet.pendingNextRound;
 
@@ -211,7 +213,7 @@ export function BettingPanel({
         return;
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
-      if (phase === 'waiting' && !bet.placed && countdown > 0) {
+      if (phase === 'waiting' && !bet.placed) {
         const nowMs = Date.now();
         // Optimistically mark placed, then confirm with server
         setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: nowMs }));
@@ -254,7 +256,6 @@ export function BettingPanel({
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
         return;
       }
-      if (countdown <= 0.01) { onTimeout?.(); return; }
 
       const nowMs = Date.now();
       // Optimistically show BET as placed in UI immediately for snappy feel
@@ -270,9 +271,10 @@ export function BettingPanel({
             setBet((b) => ({ ...b, placed: false, betId: null }));
             onInsufficientBalance?.();
           } else {
-            // phase_closed / network — bet arrived late (cold-start).
-            // Undo placed state and queue for next round automatically.
+            // phase_closed / network — bet arrived too late or network error.
+            // Queue for next round automatically.
             setBet((b) => ({ ...b, placed: false, betId: null, pendingNextRound: true }));
+            onTimeout?.();
           }
         })
         .catch(() => {
