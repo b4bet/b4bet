@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Plus, Trash2, Edit3, X, Save, FileText, Code2 } from 'lucide-react';
 import { cms } from '../../lib/cms';
 import { useDynamicPages } from '../../lib/cmsHooks';
@@ -18,7 +19,7 @@ export default function DynamicPagesTab() {
   const openNew = () => setEditing({ id: null, draft: blank() });
   const openEdit = (p: DynamicPage) => setEditing({ id: p.id, draft: { title: p.title, html: p.html } });
   const close = () => setEditing(null);
-  
+
   const save = () => {
     if (!editing) return;
     if (!editing.draft.title.trim()) {
@@ -83,10 +84,16 @@ export default function DynamicPagesTab() {
         )}
       </div>
 
-      {/* Modal — fixed to viewport, perfectly centered with safe top offset */}
-      {editing && (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-          <div className="w-full max-w-lg panel border border-borderline-900 bg-midnight-900 rounded-2xl shadow-2xl max-h-[85vh] overflow-y-auto">
+      {/* Portal — renders directly on document.body, outside any scroll/transform containers */}
+      {editing && createPortal(
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)' }}
+          onClick={(e) => { if (e.target === e.currentTarget) close(); }}
+        >
+          <div
+            style={{ width: '100%', maxWidth: '32rem', maxHeight: '85vh', overflowY: 'auto', borderRadius: '1rem', background: '#0f1117', border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 25px 60px rgba(0,0,0,0.8)' }}
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between px-4 py-3 border-b border-borderline-900">
               <h3 className="font-display font-bold text-white">
                 {editing.id ? 'Edit Page' : 'New Dynamic Page'}
@@ -131,7 +138,8 @@ export default function DynamicPagesTab() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );
