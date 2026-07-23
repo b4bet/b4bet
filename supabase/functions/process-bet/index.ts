@@ -3,8 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, content-type",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
 };
 
 function getSecureRandom(): number {
@@ -20,438 +20,183 @@ serve(async (req) => {
   }
 
   try {
-    const payload = await req.json();
-    const action = payload.action ?? payload.game_type ?? "";
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // ── sunvsmoon_result: get or generate round result ──────────────────────
-    if (action === "sunvsmoon_result") {
-      const { round_id } = payload;
+    let payload: Record<string, unknown> = {};
 
-      const { data: existing } = await supabase
-        .from("sunvsmoon_rounds")
-        .select("result")
-        .eq("round_id", round_id)
-        .maybeSingle();
-
-      if (existing) {
-        return new Response(JSON.stringify({ success: true, result: existing.result }), {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+    if (req.method === "GET") {
+      const url = new URL(req.url);
+      for (const [k, v] of url.searchParams.entries()) {
+        payload[k] = v;
       }
+    } else {
+      payload = await req.json();
+    }
 
+    const action = (payload.action ?? payload.game_type ?? "") as string;
+
+    // ── sunvsmoon_result ─────────────────────────────────────────────────────
+    if (action === "sunvsmoon_result") {
+      const round_id = payload.round_id;
+      const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
+      if (existing) return new Response(JSON.stringify({ success: true, result: existing.result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       const rand = getSecureRandom();
       const result = rand < 0.45 ? "sun" : rand < 0.90 ? "moon" : "tie";
       await supabase.from("sunvsmoon_rounds").insert({ round_id, result });
-
-      return new Response(JSON.stringify({ success: true, result }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return new Response(JSON.stringify({ success: true, result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ── sunvsmoon_settle: settle a bet for a completed round ─────────────────
+    // ── sunvsmoon_settle ─────────────────────────────────────────────────────
     if (action === "sunvsmoon_settle") {
       const { user_id, round_id, bet, stake } = payload;
       const stakeNum = Number(stake);
-
-      if (!user_id || !round_id || !bet || !stakeNum) {
-        throw new Error("Missing required fields: user_id, round_id, bet, stake");
-      }
-
-      // Get or generate round result
+      if (!user_id || !round_id || !bet || !stakeNum) throw new Error("Missing required fields: user_id, round_id, bet, stake");
       let roundResult: string;
-      const { data: existing } = await supabase
-        .from("sunvsmoon_rounds")
-        .select("result")
-        .eq("round_id", round_id)
-        .maybeSingle();
-
+      const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
       if (existing) {
         roundResult = existing.result;
       } else {
         const manualResult = payload.manualResult ?? null;
-        if (manualResult && ["sun", "moon", "tie"].includes(manualResult)) {
-          roundResult = manualResult;
+        if (manualResult && ["sun", "moon", "tie"].includes(manualResult as string)) {
+          roundResult = manualResult as string;
         } else {
           const rand = getSecureRandom();
           roundResult = rand < 0.45 ? "sun" : rand < 0.90 ? "moon" : "tie";
         }
         await supabase.from("sunvsmoon_rounds").insert({ round_id, result: roundResult });
       }
-
       const won = bet === roundResult;
-      // Payout: sun/moon = 2x total (1x net profit), tie = 9x total (8x net profit)
       const totalMultipliers: Record<string, number> = { sun: 2, moon: 2, tie: 9 };
-      const totalMultiplier = totalMultipliers[bet] ?? 2;
+      const totalMultiplier = totalMultipliers[bet as string] ?? 2;
       const winAmount = won ? Math.round(stakeNum * totalMultiplier) : 0;
       const profit = won ? winAmount - stakeNum : 0;
-
-      // Fetch current balance
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("balance")
-        .eq("id", user_id)
-        .single();
-
-      if (profileError || !profile) {
-        throw new Error("User profile not found");
-      }
-
-      const balanceBefore = profile.balance;
-      // NOTE: The client already deducted the stake via store.debitLocalOnly(),
-      // so balanceBefore already has the stake subtracted.
-      // We only need to add winnings (total payout) if the user won.
-      const newBalance = won
-        ? balanceBefore + winAmount
-        : balanceBefore;
-
-      const { error: updateError } = await supabase
-        .from("profiles")
-        .update({ balance: newBalance })
-        .eq("id", user_id);
-
-      if (updateError) {
-        throw new Error(`Balance update failed: ${updateError.message}`);
-      }
-
-      // Record in bets table using correct column names
+      const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+      if (profileError || !profile) throw new Error("User profile not found");
+      const newBalance = won ? profile.balance + winAmount : profile.balance;
+      const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
+      if (updateError) throw new Error(`Balance update failed: ${updateError.message}`);
       const now = new Date().toISOString();
-      await supabase.from("bets").insert({
-        user_id,
-        round_id: round_id ?? null,
-        bet_amount: stakeNum,
-        win_amount: winAmount,
-        multiplier: won ? totalMultiplier : 0,
-        status: won ? "won" : "lost",
-        bet_details: {
-          game: "sunvsmoon",
-          result: roundResult,
-          bet_choice: bet,
-          profit,
-        },
-        placed_at: now,
-        resolved_at: now,
-      }).catch(() => {}); // Non-fatal
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          won,
-          result: roundResult,
-          profit,
-          balance_after: newBalance,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      await supabase.from("bets").insert({ user_id, round_id: round_id ?? null, bet_amount: stakeNum, win_amount: winAmount, multiplier: won ? totalMultiplier : 0, status: won ? "won" : "lost", bet_details: { game: "sunvsmoon", result: roundResult, bet_choice: bet, profit }, placed_at: now, resolved_at: now }).catch(() => {});
+      return new Response(JSON.stringify({ success: true, won, result: roundResult, profit, balance_after: newBalance }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ── aviator_cashout: player cashes out before crash ──────────────────────
+    // ── aviator_cashout ──────────────────────────────────────────────────────
     if (action === "aviator_cashout") {
       const { user_id, bet_amount, cashout_at, placed_at_ms } = payload;
       const betNum = Number(bet_amount);
-      // Accept cashout_multiplier, cashout_at, or multiplier from client
       const cashoutMultiplier = Number(cashout_at ?? payload.cashout_multiplier ?? payload.multiplier ?? 0);
-      // Use round_uuid (server-assigned unique ID) for round lookup
       const roundUuid = payload.round_uuid ?? null;
-      // bet_id: server-assigned ID from aviator_place_bet — use for deduplication
       const betId = payload.bet_id ?? null;
+      if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
+      if (!cashoutMultiplier || cashoutMultiplier < 1.01) throw new Error("Invalid cashout multiplier");
 
-      if (!user_id || !betNum) {
-        throw new Error("Missing required fields: user_id, bet_amount");
-      }
-
-      if (!cashoutMultiplier || cashoutMultiplier < 1.01) {
-        throw new Error("Invalid cashout multiplier");
-      }
-
-      // ── Deduplication via bet_id ─────────────────────────────────────────
-      // If bet_id is provided, check whether this bet was already cashed out.
-      // This prevents double-payout when the client retries or both panels
-      // fire cashout at the same moment.
       if (betId) {
-        const { data: existingBet } = await supabase
-          .from("bets")
-          .select("id, status, win_amount, multiplier")
-          .eq("id", betId)
-          .maybeSingle();
-
+        const { data: existingBet } = await supabase.from("bets").select("id, status, win_amount, multiplier").eq("id", betId).maybeSingle();
         if (existingBet && existingBet.status === "won") {
-          // Already processed — return the cached result idempotently
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("balance")
-            .eq("id", user_id)
-            .single();
-          return new Response(
-            JSON.stringify({
-              success: true,
-              won: true,
-              win: existingBet.win_amount ?? 0,
-              balance_after: profile?.balance ?? 0,
-              cashout_at: Number(existingBet.multiplier ?? cashoutMultiplier),
-              crash_point: null,
-            }),
-            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
+          const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+          return new Response(JSON.stringify({ success: true, won: true, win: existingBet.win_amount ?? 0, balance_after: profile?.balance ?? 0, cashout_at: Number(existingBet.multiplier ?? cashoutMultiplier), crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
         }
-
         if (existingBet && existingBet.status === "lost") {
-          // Bet already settled as lost — round crashed before cashout
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("balance")
-            .eq("id", user_id)
-            .single();
-          return new Response(
-            JSON.stringify({
-              success: false,
-              won: false,
-              win: 0,
-              balance_after: profile?.balance ?? null,
-              crash_point: null,
-            }),
-            { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
-          );
+          const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+          return new Response(JSON.stringify({ success: false, won: false, win: 0, balance_after: profile?.balance ?? null, crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
         }
       }
 
-      // ── Validate cashout against round crash point ───────────────────────
-      // Look up bust_point to verify cashout was before crash.
-      // aviator_rounds only has completed rounds, so null = round still flying (OK to cash out).
       let bustPoint: number | null = null;
       if (roundUuid) {
-        const { data: roundData } = await supabase
-          .from("aviator_rounds")
-          .select("bust_point")
-          .eq("round_uuid", roundUuid)
-          .order("id", { ascending: false })
-          .limit(1);
-
-        if (roundData && roundData.length > 0 && roundData[0].bust_point != null) {
-          bustPoint = Number(roundData[0].bust_point);
-        }
+        const { data: roundData } = await supabase.from("aviator_rounds").select("bust_point").eq("round_uuid", roundUuid).order("id", { ascending: false }).limit(1);
+        if (roundData && roundData.length > 0 && roundData[0].bust_point != null) bustPoint = Number(roundData[0].bust_point);
       }
-
-      // If round has crashed and cashout is after crash point, reject
       if (bustPoint !== null && cashoutMultiplier > bustPoint) {
-        return new Response(
-          JSON.stringify({
-            success: false,
-            won: false,
-            win: 0,
-            balance_after: null,
-            crash_point: bustPoint,
-            reason: `Cashout at ${cashoutMultiplier}x is after crash at ${bustPoint}x`,
-          }),
-          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
-        );
+        return new Response(JSON.stringify({ success: false, won: false, win: 0, balance_after: null, crash_point: bustPoint, reason: `Cashout at ${cashoutMultiplier}x is after crash at ${bustPoint}x` }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
       }
 
-      // ── Atomic balance update ────────────────────────────────────────────
-      // Use an RPC (if available) or optimistic update with version check.
-      // Win amount = bet * cashoutMultiplier (total payout, bet was already deducted)
       const winAmount = Math.round(betNum * cashoutMultiplier);
-
-      // Fetch current balance
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("balance")
-        .eq("id", user_id)
-        .single();
-
-      if (profileError || !profile) {
-        throw new Error("User profile not found");
-      }
-
+      const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+      if (profileError || !profile) throw new Error("User profile not found");
       const newBalance = profile.balance + winAmount;
+      const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
+      if (updateError) throw new Error(`Balance update failed: ${updateError.message}`);
 
-      const { error: updateError } = await supabase
-        .from("profiles")
-        .update({ balance: newBalance })
-        .eq("id", user_id);
-
-      if (updateError) {
-        throw new Error(`Balance update failed: ${updateError.message}`);
-      }
-
-      // ── Record / update the bet ──────────────────────────────────────────
       const now = new Date().toISOString();
-
       if (betId) {
-        // Update the existing pending bet to won — avoids duplicate records
-        await supabase
-          .from("bets")
-          .update({
-            win_amount: winAmount,
-            multiplier: cashoutMultiplier,
-            status: "won",
-            resolved_at: now,
-            bet_details: {
-              game: "aviator",
-              cashOutAt: cashoutMultiplier,
-              bustPoint: bustPoint ?? 0,
-              round_uuid: roundUuid,
-              placed_at_ms: placed_at_ms ?? null,
-            },
-          })
-          .eq("id", betId)
-          .catch(() => {}); // Non-fatal
+        await supabase.from("bets").update({ win_amount: winAmount, multiplier: cashoutMultiplier, status: "won", resolved_at: now, bet_details: { game: "aviator", cashOutAt: cashoutMultiplier, bustPoint: bustPoint ?? 0, round_uuid: roundUuid, placed_at_ms: placed_at_ms ?? null } }).eq("id", betId).catch(() => {});
       } else {
-        // No bet_id — insert a new won record (legacy path)
-        await supabase.from("bets").insert({
-          user_id,
-          round_id: null,
-          bet_amount: betNum,
-          win_amount: winAmount,
-          multiplier: cashoutMultiplier,
-          status: "won",
-          bet_details: {
-            game: "aviator",
-            cashOutAt: cashoutMultiplier,
-            bustPoint: bustPoint ?? 0,
-            round_uuid: roundUuid,
-            placed_at_ms: placed_at_ms ?? null,
-          },
-          placed_at: placed_at_ms ? new Date(Number(placed_at_ms)).toISOString() : now,
-          resolved_at: now,
-        }).catch(() => {}); // Non-fatal
+        await supabase.from("bets").insert({ user_id, round_id: null, bet_amount: betNum, win_amount: winAmount, multiplier: cashoutMultiplier, status: "won", bet_details: { game: "aviator", cashOutAt: cashoutMultiplier, bustPoint: bustPoint ?? 0, round_uuid: roundUuid, placed_at_ms: placed_at_ms ?? null }, placed_at: placed_at_ms ? new Date(Number(placed_at_ms)).toISOString() : now, resolved_at: now }).catch(() => {});
       }
-
-      return new Response(
-        JSON.stringify({
-          success: true,
-          won: true,
-          win: winAmount,
-          balance_after: newBalance,
-          cashout_at: cashoutMultiplier,
-          crash_point: bustPoint,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: true, won: true, win: winAmount, balance_after: newBalance, cashout_at: cashoutMultiplier, crash_point: bustPoint }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ── aviator_place_bet: deduct balance when player places bet ─────────────
+    // ── aviator_place_bet ────────────────────────────────────────────────────
     if (action === "aviator_place_bet") {
       const { user_id, bet_amount, round_id } = payload;
       const betNum = Number(bet_amount);
       const roundUuid = payload.round_uuid ?? null;
+      if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
-      if (!user_id || !betNum) {
-        throw new Error("Missing required fields: user_id, bet_amount");
+      // Verify the round is still in waiting/betting phase before accepting the bet
+      const { data: currentRound } = await supabase.from("aviator_current_round").select("phase, phase_started_at, crash_point").eq("id", 1).single();
+      if (currentRound && currentRound.phase === "flying") {
+        // Round already flying — check if it has already been running for more than 500ms
+        // (i.e. the plane has already taken off, reject late bets)
+        const elapsedMs = Date.now() - new Date(currentRound.phase_started_at).getTime();
+        if (elapsedMs > 500) {
+          return new Response(JSON.stringify({ success: false, error: "Betting window closed", balance_after: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
+        }
+      }
+      if (currentRound && currentRound.phase === "crashed") {
+        return new Response(JSON.stringify({ success: false, error: "Round already ended", balance_after: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
       }
 
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("balance")
-        .eq("id", user_id)
-        .single();
-
+      const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
       if (profileError || !profile) throw new Error("User profile not found");
-      if (profile.balance < betNum) throw new Error("Insufficient balance");
+
+      if (profile.balance < betNum) {
+        return new Response(JSON.stringify({ success: false, error: "Insufficient balance", balance_after: profile.balance }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
+      }
 
       const newBalance = profile.balance - betNum;
-      const { error: updateError } = await supabase
-        .from("profiles")
-        .update({ balance: newBalance })
-        .eq("id", user_id);
-
+      const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
       if (updateError) throw new Error(`Balance deduction failed: ${updateError.message}`);
 
-      const { data: betRecord } = await supabase.from("bets").insert({
-        user_id,
-        round_id: null,
-        bet_amount: betNum,
-        win_amount: 0,
-        multiplier: 0,
-        status: "pending",
-        bet_details: { game: "aviator", round_id: round_id ?? null, round_uuid: roundUuid },
-        placed_at: new Date().toISOString(),
-      }).select("id").maybeSingle().catch(() => ({ data: null }));
+      const { data: betRecord } = await supabase.from("bets").insert({ user_id, round_id: null, bet_amount: betNum, win_amount: 0, multiplier: 0, status: "pending", bet_details: { game: "aviator", round_id: round_id ?? null, round_uuid: roundUuid }, placed_at: new Date().toISOString() }).select("id").maybeSingle().catch(() => ({ data: null }));
 
-      return new Response(
-        JSON.stringify({
-          success: true,
-          balance_after: newBalance,
-          bet_id: (betRecord as { id?: string } | null)?.id ?? null,
-        }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: true, balance_after: newBalance, bet_id: (betRecord as { id?: string } | null)?.id ?? null }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ── aviator_settle_lost: round ended, mark lost bets ─────────────────────
+    // ── aviator_settle / aviator_settle_lost ─────────────────────────────────
     if (action === "aviator_settle" || action === "aviator_settle_lost") {
       const { user_id, bet_amount, bust_point, round_uuid } = payload;
       if (user_id && bet_amount) {
         const now = new Date().toISOString();
         const bustPt = Number(bust_point ?? 0);
-
-        // Try to update an existing pending bet for this round first
         if (round_uuid) {
-          const { data: pendingBet } = await supabase
-            .from("bets")
-            .select("id, status")
-            .eq("user_id", user_id)
-            .eq("status", "pending")
-            .contains("bet_details", { round_uuid })
-            .maybeSingle();
-
+          const { data: pendingBet } = await supabase.from("bets").select("id, status").eq("user_id", user_id).eq("status", "pending").contains("bet_details", { round_uuid }).maybeSingle();
           if (pendingBet && pendingBet.status === "pending") {
-            await supabase
-              .from("bets")
-              .update({
-                win_amount: 0,
-                multiplier: bustPt,
-                status: "lost",
-                resolved_at: now,
-                bet_details: {
-                  game: "aviator",
-                  bustPoint: bustPt,
-                  cashOutAt: null,
-                  round_uuid,
-                },
-              })
-              .eq("id", pendingBet.id)
-              .catch(() => {});
-
-            return new Response(
-              JSON.stringify({ success: true, crash_point: bustPt }),
-              { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-            );
+            await supabase.from("bets").update({ win_amount: 0, multiplier: bustPt, status: "lost", resolved_at: now, bet_details: { game: "aviator", bustPoint: bustPt, cashOutAt: null, round_uuid } }).eq("id", pendingBet.id).catch(() => {});
+            return new Response(JSON.stringify({ success: true, crash_point: bustPt }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
           }
         }
-
-        // Fallback: insert a new lost record
-        await supabase.from("bets").insert({
-          user_id,
-          round_id: null,
-          bet_amount: Number(bet_amount),
-          win_amount: 0,
-          multiplier: 0,
-          status: "lost",
-          bet_details: {
-            game: "aviator",
-            bustPoint: bustPt,
-            cashOutAt: null,
-          },
-          placed_at: now,
-          resolved_at: now,
-        }).catch(() => {});
+        await supabase.from("bets").insert({ user_id, round_id: null, bet_amount: Number(bet_amount), win_amount: 0, multiplier: 0, status: "lost", bet_details: { game: "aviator", bustPoint: bustPt, cashOutAt: null }, placed_at: now, resolved_at: now }).catch(() => {});
       }
-      return new Response(
-        JSON.stringify({ success: true }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ── aviator_round_start: acknowledge new round ───────────────────────────
+    // ── aviator_round_start ──────────────────────────────────────────────────
     if (action === "aviator_round_start") {
-      return new Response(
-        JSON.stringify({ success: true }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // ── aviator_round_status ─────────────────────────────────────────────────
+    if (action === "aviator_round_status") {
+      const round_id = payload.round_id;
+      const { data: roundData } = await supabase.from("aviator_rounds").select("bust_point").eq("round_uuid", round_id).maybeSingle();
+      if (roundData) {
+        return new Response(JSON.stringify({ crashed: true, crash_point: Number(roundData.bust_point) }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ crashed: false, crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // ── Legacy handlers (aviator, crash, dice) ───────────────────────────────
