@@ -98,18 +98,19 @@ export function BettingPanel({
             nextRound.pendingNextRound = false;
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
-            // Fire the async bet placement; update betId when server confirms
+            // Optimistically mark as placed immediately so CASH OUT shows up
+            // even if waiting→flying happens while server call is in-flight
+            nextRound.placed = true;
+            nextRound.placedAtMs = Date.now();
             void onPlaceBet(b.amount).then(({ ok, betId }) => {
               if (ok) {
-                // Save the server-assigned betId so cashout can use it directly
                 setBet((bb) => ({ ...bb, betId: betId ?? null }));
               } else {
-                setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
+                // Server rejected — unplace the bet
+                setBet((bb) => ({ ...bb, placed: false, autoBetEnabled: false, pendingNextRound: false, betId: null }));
                 onInsufficientBalance?.();
               }
             });
-            nextRound.placed = true;
-            nextRound.placedAtMs = Date.now();
           }
         }
         return nextRound;
@@ -184,10 +185,13 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
+        // Optimistically mark placed so UI locks immediately
+        setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
         void onPlaceBet(bet.amount).then(({ ok, betId }) => {
           if (ok) {
-            setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
+            setBet((b) => ({ ...b, betId: betId ?? null }));
           } else {
+            setBet((b) => ({ ...b, placed: false, autoBetEnabled: false, betId: null }));
             onInsufficientBalance?.();
           }
         });
@@ -211,11 +215,15 @@ export function BettingPanel({
         return;
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
+      // Optimistically mark placed immediately — CASH OUT will show even if
+      // waiting→flying happens while the server call is still in-flight
+      setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
       void onPlaceBet(bet.amount).then(({ ok, betId }) => {
         if (ok) {
-          // Save betId so cashout can find the bet directly on the server
-          setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now(), betId: betId ?? null }));
+          setBet((b) => ({ ...b, betId: betId ?? null }));
         } else {
+          // Server rejected — undo optimistic placed
+          setBet((b) => ({ ...b, placed: false, betId: null }));
           onInsufficientBalance?.();
         }
       });
