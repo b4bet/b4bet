@@ -96,6 +96,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       return { ok: false, betId: null };
     }
 
+    // Deduct balance locally so UI updates instantly
     const ok = store.debitLocalOnly(amount);
     if (!ok) return { ok: false, betId: null };
 
@@ -105,6 +106,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       return { ok: false, betId: null };
     }
 
+    // Serialize requests so two panels don't race on the same DB balance read
     let resolveQueue!: () => void;
     const myTurn = new Promise<void>((res) => { resolveQueue = res; });
     const prevQueue = placeBetQueueRef.current;
@@ -118,8 +120,21 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         amount,
         aviatorLoop.getRoundUuid(),
       );
-      return { ok: true, betId: result.success ? (result.bet_id ?? null) : null };
+
+      if (!result.success) {
+        // Server rejected (e.g. phase changed) — refund and abort
+        store.credit(amount);
+        return { ok: false, betId: null };
+      }
+
+      // Sync server-confirmed balance to prevent client/server drift
+      if (typeof result.balance_after === 'number' && result.balance_after >= 0) {
+        store.setBalance(result.balance_after);
+      }
+
+      return { ok: true, betId: result.bet_id ?? null };
     } catch {
+      // Network error — refund locally
       store.credit(amount);
       return { ok: false, betId: null };
     } finally {
