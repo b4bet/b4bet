@@ -393,7 +393,8 @@ class AviatorLoop {
    * Cash out the current bet at the given multiplier.
    *
    * @param betAmount  - Original bet amount
-   * @param placedAtMs - Timestamp when bet was placed (ms)
+   * @param placedAtMs - Timestamp when bet was placed (ms) — unused locally,
+   *                     kept for interface compat with BettingPanel
    * @param multiplier - Multiplier to cash out at
    * @param betId      - Server-assigned bet ID (from aviatorPlaceBet). When
    *                     provided, the server looks up the bet directly by ID
@@ -401,7 +402,7 @@ class AviatorLoop {
    */
   cashoutBet(
     betAmount: number,
-    placedAtMs: number,
+    _placedAtMs: number,
     multiplier: number,
     betId?: string | null,
   ): Promise<import('./game-service').AviatorCashoutResult> {
