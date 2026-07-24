@@ -27,8 +27,22 @@ export interface AviatorCurrentRoundResult {
   round_uuid: string | null;
   crash_point: number | null;
   last_crash_point: number | null;
+  /** SHA-256 hash of the server seed — published before the round starts for provably fair verification */
+  server_seed_hash: string | null;
 }
 export interface AviatorHistoryResult { history: number[]; }
+
+/** Provably-fair round detail — mirrors CrashRoundDetail */
+export interface AviatorRoundDetail {
+  bust_point: number;
+  round_uuid: string | null;
+  /** Revealed after the round ends */
+  server_seed: string | null;
+  /** Published before the round starts */
+  server_seed_hash: string | null;
+  created_at: string | null;
+}
+export interface AviatorHistoryDetailResult { history: AviatorRoundDetail[]; }
 
 async function get<T>(params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams(params).toString();
@@ -78,13 +92,21 @@ export const GameService = {
   async aviatorGetCurrentRound(): Promise<AviatorCurrentRoundResult> {
     const { data, error } = await supabase.rpc('aviator_get_current_round');
     if (error) throw new Error(error.message);
-    const d = data as { round_uuid: string | null; phase: string; elapsed_ms: number; crash_point: number | null; last_crash_point: number | null; };
+    const d = data as {
+      round_uuid: string | null;
+      phase: string;
+      elapsed_ms: number;
+      crash_point: number | null;
+      last_crash_point: number | null;
+      server_seed_hash: string | null;
+    };
     return {
       phase: (d.phase ?? 'waiting') as 'waiting' | 'flying' | 'crashed',
       elapsed_ms: Number(d.elapsed_ms ?? 0),
       round_uuid: d.round_uuid ?? null,
       crash_point: d.crash_point != null ? Number(d.crash_point) : null,
       last_crash_point: d.last_crash_point != null ? Number(d.last_crash_point) : null,
+      server_seed_hash: d.server_seed_hash ?? null,
     };
   },
 
@@ -94,6 +116,14 @@ export const GameService = {
     if (error) throw new Error(error.message);
     const history = (data ?? []).map((r: { bust_point: unknown }) => Number(r.bust_point)).filter((v: number) => !isNaN(v) && v > 0);
     return { history };
+  },
+
+  /** Get last 20 rounds with full provably-fair detail (seed + hash). */
+  async aviatorGetHistoryDetail(): Promise<AviatorHistoryDetailResult> {
+    const { data, error } = await supabase.rpc('aviator_get_history_detail');
+    if (error) throw new Error(error.message);
+    const result = data as { history: AviatorRoundDetail[] };
+    return { history: result.history ?? [] };
   },
 
   aviatorPlaceBet(userId: string, betAmount: number, roundUuid: string | null, placedAtMs?: number): Promise<AviatorPlaceBetResult> {
@@ -119,4 +149,47 @@ export const GameService = {
   aviatorRoundStatus(roundId: string): Promise<AviatorRoundStatusResult> {
     return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: roundId });
   },
+
+  // ── Crash (existing) ─────────────────────────────────────────────────────
+  async crashGetCurrentRound() {
+    const { data, error } = await supabase.rpc('crash_get_current_round');
+    if (error) throw new Error(error.message);
+    const d = data as {
+      round_uuid: string | null;
+      phase: string;
+      elapsed_ms: number;
+      crash_point: number | null;
+      last_crash_point: number | null;
+    };
+    return {
+      phase: (d.phase ?? 'waiting') as 'waiting' | 'flying' | 'crashed',
+      elapsed_ms: Number(d.elapsed_ms ?? 0),
+      round_uuid: d.round_uuid ?? null,
+      crash_point: d.crash_point != null ? Number(d.crash_point) : null,
+      last_crash_point: d.last_crash_point != null ? Number(d.last_crash_point) : null,
+    };
+  },
+
+  async crashGetHistory(): Promise<{ history: number[] }> {
+    const { data, error } = await supabase.rpc('crash_get_history');
+    if (error) throw new Error(error.message);
+    const r = data as { history: number[] };
+    return { history: r.history ?? [] };
+  },
+
+  async crashGetHistoryDetail(): Promise<{ history: CrashRoundDetail[] }> {
+    const { data, error } = await supabase.rpc('crash_get_history_detail');
+    if (error) throw new Error(error.message);
+    const r = data as { history: CrashRoundDetail[] };
+    return { history: r.history ?? [] };
+  },
 };
+
+/** Provably-fair crash round detail */
+export interface CrashRoundDetail {
+  bust_point: number;
+  round_uuid: string | null;
+  server_seed: string | null;
+  server_seed_hash: string | null;
+  created_at: string | null;
+}
