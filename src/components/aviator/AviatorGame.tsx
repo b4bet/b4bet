@@ -31,7 +31,6 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
 
   const { playCashOut } = useGameAudio(phase, soundOn, musicOn);
 
-  // Two independent bet panels — each has its own BetState
   const [bet0, setBet0] = useState<BetState>(() => createInitialBet(1));
   const [bet1, setBet1] = useState<BetState>(() => createInitialBet(1));
 
@@ -44,7 +43,6 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
 
   const pendingPlayerBets = useRef<{ panel: 0 | 1; amount: number }[]>([]);
 
-  // Clear allBets at the start of each new round
   useEffect(() => {
     if (phase === 'waiting' && countdown > 5.6) {
       setAllBets([]);
@@ -70,7 +68,6 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
     setTimeout(() => setTimeoutNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
   }, []);
 
-  // Place a bet via Supabase Edge Function, debit balance locally first
   const handlePlaceBet = useCallback(async (amount: number): Promise<boolean> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
@@ -212,12 +209,11 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
         onToggleMusic={setMusicOn}
         onToggleAnimation={setAnimationOn}
       />
-      <HistoryBar history={history} lastCrash={lastCrash} />
+      {/* HistoryBar only accepts history prop */}
+      <HistoryBar history={history} />
 
-      {/* Main layout: sidebar on desktop, full-width on mobile */}
       <div className="flex flex-1 gap-2 p-2">
-
-        {/* Left column: canvas + TWO bet panels stacked vertically */}
+        {/* Left column: canvas + two bet panels stacked */}
         <div className="flex flex-col flex-1 gap-2">
           <FlightCanvas
             phase={phase}
@@ -231,10 +227,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
             animationOn={animationOn}
           />
 
-          {/*
-           * Two bet panels — stacked: Panel 1 on top, Panel 2 below.
-           * flex-col keeps them stacked (one above the other) on all screen sizes.
-           */}
+          {/* Panel 1 above, Panel 2 below */}
           <div className="flex flex-col gap-2">
             <BettingPanel
               bet={bet0}
@@ -269,7 +262,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
           </div>
         </div>
 
-        {/* Sidebar: hidden on mobile, visible on lg+ */}
+        {/* Sidebar: desktop only */}
         <div className="hidden lg:flex w-72 flex-shrink-0">
           <Sidebar
             phase={phase}
@@ -285,7 +278,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
       </div>
 
       <div className="text-center text-xs text-ink-500 py-1 border-t border-ink-700">
-        🔒 Official Live Game &nbsp;·&nbsp; Secure &amp; Provably Fair &nbsp;·&nbsp; 18+ Responsible Play
+        🔒 Official Live Game · Secure &amp; Provably Fair · 18+ Responsible Play
       </div>
     </div>
   );
