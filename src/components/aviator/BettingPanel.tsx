@@ -18,9 +18,7 @@ export interface BetState {
   autoBetEnabled: boolean;
   pendingNextRound: boolean;
   roundId: number;
-  /** Timestamp (ms) when the bet was placed */
   placedAtMs: number;
-  /** Server-assigned bet ID returned by aviator_place_bet */
   betId: string | null;
 }
 
@@ -48,8 +46,6 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
-  /** True during the 2-second grace window after flying starts — cancel still allowed, multiplier shown */
-  flyingGrace: boolean;
   onPlaceBet: (amount: number) => Promise<boolean>;
   onCancelBet: (amount: number, betId: string | null) => void;
   onCashOut: (amount: number, at: number) => void;
@@ -73,7 +69,6 @@ export function BettingPanel({
   countdown,
   roundId,
   balance,
-  flyingGrace,
   onPlaceBet,
   onCancelBet,
   onCashOut,
@@ -90,7 +85,7 @@ export function BettingPanel({
 
   const limits = store.getGameLimits('aviator');
 
-  // Round transition — fire pending/auto bets for next round.
+  // Round transition — fire pending/auto bets for next round
   useEffect(() => {
     if (bet.roundId !== roundId) {
       setBet((b) => {
@@ -118,22 +113,21 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  // Auto cash-out — only fires after grace window ends
+  // Auto cash-out trigger
   useEffect(() => {
     if (
       bet.placed &&
       bet.cashedOutAt === null &&
       bet.autoCashoutEnabled &&
       phase === 'flying' &&
-      !flyingGrace &&
       multiplier >= bet.autoCashoutValue
     ) {
       void doCashOut(bet.autoCashoutValue);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multiplier, phase, flyingGrace]);
+  }, [multiplier, phase]);
 
-  // Round crashed without cash-out — bet is lost
+  // Round crashed — settle lost bet
   useEffect(() => {
     if (phase === 'crashed' && bet.placed && bet.cashedOutAt === null) {
       const session = auth.getSession();
@@ -150,13 +144,14 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // Derived flags
-  // During grace: cancel is still allowed (shows multiplier on button)
-  const canCancel = (phase === 'waiting' || flyingGrace) && bet.placed && bet.cashedOutAt === null;
+  // Cancel only allowed during waiting phase
+  const canCancel = phase === 'waiting' && bet.placed && bet.cashedOutAt === null;
   const canPlace = phase === 'waiting' && !bet.placed && bet.amount <= balance && countdown > 0;
-  const canCashOut = phase === 'flying' && !flyingGrace && bet.placed && bet.cashedOutAt === null;
+  // Cash out only during flying
+  const canCashOut = phase === 'flying' && bet.placed && bet.cashedOutAt === null;
   const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
-  const canQueueNextRound = phase === 'flying' && !flyingGrace && !bet.placed && bet.cashedOutAt === null;
+  // Queue next round only during flying when not placed
+  const canQueueNextRound = phase === 'flying' && !bet.placed && bet.cashedOutAt === null;
   const canCancelQueue = phase === 'flying' && !bet.placed && bet.pendingNextRound;
 
   function adjustAmount(delta: number) {
@@ -260,7 +255,7 @@ export function BettingPanel({
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span>CASH OUT</span>
-        <span className="text-xs font-normal">{formatMoney(livePayout)}</span>
+        <span className="text-xs font-normal">{multiplier.toFixed(2)}x · {formatMoney(livePayout)}</span>
       </span>
     );
     betShade = 'bg-aviator-orange hover:bg-aviator-orange-bright';
@@ -274,29 +269,26 @@ export function BettingPanel({
     );
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
     betShadow = 'shadow-btn-red';
-  } else if (canCancel && flyingGrace) {
-    // Grace window: show CANCEL with current multiplier — exactly like original cash-out style
-    const livePayout = bet.amount * multiplier;
-    betLabel = (
-      <span className="flex flex-col items-center leading-tight">
-        <span>CANCEL</span>
-        <span className="text-xs font-normal">{multiplier.toFixed(2)}x · {formatMoney(livePayout)}</span>
-      </span>
-    );
-    betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
-    betShadow = 'shadow-btn-red';
   } else if (canCancel) {
     betLabel = 'CANCEL';
     betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
     betShadow = 'shadow-btn-red';
   } else if (phase === 'flying' && bet.placed && bet.cashedOutAt !== null) {
+    // Already cashed out this round
+    const winAmt = bet.amount * (bet.cashedOutAt ?? 1);
+    betLabel = (
+      <span className="flex flex-col items-center leading-tight">
+        <span>CASHED OUT</span>
+        <span className="text-xs font-normal">{bet.cashedOutAt?.toFixed(2)}x · {formatMoney(winAmt)}</span>
+      </span>
+    );
     betShade = 'bg-aviator-green/40';
     betShadow = '';
   } else if (canQueueNextRound) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
-        <span>BET</span>
-        <span className="text-xs font-normal">Next round</span>
+        <span>BET NEXT</span>
+        <span className="text-xs font-normal">Round</span>
       </span>
     );
   } else if (phase === 'crashed') {
