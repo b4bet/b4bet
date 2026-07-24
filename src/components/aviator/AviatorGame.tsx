@@ -4,9 +4,9 @@ import { HistoryBar } from './HistoryBar';
 import { FlightCanvas, type CashoutNotice, type InsufficientBalanceNotice, type TimeoutNotice } from './FlightCanvas';
 import { useGameAudio } from './game/useGameAudio';
 import { BettingPanel, createInitialBet, type BetState } from './BettingPanel';
-import { Sidebar, makeSimBet, type BetRecord, type ChatMessage } from './Sidebar';
+import { Sidebar, type BetRecord, type ChatMessage } from './Sidebar';
 import { useAviatorGame } from './game/useAviatorGame';
-import { formatMoney, randomAvatarColor, randomName } from './game/format';
+import { formatMoney } from './game/format';
 import { useBalance } from '../../lib/hooks';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
@@ -255,6 +255,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           </div>
         </div>
         <Sidebar
+          phase={phase}
+          multiplier={multiplier}
           allBets={allBets}
           myBets={myBets}
           chat={chat}
