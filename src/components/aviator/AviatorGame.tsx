@@ -20,7 +20,7 @@ interface AviatorGameProps {
   onBack?: () => void;
 }
 
-export default function AviatorGame({ onBack }: AviatorGameProps) {
+export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
   const game = useAviatorGame();
   const { phase, multiplier, countdown, history, roundId, lastCrash } = game;
 
@@ -68,9 +68,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     setTimeout(() => setTimeoutNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
   }, []);
 
-  /**
-   * Place bet — deducts locally and calls server.
-   */
   const handlePlaceBet = useCallback(async (amount: number): Promise<boolean> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
@@ -103,9 +100,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     }
   }, []);
 
-  /**
-   * Cancel during waiting phase only — refunds locally and on server.
-   */
   const handleCancelBet = useCallback(
     (panel: 0 | 1, amount: number, betId: string | null) => {
       store.credit(amount);
@@ -206,7 +200,15 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-ink-900 text-white">
-      <Header onBack={onBack} soundOn={soundOn} setSoundOn={setSoundOn} musicOn={musicOn} setMusicOn={setMusicOn} animationOn={animationOn} setAnimationOn={setAnimationOn} />
+      <Header
+        balance={balance}
+        soundOn={soundOn}
+        musicOn={musicOn}
+        animationOn={animationOn}
+        onToggleSound={setSoundOn}
+        onToggleMusic={setMusicOn}
+        onToggleAnimation={setAnimationOn}
+      />
       <HistoryBar history={history} lastCrash={lastCrash} />
       <div className="flex flex-1 min-h-0 gap-2 p-2">
         <div className="flex flex-col flex-1 min-h-0 gap-2">
