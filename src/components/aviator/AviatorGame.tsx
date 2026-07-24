@@ -199,7 +199,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
   useEffect(() => { setChat([]); }, []);
 
   return (
-    <div className="flex flex-col bg-ink-900 text-white min-h-screen px-3 sm:px-5">
+    <div className="flex flex-col bg-ink-900 text-white min-h-screen overflow-x-hidden">
       <Header
         balance={balance}
         soundOn={soundOn}
@@ -209,12 +209,12 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
         onToggleMusic={setMusicOn}
         onToggleAnimation={setAnimationOn}
       />
-      {/* HistoryBar only accepts history prop */}
       <HistoryBar history={history} />
 
-      <div className="flex flex-1 gap-2 py-2">
+      {/* Main game area — padded inward from screen edges */}
+      <div className="flex flex-1 gap-2 px-3 sm:px-5 py-2">
         {/* Left column: canvas + two bet panels stacked */}
-        <div className="flex flex-col flex-1 gap-2">
+        <div className="flex flex-col flex-1 gap-2 min-w-0">
           <FlightCanvas
             phase={phase}
             multiplier={multiplier}
@@ -277,7 +277,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
         </div>
       </div>
 
-      <div className="text-center text-xs text-ink-500 py-1 border-t border-ink-700">
+      <div className="text-center text-xs text-ink-500 py-1 border-t border-ink-700 px-3">
         🔒 Official Live Game · Secure &amp; Provably Fair · 18+ Responsible Play
       </div>
     </div>
