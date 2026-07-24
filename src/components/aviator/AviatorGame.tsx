@@ -199,7 +199,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
   useEffect(() => { setChat([]); }, []);
 
   return (
-    <div className="flex flex-col h-full min-h-0 bg-ink-900 text-white">
+    <div className="flex flex-col bg-ink-900 text-white min-h-screen">
       <Header
         balance={balance}
         soundOn={soundOn}
@@ -210,8 +210,12 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
         onToggleAnimation={setAnimationOn}
       />
       <HistoryBar history={history} lastCrash={lastCrash} />
-      <div className="flex flex-1 min-h-0 gap-2 p-2">
-        <div className="flex flex-col flex-1 min-h-0 gap-2">
+
+      {/* Main layout: on desktop show sidebar, on mobile full width */}
+      <div className="flex flex-1 gap-2 p-2">
+
+        {/* Left column: canvas + bet panels stacked */}
+        <div className="flex flex-col flex-1 gap-2">
           <FlightCanvas
             phase={phase}
             multiplier={multiplier}
@@ -223,7 +227,9 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
             activeBetAmount={bet0.placed ? bet0.amount : (bet1.placed ? bet1.amount : undefined)}
             animationOn={animationOn}
           />
-          <div className="flex gap-2">
+
+          {/* Bet panels: stacked vertically (one above other) like the original */}
+          <div className="flex flex-col gap-2">
             <BettingPanel
               bet={bet0}
               setBet={wrapSetBet(0)}
@@ -256,17 +262,22 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
             />
           </div>
         </div>
-        <Sidebar
-          phase={phase}
-          multiplier={multiplier}
-          allBets={allBets}
-          myBets={myBets}
-          chat={chat}
-          canShareBet={canShareBet}
-          onSendChat={handleSendChat}
-          onShareBet={handleShareBet}
-        />
+
+        {/* Sidebar: hidden on mobile, visible on lg+ */}
+        <div className="hidden lg:flex w-72 flex-shrink-0">
+          <Sidebar
+            phase={phase}
+            multiplier={multiplier}
+            allBets={allBets}
+            myBets={myBets}
+            chat={chat}
+            canShareBet={canShareBet}
+            onSendChat={handleSendChat}
+            onShareBet={handleShareBet}
+          />
+        </div>
       </div>
+
       <div className="text-center text-xs text-ink-500 py-1 border-t border-ink-700">
         🔒 Official Live Game &nbsp;·&nbsp; Secure &amp; Provably Fair &nbsp;·&nbsp; 18+ Responsible Play
       </div>
