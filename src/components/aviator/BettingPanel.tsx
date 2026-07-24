@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import type { Phase } from './game/useAviatorGame';
 import { formatMoney } from './game/format';
@@ -85,41 +85,56 @@ export function BettingPanel({
   const limits = store.getGameLimits('aviator');
   const isAmountDisabled = bet.placed || phase === 'flying';
 
-  // ── Round transition — only fires when phase moves to 'waiting' for a NEW round
-  // We only reset the bet when:
-  //   1. bet.roundId differs from current roundId
-  //   2. AND the current phase is 'waiting' (genuinely a new round starting)
-  //   3. AND bet is no longer placed (it was settled/crashed already)
-  // This prevents premature resets caused by server-poll roundId bumps mid-waiting phase.
-  useEffect(() => {
-    if (bet.roundId === roundId) return;
-    // Only transition when we're in a fresh waiting phase with no active bet
-    if (phase !== 'waiting') return;
-    if (bet.placed) return; // still active — let crash/cashout settle it first
+  // Track previous phase to detect genuine round transitions (non-waiting → waiting).
+  // We do NOT use roundId for transition detection because the engine increments it
+  // whenever a new round_uuid arrives from the server, which can happen multiple times
+  // within the same waiting phase and cause false resets.
+  const prevPhaseRef = useRef<Phase>(phase);
+  // Whether the active bet was placed during this waiting phase (guards crash settlement)
+  const betPlacedThisPhaseRef = useRef(false);
 
-    setBet((b) => {
-      const nextRound = { ...b, roundId, placed: false, cashedOutAt: null, pendingNextRound: false, betId: null };
-      const shouldPlace = b.autoBetEnabled || b.pendingNextRound;
-      if (shouldPlace) {
-        if (b.amount < limits.min || b.amount > limits.max) {
-          nextRound.autoBetEnabled = false;
-          nextRound.pendingNextRound = false;
-          cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
-        } else {
-          void onPlaceBet(b.amount).then((ok) => {
-            if (!ok) {
-              setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
-              onInsufficientBalance?.();
-            }
-          });
-          nextRound.placed = true;
-          nextRound.placedAtMs = Date.now();
+  useEffect(() => {
+    const prev = prevPhaseRef.current;
+    prevPhaseRef.current = phase;
+
+    // ── New waiting phase started (crashed/flying → waiting) ───────────────
+    // Fire auto-bet or pending-next-round bet. Skip if bet is still placed
+    // (shouldn't happen, but crash effect should have cleared it first).
+    if (phase === 'waiting' && prev !== 'waiting') {
+      betPlacedThisPhaseRef.current = false;
+
+      setBet((b) => {
+        // Bet still active from previous round — shouldn't normally happen
+        if (b.placed) return { ...b, placed: false, cashedOutAt: null, pendingNextRound: false, betId: null, roundId };
+
+        const nextRound = { ...b, roundId, placed: false, cashedOutAt: null, pendingNextRound: false, betId: null };
+        const shouldPlace = b.autoBetEnabled || b.pendingNextRound;
+
+        if (shouldPlace) {
+          if (b.amount < limits.min || b.amount > limits.max) {
+            nextRound.autoBetEnabled = false;
+            nextRound.pendingNextRound = false;
+            cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
+          } else {
+            void onPlaceBet(b.amount).then((ok) => {
+              if (!ok) {
+                setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
+                onInsufficientBalance?.();
+              } else {
+                betPlacedThisPhaseRef.current = true;
+              }
+            });
+            nextRound.placed = true;
+            nextRound.placedAtMs = Date.now();
+            betPlacedThisPhaseRef.current = true;
+          }
         }
-      }
-      return nextRound;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roundId, phase]);
+
+        return nextRound;
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
 
   // ── Auto cash-out trigger ──────────────────────────────────────────────
   useEffect(() => {
@@ -141,19 +156,19 @@ export function BettingPanel({
             .catch(() => {});
         });
       }
-      // Mark bet as resolved (not placed) so round transition can fire next waiting phase
+      // Clear placed so new-round effect can fire auto-bets next waiting phase
       setBet((b) => ({ ...b, placed: false, betId: null }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
   // ── State flags ────────────────────────────────────────────────────────
-  const canPlace       = phase === 'waiting' && !bet.placed && countdown > 0;
-  const canCancel      = phase === 'waiting' && bet.placed && bet.cashedOutAt === null;
-  const canCashOut     = phase === 'flying'  && bet.placed && bet.cashedOutAt === null;
-  const alreadyCashedOut = phase === 'flying' && bet.placed && bet.cashedOutAt !== null;
-  const canCancelQueue   = phase === 'flying' && !bet.placed && bet.pendingNextRound;
-  const canQueueNextRound = phase === 'flying' && !bet.placed && !bet.pendingNextRound;
+  const canPlace          = phase === 'waiting' && !bet.placed && countdown > 0;
+  const canCancel         = phase === 'waiting' && bet.placed && bet.cashedOutAt === null;
+  const canCashOut        = phase === 'flying'  && bet.placed && bet.cashedOutAt === null;
+  const alreadyCashedOut  = phase === 'flying'  && bet.placed && bet.cashedOutAt !== null;
+  const canCancelQueue    = phase === 'flying'  && !bet.placed && bet.pendingNextRound;
+  const canQueueNextRound = phase === 'flying'  && !bet.placed && !bet.pendingNextRound;
   const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
 
   function adjustAmount(delta: number) {
@@ -176,9 +191,12 @@ export function BettingPanel({
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
         void onPlaceBet(bet.amount).then((ok) => {
-          // Set roundId = current roundId so transition effect doesn't fire prematurely
-          if (ok) setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now(), roundId }));
-          else onInsufficientBalance?.();
+          if (ok) {
+            setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now(), roundId }));
+            betPlacedThisPhaseRef.current = true;
+          } else {
+            onInsufficientBalance?.();
+          }
         });
       } else {
         setBet((b) => ({ ...b, autoBetEnabled: true }));
@@ -203,12 +221,16 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (countdown <= 0.01) { onTimeout?.(); return; }
+
+      // Optimistically mark as placed immediately so UI shows CANCEL right away
+      setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now(), roundId }));
+      betPlacedThisPhaseRef.current = true;
+
       void onPlaceBet(bet.amount).then((ok) => {
-        if (ok) {
-          // IMPORTANT: set roundId to current value so transition effect
-          // does NOT fire just because server poll bumped roundId slightly
-          setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now(), roundId }));
-        } else {
+        if (!ok) {
+          // Revert on failure
+          setBet((b) => ({ ...b, placed: false }));
+          betPlacedThisPhaseRef.current = false;
           onInsufficientBalance?.();
         }
       });
@@ -230,6 +252,7 @@ export function BettingPanel({
     const amt = bet.amount;
     const betId = bet.betId;
     setBet((b) => ({ ...b, placed: false, betId: null }));
+    betPlacedThisPhaseRef.current = false;
     onCancelBet(amt, betId);
   }
 
@@ -255,13 +278,13 @@ export function BettingPanel({
   type BtnVariant = 'bet' | 'cancel' | 'cashout' | 'cashed' | 'bet_next' | 'cancel_next' | 'disabled';
 
   let variant: BtnVariant;
-  if (canCashOut)          variant = 'cashout';
+  if (canCashOut)           variant = 'cashout';
   else if (alreadyCashedOut) variant = 'cashed';
-  else if (canCancelQueue) variant = 'cancel_next';
+  else if (canCancelQueue)  variant = 'cancel_next';
   else if (canQueueNextRound) variant = 'bet_next';
-  else if (canCancel)      variant = 'cancel';
-  else if (canPlace)       variant = 'bet';
-  else                     variant = 'disabled';
+  else if (canCancel)       variant = 'cancel';
+  else if (canPlace)        variant = 'bet';
+  else                      variant = 'disabled';
 
   const livePayout = bet.amount * multiplier;
 
