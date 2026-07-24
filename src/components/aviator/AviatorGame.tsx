@@ -217,7 +217,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
       {/* Main layout: sidebar on desktop, full-width on mobile */}
       <div className="flex flex-1 gap-2 p-2">
 
-        {/* Left column: canvas + TWO bet panels stacked (top panel above bottom panel) */}
+        {/* Left column: canvas + TWO bet panels stacked vertically */}
         <div className="flex flex-col flex-1 gap-2">
           <FlightCanvas
             phase={phase}
@@ -232,11 +232,10 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
           />
 
           {/*
-           * Bet panels — STACKED VERTICALLY: Panel 1 on top, Panel 2 below.
-           * Both panels are always visible; each operates independently.
+           * Two bet panels — stacked: Panel 1 on top, Panel 2 below.
+           * flex-col keeps them stacked (one above the other) on all screen sizes.
            */}
           <div className="flex flex-col gap-2">
-            {/* Panel 1 — top */}
             <BettingPanel
               bet={bet0}
               setBet={wrapSetBet(0)}
@@ -252,7 +251,6 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
               onInsufficientBalance={showInsufficientBalanceNotice}
               onTimeout={showTimeoutNotice}
             />
-            {/* Panel 2 — bottom */}
             <BettingPanel
               bet={bet1}
               setBet={wrapSetBet(1)}
