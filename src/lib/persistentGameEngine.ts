@@ -243,7 +243,7 @@ class FiveDLoop extends BaseLoop<number[]> {
 }
 
 // ---------------------------------------------------------------------------
-// Aviator — SERVER-DRIVEN shared round model (v2)
+// Aviator — SERVER-DRIVEN shared round model (v3 — Provably Fair)
 // ---------------------------------------------------------------------------
 export type AviatorPhase = 'waiting' | 'flying' | 'crashed';
 export interface AviatorEngineState {
@@ -253,6 +253,8 @@ export interface AviatorEngineState {
   history: number[];
   roundId: number;
   lastCrash: number | null;
+  /** SHA-256 hash of the server seed for current round — visible before crash point is known */
+  serverSeedHash: string | null;
 }
 
 const AV_WAIT_MS = 6_000;
@@ -282,6 +284,8 @@ class AviatorLoop {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastPollMs = 0;
   private bootstrapped = false;
+  /** SHA-256 hash of server seed — published before round starts for provably fair verification */
+  private serverSeedHash: string | null = null;
 
   constructor() {
     void this.syncFromServer();
@@ -297,12 +301,24 @@ class AviatorLoop {
       if (!this.bootstrapped) {
         this.bootstrapped = true;
         try {
-          const histRes = await GameService.aviatorGetHistory();
+          // Try to load full provably-fair history detail first
+          const histRes = await GameService.aviatorGetHistoryDetail();
           if (histRes.history.length > 0 && this.history.length === 0) {
-            this.history = histRes.history.slice(0, AV_HISTORY_CAP);
+            this.history = histRes.history
+              .map((r) => Number(r.bust_point))
+              .filter((v) => !isNaN(v) && v > 0)
+              .slice(0, AV_HISTORY_CAP);
           }
         } catch {
-          // Non-fatal — history bar will populate as rounds complete.
+          // Fallback to simple history
+          try {
+            const histRes = await GameService.aviatorGetHistory();
+            if (histRes.history.length > 0 && this.history.length === 0) {
+              this.history = histRes.history.slice(0, AV_HISTORY_CAP);
+            }
+          } catch {
+            // Non-fatal — history bar will populate as rounds complete.
+          }
         }
       }
     } catch {
@@ -316,8 +332,14 @@ class AviatorLoop {
     round_uuid: string | null;
     crash_point: number | null;
     last_crash_point?: number | null;
+    server_seed_hash?: string | null;
   }) {
     const now = Date.now();
+
+    // Always update the seed hash so UI can show it
+    if (res.server_seed_hash !== undefined) {
+      this.serverSeedHash = res.server_seed_hash ?? null;
+    }
 
     if (res.round_uuid && res.round_uuid !== this.roundUuid) {
       if (this.roundUuid !== null && res.phase === 'waiting') {
@@ -384,6 +406,7 @@ class AviatorLoop {
       history: this.history.slice(),
       roundId: this.roundId,
       lastCrash: this.lastCrash,
+      serverSeedHash: this.serverSeedHash,
     };
   }
 
@@ -391,14 +414,6 @@ class AviatorLoop {
 
   /**
    * Cash out the current bet at the given multiplier.
-   *
-   * @param betAmount  - Original bet amount
-   * @param placedAtMs - Timestamp when bet was placed (ms) — unused locally,
-   *                     kept for interface compat with BettingPanel
-   * @param multiplier - Multiplier to cash out at
-   * @param betId      - Server-assigned bet ID (from aviatorPlaceBet). When
-   *                     provided, the server looks up the bet directly by ID
-   *                     which is far more reliable than the round_uuid fallback.
    */
   cashoutBet(
     betAmount: number,
