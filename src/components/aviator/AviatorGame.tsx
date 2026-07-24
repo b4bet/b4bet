@@ -214,7 +214,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
             phase={phase}
             multiplier={multiplier}
             countdown={countdown}
-            cashoutNotices={cashoutNotices}
+            lastCrash={lastCrash ?? null}
+            cashouts={cashoutNotices}
             insufficientBalanceNotices={insufficientBalanceNotices}
             timeoutNotices={timeoutNotices}
             activeBetAmount={bet0.placed ? bet0.amount : (bet1.placed ? bet1.amount : undefined)}
