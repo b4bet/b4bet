@@ -48,6 +48,16 @@ export interface AviatorRoundStatusResult {
   crashed: boolean;
   crash_point: number | null;
 }
+export interface AviatorCurrentRoundResult {
+  phase: 'waiting' | 'flying' | 'crashed';
+  elapsed_ms: number;
+  round_uuid: string | null;
+  crash_point: number | null;
+  last_crash_point: number | null;
+}
+export interface AviatorHistoryResult {
+  history: number[];
+}
 
 // ── Helper ───────────────────────────────────────────────────────────────────
 
@@ -144,13 +154,28 @@ export const GameService = {
   // ── Aviator ────────────────────────────────────────────────────────────────
 
   /**
+   * Get current round state from server (phase, elapsed_ms, round_uuid, crash_point).
+   * Called by AviatorLoop on startup and every 300ms to sync with server.
+   */
+  aviatorGetCurrentRound(): Promise<AviatorCurrentRoundResult> {
+    return get<AviatorCurrentRoundResult>({ action: "aviator_current_round" });
+  },
+
+  /**
+   * Get recent crash history (last 20 crash points).
+   */
+  aviatorGetHistory(): Promise<AviatorHistoryResult> {
+    return get<AviatorHistoryResult>({ action: "aviator_history" });
+  },
+
+  /**
    * Place a bet for an aviator round.
    * Deducts balance server-side and records a pending bet.
    */
   aviatorPlaceBet(
     userId: string,
     betAmount: number,
-    roundUuid: string,
+    roundUuid: string | null,
     placedAtMs?: number,
   ): Promise<AviatorPlaceBetResult> {
     return post<AviatorPlaceBetResult>({
@@ -196,9 +221,10 @@ export const GameService = {
    */
   aviatorCashout(
     userId: string,
+    roundUuid: string | null,
+    roundId: number,
     betAmount: number,
     cashoutAt: number,
-    roundUuid: string,
     betId: string | null,
     placedAtMs?: number,
   ): Promise<AviatorCashoutResult> {
@@ -208,6 +234,7 @@ export const GameService = {
       bet_amount: betAmount,
       cashout_at: cashoutAt,
       round_uuid: roundUuid,
+      round_id: roundId,
       bet_id: betId,
       placed_at_ms: placedAtMs ?? Date.now(),
     });
@@ -216,7 +243,7 @@ export const GameService = {
   /**
    * Called after a round ends for bets that did NOT cash out (loss).
    */
-  aviatorSettle(userId: string, roundUuid: string, betAmount: number): Promise<AviatorSettleResult> {
+  aviatorSettle(userId: string, roundUuid: string | null, betAmount: number): Promise<AviatorSettleResult> {
     return post<AviatorSettleResult>({
       action: "aviator_settle",
       user_id: userId,
