@@ -37,6 +37,57 @@ serve(async (req) => {
 
     const action = (payload.action ?? payload.game_type ?? "") as string;
 
+    // ── aviator_current_round ────────────────────────────────────────────────
+    // Returns the current round state so the client engine can sync with server.
+    if (action === "aviator_current_round") {
+      const { data: row } = await supabase
+        .from("aviator_current_round")
+        .select("round_uuid, phase, phase_started_at, crash_point, last_crash_point")
+        .eq("id", 1)
+        .single();
+
+      if (!row) {
+        // No row yet — tell client we are in waiting phase
+        return new Response(
+          JSON.stringify({ phase: "waiting", elapsed_ms: 0, round_uuid: null, crash_point: null, last_crash_point: null }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const phaseStartedAt = new Date(row.phase_started_at).getTime();
+      const elapsed_ms = Math.max(0, Date.now() - phaseStartedAt);
+
+      return new Response(
+        JSON.stringify({
+          phase: row.phase ?? "waiting",
+          elapsed_ms,
+          round_uuid: row.round_uuid ?? null,
+          crash_point: row.crash_point != null ? Number(row.crash_point) : null,
+          last_crash_point: row.last_crash_point != null ? Number(row.last_crash_point) : null,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── aviator_history ──────────────────────────────────────────────────────
+    // Returns the last 20 crash points for the history bar.
+    if (action === "aviator_history") {
+      const { data: rows } = await supabase
+        .from("aviator_rounds")
+        .select("bust_point")
+        .order("id", { ascending: false })
+        .limit(20);
+
+      const history = (rows ?? [])
+        .map((r: { bust_point: unknown }) => Number(r.bust_point))
+        .filter((v: number) => !isNaN(v) && v > 0);
+
+      return new Response(
+        JSON.stringify({ history }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // ── sunvsmoon_result ─────────────────────────────────────────────────────
     if (action === "sunvsmoon_result") {
       const round_id = payload.round_id;
@@ -83,15 +134,11 @@ serve(async (req) => {
     }
 
     // ── aviator_cancel_bet ───────────────────────────────────────────────────
-    // Called when player cancels a placed bet during the waiting phase OR
-    // within the 2-second grace window after flying starts.
-    // Refunds the bet amount to Supabase balance and deletes/voids the bet record.
     if (action === "aviator_cancel_bet") {
       const { user_id, bet_amount, bet_id } = payload;
       const betNum = Number(bet_amount);
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
-      // Allow cancel during waiting phase OR within 2-second grace window after flying starts
       const CANCEL_GRACE_MS = 2000;
 
       const { data: currentRound } = await supabase
@@ -103,18 +150,14 @@ serve(async (req) => {
       if (currentRound && currentRound.phase === "flying") {
         const phaseStartedAt = new Date(currentRound.phase_started_at).getTime();
         const elapsedSinceFlying = Date.now() - phaseStartedAt;
-
         if (elapsedSinceFlying > CANCEL_GRACE_MS) {
-          // Grace window expired — cancel not allowed
           return new Response(
             JSON.stringify({ success: false, error: "Round already started, cannot cancel" }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
           );
         }
-        // Within 2s grace window — allow cancel
       }
 
-      // Crashed phase — cancel not allowed
       if (currentRound && currentRound.phase === "crashed") {
         return new Response(
           JSON.stringify({ success: false, error: "Round already ended, cannot cancel" }),
@@ -122,7 +165,6 @@ serve(async (req) => {
         );
       }
 
-      // Refund balance
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("balance")
@@ -137,7 +179,6 @@ serve(async (req) => {
         .eq("id", user_id);
       if (updateError) throw new Error(`Balance refund failed: ${updateError.message}`);
 
-      // Delete the pending bet record if we have an ID
       if (bet_id) {
         await supabase
           .from("bets")
