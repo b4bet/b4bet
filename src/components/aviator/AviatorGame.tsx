@@ -16,13 +16,6 @@ import { aviatorLoop } from '../../lib/persistentGameEngine';
 
 const PLAYER_NAME = 'You';
 
-/**
- * Grace window (ms) after round starts flying.
- * During this window: cancel is still allowed.
- * After this window: auto-cancel fires and bet is re-queued for next round.
- */
-const FLYING_GRACE_MS = 2000;
-
 interface AviatorGameProps {
   onBack?: () => void;
 }
@@ -48,72 +41,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const [insufficientBalanceNotices, setInsufficientBalanceNotices] = useState<InsufficientBalanceNotice[]>([]);
   const [timeoutNotices, setTimeoutNotices] = useState<TimeoutNotice[]>([]);
 
-  // Track whether we're inside the 2-second grace window after flying starts
-  const [flyingGrace, setFlyingGrace] = useState(false);
-  const flyingGraceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevPhase = useRef<string>(phase);
-
-  // handleCancelBet ref so we can call it inside timers without stale closure
-  const handleCancelBetRef = useRef<(panel: 0 | 1, amount: number, betId: string | null, requeue?: boolean) => void>(
-    () => {}
-  );
-
-  useEffect(() => {
-    if (phase === 'flying' && prevPhase.current !== 'flying') {
-      // Flying just started — open 2s grace window
-      setFlyingGrace(true);
-      if (flyingGraceTimer.current) clearTimeout(flyingGraceTimer.current);
-
-      // Capture current bet states at the moment flying starts
-      const snap0 = bet0;
-      const snap1 = bet1;
-
-      flyingGraceTimer.current = setTimeout(() => {
-        setFlyingGrace(false);
-        // Auto-cancel any bet that is still placed (wasn't manually cashed out or cancelled)
-        if (snap0.placed && snap0.cashedOutAt === null) {
-          handleCancelBetRef.current(0, snap0.amount, snap0.betId, true);
-        }
-        if (snap1.placed && snap1.cashedOutAt === null) {
-          handleCancelBetRef.current(1, snap1.amount, snap1.betId, true);
-        }
-      }, FLYING_GRACE_MS);
-    }
-    if (phase !== 'flying') {
-      setFlyingGrace(false);
-      if (flyingGraceTimer.current) {
-        clearTimeout(flyingGraceTimer.current);
-        flyingGraceTimer.current = null;
-      }
-    }
-    prevPhase.current = phase;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase]);
-
-  const showCashoutNotice = useCallback((amount: number, at: number) => {
-    const id = Date.now() + Math.random();
-    setCashoutNotices((prev) => [...prev, { id, multiplier: at, amount: amount * at }]);
-    setTimeout(() => {
-      setCashoutNotices((prev) => prev.filter((n) => n.id !== id));
-    }, 2500);
-  }, []);
-
-  const showInsufficientBalanceNotice = useCallback(() => {
-    const id = Date.now() + Math.random();
-    setInsufficientBalanceNotices((prev) => [...prev, { id }]);
-    setTimeout(() => {
-      setInsufficientBalanceNotices((prev) => prev.filter((n) => n.id !== id));
-    }, 2500);
-  }, []);
-
-  const showTimeoutNotice = useCallback(() => {
-    const id = Date.now() + Math.random();
-    setTimeoutNotices((prev) => [...prev, { id }]);
-    setTimeout(() => {
-      setTimeoutNotices((prev) => prev.filter((n) => n.id !== id));
-    }, 2500);
-  }, []);
-
   const pendingPlayerBets = useRef<{ panel: 0 | 1; amount: number }[]>([]);
 
   useEffect(() => {
@@ -123,8 +50,26 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
+  const showCashoutNotice = useCallback((amount: number, at: number) => {
+    const id = Date.now() + Math.random();
+    setCashoutNotices((prev) => [...prev, { id, multiplier: at, amount: amount * at }]);
+    setTimeout(() => setCashoutNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
+  }, []);
+
+  const showInsufficientBalanceNotice = useCallback(() => {
+    const id = Date.now() + Math.random();
+    setInsufficientBalanceNotices((prev) => [...prev, { id }]);
+    setTimeout(() => setInsufficientBalanceNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
+  }, []);
+
+  const showTimeoutNotice = useCallback(() => {
+    const id = Date.now() + Math.random();
+    setTimeoutNotices((prev) => [...prev, { id }]);
+    setTimeout(() => setTimeoutNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
+  }, []);
+
   /**
-   * Called by BettingPanel when the player clicks BET.
+   * Place bet — deducts locally and calls server.
    */
   const handlePlaceBet = useCallback(async (amount: number): Promise<boolean> => {
     const limits = store.getGameLimits('aviator');
@@ -140,10 +85,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     if (!ok) return false;
 
     const session = auth.getSession();
-    if (!session) {
-      store.credit(amount);
-      return false;
-    }
+    if (!session) { store.credit(amount); return false; }
 
     try {
       const result = await GameService.aviatorPlaceBet(
@@ -152,8 +94,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         aviatorLoop.getRoundUuid(),
       );
       if (result.success && result.bet_id) {
-        const event = new CustomEvent('aviator:bet_registered', { detail: { betId: result.bet_id } });
-        window.dispatchEvent(event);
+        window.dispatchEvent(new CustomEvent('aviator:bet_registered', { detail: { betId: result.bet_id } }));
       }
       return true;
     } catch {
@@ -163,51 +104,25 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   /**
-   * Cancel a placed bet and optionally requeue for next round (auto-cancel after grace window).
-   * requeue=true means the bet will auto-fire again on the next round start.
+   * Cancel during waiting phase only — refunds locally and on server.
    */
   const handleCancelBet = useCallback(
-    (panel: 0 | 1, amount: number, betId: string | null, requeue = false) => {
-      // Refund local balance display
+    (panel: 0 | 1, amount: number, betId: string | null) => {
       store.credit(amount);
-
-      // Remove from UI bet lists
       const id = `me-${roundId}-${panel}`;
       setAllBets((prev) => prev.filter((b) => b.id !== id));
       setMyBets((prev) => prev.filter((b) => b.id !== id));
       pendingPlayerBets.current = pendingPlayerBets.current.filter((p) => p.panel !== panel);
 
-      // If requeue: mark pendingNextRound so bet fires again on next round
-      const setter = panel === 0 ? setBet0 : setBet1;
-      setter((b) => ({
-        ...b,
-        placed: false,
-        betId: null,
-        cashedOutAt: null,
-        pendingNextRound: requeue ? true : b.pendingNextRound,
-      }));
-
-      // Call server to refund Supabase balance
       const session = auth.getSession();
       if (session) {
-        void GameService.aviatorCancelBet(
-          session.userId,
-          amount,
-          betId,
-        ).then((res) => {
-          if (res.success) {
-            store.setBalance(res.balance_after);
-          }
-        }).catch(() => {});
+        void GameService.aviatorCancelBet(session.userId, amount, betId)
+          .then((res) => { if (res.success) store.setBalance(res.balance_after); })
+          .catch(() => {});
       }
     },
     [roundId],
   );
-
-  // Keep ref in sync so the grace timeout can call the latest version
-  useEffect(() => {
-    handleCancelBetRef.current = handleCancelBet;
-  }, [handleCancelBet]);
 
   const handleCashOut = useCallback((amount: number, at: number) => {
     showCashoutNotice(amount, at);
@@ -215,9 +130,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCashoutNotice]);
 
-  const handleWin = useCallback((win: number) => {
-    store.credit(win);
-  }, []);
+  const handleWin = useCallback((win: number) => { store.credit(win); }, []);
 
   const recordPlayerBet = useCallback(
     (panel: 0 | 1, amount: number) => {
@@ -278,10 +191,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const canShareBet = bet0.cashedOutAt !== null || bet1.cashedOutAt !== null;
 
   const handleSendChat = useCallback((text: string) => {
-    setChat((c) => [
-      ...c,
-      { id: `c-${Date.now()}`, name: PLAYER_NAME, color: '#22c55e', text },
-    ]);
+    setChat((c) => [...c, { id: `c-${Date.now()}`, name: PLAYER_NAME, color: '#22c55e', text }]);
   }, []);
 
   const handleShareBet = useCallback(() => {
@@ -289,15 +199,10 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     if (!cashed || cashed.cashedOutAt === null) return;
     const win = cashed.amount * cashed.cashedOutAt;
     const text = `✈️ ${PLAYER_NAME} cashed out at ${cashed.cashedOutAt.toFixed(2)}x (Won ${formatMoney(win)})`;
-    setChat((c) => [
-      ...c,
-      { id: `sys-${Date.now()}`, name: 'system', color: '#e11d48', text, system: true },
-    ]);
+    setChat((c) => [...c, { id: `sys-${Date.now()}`, name: 'system', color: '#e11d48', text, system: true }]);
   }, [bet0, bet1]);
 
-  useEffect(() => {
-    setChat([]);
-  }, []);
+  useEffect(() => { setChat([]); }, []);
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-ink-900 text-white">
@@ -324,9 +229,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               countdown={countdown}
               roundId={roundId}
               balance={balance}
-              flyingGrace={flyingGrace}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId, false)}
+              onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
@@ -340,9 +244,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               countdown={countdown}
               roundId={roundId}
               balance={balance}
-              flyingGrace={flyingGrace}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId, false)}
+              onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
