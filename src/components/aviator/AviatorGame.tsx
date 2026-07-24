@@ -199,7 +199,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
   useEffect(() => { setChat([]); }, []);
 
   return (
-    <div className="flex flex-col bg-ink-900 text-white min-h-screen">
+    <div className="flex flex-col bg-ink-900 text-white min-h-screen px-3 sm:px-5">
       <Header
         balance={balance}
         soundOn={soundOn}
@@ -212,7 +212,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
       {/* HistoryBar only accepts history prop */}
       <HistoryBar history={history} />
 
-      <div className="flex flex-1 gap-2 p-2">
+      <div className="flex flex-1 gap-2 py-2">
         {/* Left column: canvas + two bet panels stacked */}
         <div className="flex flex-col flex-1 gap-2">
           <FlightCanvas
