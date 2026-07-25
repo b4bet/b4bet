@@ -135,6 +135,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
 
   const handleCancelBet = useCallback(
     (panel: 0 | 1, amount: number, betId: string | null) => {
+      // Optimistic local credit — will be corrected by server response
       store.credit(amount);
       const id = `me-${roundId}-${panel}`;
       setAllBets((prev) => prev.filter((b) => b.id !== id));
@@ -144,8 +145,20 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
       const session = auth.getSession();
       if (session) {
         void GameService.aviatorCancelBet(session.userId, amount, betId)
-          .then((res) => { if (res.success) store.setBalance(res.balance_after); })
-          .catch(() => {});
+          .then((res) => {
+            if (res.success) {
+              // Server confirmed cancel — sync exact balance from server
+              store.setBalance(res.balance_after);
+            } else {
+              // Server rejected cancel (round already started, bet is live) —
+              // revert the local credit so balance stays correct
+              store.debitLocalOnly(amount);
+            }
+          })
+          .catch(() => {
+            // Network error — revert local credit to avoid phantom balance
+            store.debitLocalOnly(amount);
+          });
       }
     },
     [roundId],
