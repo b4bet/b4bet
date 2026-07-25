@@ -123,7 +123,8 @@ serve(async (req) => {
       const profit = won ? winAmount - stakeNum : 0;
       const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
       if (profileError || !profile) throw new Error("User profile not found");
-      const newBalance = won ? profile.balance + winAmount : profile.balance;
+      const currentBalance = Number(profile.balance);
+      const newBalance = won ? currentBalance + winAmount : currentBalance;
       const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
       if (updateError) throw new Error(`Balance update failed: ${updateError.message}`);
       const now = new Date().toISOString();
@@ -139,12 +140,19 @@ serve(async (req) => {
 
       const CANCEL_GRACE_MS = 2000;
 
-      // Use RPC to get current (possibly transitioned) phase
-      const { data: rpcData } = await supabase.rpc('aviator_get_current_round');
-      const currentPhase = (rpcData as { phase?: string } | null)?.phase;
-      const currentElapsedMs = Number((rpcData as { elapsed_ms?: number } | null)?.elapsed_ms ?? 0);
+      // Read phase directly from table — do NOT use RPC (it would transition phases)
+      const { data: roundRow } = await supabase
+        .from("aviator_current_round")
+        .select("phase, phase_started_at")
+        .eq("id", 1)
+        .single();
 
-      if (currentPhase === "flying" && currentElapsedMs > CANCEL_GRACE_MS) {
+      const currentPhase = roundRow?.phase ?? "waiting";
+      const phaseElapsedMs = roundRow?.phase_started_at
+        ? Math.max(0, Date.now() - new Date(roundRow.phase_started_at).getTime())
+        : 0;
+
+      if (currentPhase === "flying" && phaseElapsedMs > CANCEL_GRACE_MS) {
         return new Response(
           JSON.stringify({ success: false, error: "Round already started, cannot cancel" }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
@@ -165,7 +173,7 @@ serve(async (req) => {
         .single();
       if (profileError || !profile) throw new Error("User profile not found");
 
-      const newBalance = profile.balance + betNum;
+      const newBalance = Number(profile.balance) + betNum;
       const { error: updateError } = await supabase
         .from("profiles")
         .update({ balance: newBalance })
@@ -202,11 +210,11 @@ serve(async (req) => {
         const { data: existingBet } = await supabase.from("bets").select("id, status, win_amount, multiplier").eq("id", betId).maybeSingle();
         if (existingBet && existingBet.status === "won") {
           const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
-          return new Response(JSON.stringify({ success: true, won: true, win: existingBet.win_amount ?? 0, balance_after: profile?.balance ?? 0, cashout_at: Number(existingBet.multiplier ?? cashoutMultiplier), crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+          return new Response(JSON.stringify({ success: true, won: true, win: existingBet.win_amount ?? 0, balance_after: Number(profile?.balance ?? 0), cashout_at: Number(existingBet.multiplier ?? cashoutMultiplier), crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
         }
         if (existingBet && existingBet.status === "lost") {
           const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
-          return new Response(JSON.stringify({ success: false, won: false, win: 0, balance_after: profile?.balance ?? null, crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
+          return new Response(JSON.stringify({ success: false, won: false, win: 0, balance_after: Number(profile?.balance ?? null), crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
         }
       }
 
@@ -222,7 +230,7 @@ serve(async (req) => {
       const winAmount = Math.round(betNum * cashoutMultiplier);
       const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
       if (profileError || !profile) throw new Error("User profile not found");
-      const newBalance = profile.balance + winAmount;
+      const newBalance = Number(profile.balance) + winAmount;
       const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
       if (updateError) throw new Error(`Balance update failed: ${updateError.message}`);
 
@@ -242,17 +250,35 @@ serve(async (req) => {
       const roundUuid = payload.round_uuid ?? null;
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
-      // Use the RPC which auto-transitions stale phases (crashed→waiting, waiting→flying).
-      // This prevents the bug where the raw table is stuck in 'crashed' phase and every
-      // bet placed during the next waiting phase gets rejected as "Round already ended".
-      const { data: rpcData, error: rpcError } = await supabase.rpc('aviator_get_current_round');
-      if (rpcError) throw new Error(`Failed to get round state: ${rpcError.message}`);
+      // ── CRITICAL FIX ────────────────────────────────────────────────────────
+      // Read phase directly from the table WITHOUT calling the RPC.
+      //
+      // The RPC (aviator_get_current_round) does automatic phase transitions:
+      //   waiting → flying, flying → crashed, crashed → waiting
+      //
+      // Calling the RPC here had a fatal race condition:
+      //   1. Server table is in 'flying' phase, crash_point already exceeded by elapsed time
+      //   2. RPC call transitions flying → crashed and returns phase='crashed'
+      //   3. Edge Function rejects the bet with "Round already ended"
+      //   4. Client (which showed 'waiting' from its last poll) sees immediate cancel
+      //
+      // Directly reading the table avoids ALL phase transition side-effects.
+      // The phase stored in the table is the ground truth for the current state.
+      // ────────────────────────────────────────────────────────────────────────
+      const { data: roundRow, error: roundErr } = await supabase
+        .from("aviator_current_round")
+        .select("phase, phase_started_at, round_uuid")
+        .eq("id", 1)
+        .single();
 
-      const currentPhase = (rpcData as { phase?: string } | null)?.phase ?? 'waiting';
-      // Server-side elapsed_ms — not affected by client clock skew
-      const serverElapsedMs = Number((rpcData as { elapsed_ms?: number } | null)?.elapsed_ms ?? 0);
+      if (roundErr || !roundRow) throw new Error("Failed to read round state");
 
-      // Flying phase: only allow bets placed within the first 5 seconds (server time)
+      const currentPhase = roundRow.phase as string;
+      const phaseStartedAt = new Date(roundRow.phase_started_at).getTime();
+      const serverElapsedMs = Math.max(0, Date.now() - phaseStartedAt);
+
+      // Flying phase: allow bets only within the first 5 seconds of takeoff
+      // (grace window for clients that were in 'waiting' when takeoff happened)
       if (currentPhase === "flying") {
         const FLYING_GRACE_MS = 5000;
         if (serverElapsedMs > FLYING_GRACE_MS) {
@@ -263,7 +289,7 @@ serve(async (req) => {
         }
       }
 
-      // Crashed phase: never accept new bets (next waiting phase will be handled above)
+      // Crashed phase: never accept bets
       if (currentPhase === "crashed") {
         return new Response(
           JSON.stringify({ success: false, error: "Round already ended", balance_after: null }),
@@ -271,18 +297,30 @@ serve(async (req) => {
         );
       }
 
-      const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+      // 'waiting' phase: accept all bets
+
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("balance")
+        .eq("id", user_id)
+        .single();
       if (profileError || !profile) throw new Error("User profile not found");
 
-      if (profile.balance < betNum) {
+      // Explicitly cast bigint balance to number
+      const currentBalance = Number(profile.balance);
+
+      if (currentBalance < betNum) {
         return new Response(
-          JSON.stringify({ success: false, error: "Insufficient balance", balance_after: profile.balance }),
+          JSON.stringify({ success: false, error: "Insufficient balance", balance_after: currentBalance }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
         );
       }
 
-      const newBalance = profile.balance - betNum;
-      const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
+      const newBalance = currentBalance - betNum;
+      const { error: updateError } = await supabase
+        .from("profiles")
+        .update({ balance: newBalance })
+        .eq("id", user_id);
       if (updateError) throw new Error(`Balance deduction failed: ${updateError.message}`);
 
       const { data: betRecord } = await supabase
@@ -360,9 +398,9 @@ serve(async (req) => {
         throw new Error("User balance not found or unauthorized");
       }
 
-      const balanceBefore = userBalance.balance;
-      if (bet_amount <= 0) throw new Error("Bet amount must be positive");
-      if (bet_amount > balanceBefore) throw new Error("Insufficient balance");
+      const balanceBefore = Number(userBalance.balance);
+      if (Number(bet_amount) <= 0) throw new Error("Bet amount must be positive");
+      if (Number(bet_amount) > balanceBefore) throw new Error("Insufficient balance");
 
       let multiplier = 1;
       let won = false;
@@ -382,8 +420,8 @@ serve(async (req) => {
         won = roll >= 50;
       }
 
-      const payout = won ? bet_amount * multiplier : 0;
-      const finalBalance = balanceBefore - bet_amount + payout;
+      const payout = won ? Number(bet_amount) * multiplier : 0;
+      const finalBalance = balanceBefore - Number(bet_amount) + payout;
       const transactionId = crypto.randomUUID();
 
       const { error: updateError } = await supabase.rpc("process_bet_atomic", {
