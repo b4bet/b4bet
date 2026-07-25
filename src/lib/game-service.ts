@@ -59,6 +59,23 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
   return data;
 }
 
+/**
+ * postSoft — like post() but only throws on real HTTP-level failures (res.ok === false).
+ *
+ * Use this for aviator endpoints that return { success: false, error: "..." } as a
+ * normal business-logic response (e.g. "Betting window closed", "Round already ended").
+ * With the old post() those soft failures were thrown as exceptions, causing the client
+ * to catch them, refund the balance, and silently cancel the bet.
+ */
+async function postSoft<T>(body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(EDGE_FN, { method: "POST", headers: { "Content-Type": "application/json", "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY }, body: JSON.stringify(body) });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error ?? "Server error");
+  }
+  return res.json() as Promise<T>;
+}
+
 export const GameService = {
   crashGetBustPoint(roundId: number): Promise<CrashBustResult> {
     return get<CrashBustResult>({ action: "crash_get_bust", round_id: String(roundId) });
@@ -126,12 +143,14 @@ export const GameService = {
     return { history: result.history ?? [] };
   },
 
+  // Use postSoft so "Betting window closed" / "Round already ended" come back as
+  // { success: false, error: "..." } instead of being thrown as exceptions.
   aviatorPlaceBet(userId: string, betAmount: number, roundUuid: string | null, placedAtMs?: number): Promise<AviatorPlaceBetResult> {
-    return post<AviatorPlaceBetResult>({ action: "aviator_place_bet", user_id: userId, bet_amount: betAmount, round_uuid: roundUuid, placed_at_ms: placedAtMs ?? Date.now() });
+    return postSoft<AviatorPlaceBetResult>({ action: "aviator_place_bet", user_id: userId, bet_amount: betAmount, round_uuid: roundUuid, placed_at_ms: placedAtMs ?? Date.now() });
   },
 
   aviatorCancelBet(userId: string, betAmount: number, betId: string | null): Promise<AviatorCancelBetResult> {
-    return post<AviatorCancelBetResult>({ action: "aviator_cancel_bet", user_id: userId, bet_amount: betAmount, bet_id: betId });
+    return postSoft<AviatorCancelBetResult>({ action: "aviator_cancel_bet", user_id: userId, bet_amount: betAmount, bet_id: betId });
   },
 
   aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
@@ -139,11 +158,11 @@ export const GameService = {
   },
 
   aviatorCashout(userId: string, roundUuid: string | null, roundId: number, betAmount: number, cashoutAt: number, betId: string | null, placedAtMs?: number): Promise<AviatorCashoutResult> {
-    return post<AviatorCashoutResult>({ action: "aviator_cashout", user_id: userId, bet_amount: betAmount, cashout_at: cashoutAt, round_uuid: roundUuid, round_id: roundId, bet_id: betId, placed_at_ms: placedAtMs ?? Date.now() });
+    return postSoft<AviatorCashoutResult>({ action: "aviator_cashout", user_id: userId, bet_amount: betAmount, cashout_at: cashoutAt, round_uuid: roundUuid, round_id: roundId, bet_id: betId, placed_at_ms: placedAtMs ?? Date.now() });
   },
 
   aviatorSettle(userId: string, roundUuid: string | null, betAmount: number): Promise<AviatorSettleResult> {
-    return post<AviatorSettleResult>({ action: "aviator_settle", user_id: userId, round_uuid: roundUuid, bet_amount: betAmount });
+    return postSoft<AviatorSettleResult>({ action: "aviator_settle", user_id: userId, round_uuid: roundUuid, bet_amount: betAmount });
   },
 
   aviatorRoundStatus(roundId: string): Promise<AviatorRoundStatusResult> {
