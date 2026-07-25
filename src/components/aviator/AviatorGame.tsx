@@ -16,15 +16,6 @@ import { aviatorLoop } from '../../lib/persistentGameEngine';
 
 const PLAYER_NAME = 'You';
 
-/**
- * Result returned by handlePlaceBet / onPlaceBet prop.
- *   ok: true  — bet accepted by server
- *   ok: false — rejected; reason:
- *     'range'           – amount out of min/max
- *     'insufficient'    – not enough balance
- *     'server_rejected' – server returned success:false
- *     'error'           – network or unexpected error
- */
 export type PlaceBetResult = { ok: boolean; reason?: string };
 
 interface AviatorGameProps {
@@ -55,25 +46,19 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const showCashoutNotice = useCallback((amount: number, at: number) => {
     const id = Date.now() + Math.random();
     setCashoutNotices((prev) => [...prev, { id, multiplier: at, amount: amount * at }]);
-    setTimeout(() => {
-      setCashoutNotices((prev) => prev.filter((n) => n.id !== id));
-    }, 2500);
+    setTimeout(() => setCashoutNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
   }, []);
 
   const showInsufficientBalanceNotice = useCallback(() => {
     const id = Date.now() + Math.random();
     setInsufficientBalanceNotices((prev) => [...prev, { id }]);
-    setTimeout(() => {
-      setInsufficientBalanceNotices((prev) => prev.filter((n) => n.id !== id));
-    }, 2500);
+    setTimeout(() => setInsufficientBalanceNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
   }, []);
 
   const showTimeoutNotice = useCallback(() => {
     const id = Date.now() + Math.random();
     setTimeoutNotices((prev) => [...prev, { id }]);
-    setTimeout(() => {
-      setTimeoutNotices((prev) => prev.filter((n) => n.id !== id));
-    }, 2500);
+    setTimeout(() => setTimeoutNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
   }, []);
 
   const pendingPlayerBets = useRef<{ panel: 0 | 1; amount: number }[]>([]);
@@ -85,10 +70,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  /**
-   * Place bet via server. Returns PlaceBetResult.
-   * Uses debitLocalOnly — server also deducts, so debit() would double-deduct.
-   */
   const handlePlaceBet = useCallback(async (amount: number): Promise<PlaceBetResult> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
@@ -140,18 +121,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       setAllBets((prev) => prev.filter((b) => b.id !== id));
       setMyBets((prev) => prev.filter((b) => b.id !== id));
       pendingPlayerBets.current = pendingPlayerBets.current.filter((p) => p.panel !== panel);
-      // Cancel on server if we have a betId
-      if (betId) {
-        const session = auth.getSession();
-        if (session) {
-          void GameService.aviatorPlaceBet
-            // Use the cancel endpoint if available — for now just let the server
-            // auto-expire the pending bet at round end (it stays as a 'lost' with 0 win).
-            // TODO: call aviator_cancel_bet when that endpoint is wired up.
-            // eslint-disable-next-line @typescript-eslint/no-unused-expressions
-            , betId;
-        }
-      }
+      void betId;
     },
     [roundId],
   );
@@ -247,7 +217,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   return (
-    <div className="flex flex-col h-full bg-[#0e0e1a] text-white overflow-hidden">
+    <div className="flex flex-col h-full bg-[#0e0e1a] text-white overflow-y-auto overflow-x-hidden">
+      {/* Top header with balance/settings */}
       <Header
         balance={balance}
         soundOn={soundOn}
@@ -258,52 +229,58 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         onToggleAnimation={() => setAnimationOn((v) => !v)}
         onBack={onBack}
       />
+
+      {/* Round history strip */}
       <HistoryBar history={history} />
-      <div className="flex flex-1 overflow-hidden">
-        <div className="flex flex-col flex-1 overflow-hidden">
-          <FlightCanvas
-            phase={phase}
-            multiplier={multiplier}
-            countdown={countdown}
-            lastCrash={lastCrash}
-            animationOn={animationOn}
-            cashouts={cashoutNotices}
-            insufficientBalanceNotices={insufficientBalanceNotices}
-            timeoutNotices={timeoutNotices}
-          />
-          <div className="flex gap-2 p-2 bg-[#12121f] border-t border-white/5">
-            <BettingPanel
-              bet={bet0}
-              setBet={wrapSetBet(0)}
-              phase={phase}
-              multiplier={multiplier}
-              countdown={countdown}
-              roundId={roundId}
-              balance={balance}
-              onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
-              onCashOut={handleCashOut}
-              onWin={handleWin}
-              onInsufficientBalance={showInsufficientBalanceNotice}
-              onTimeout={showTimeoutNotice}
-            />
-            <BettingPanel
-              bet={bet1}
-              setBet={wrapSetBet(1)}
-              phase={phase}
-              multiplier={multiplier}
-              countdown={countdown}
-              roundId={roundId}
-              balance={balance}
-              onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
-              onCashOut={handleCashOut}
-              onWin={handleWin}
-              onInsufficientBalance={showInsufficientBalanceNotice}
-              onTimeout={showTimeoutNotice}
-            />
-          </div>
-        </div>
+
+      {/* Flight canvas — full width */}
+      <FlightCanvas
+        phase={phase}
+        multiplier={multiplier}
+        countdown={countdown}
+        lastCrash={lastCrash}
+        animationOn={animationOn}
+        cashouts={cashoutNotices}
+        insufficientBalanceNotices={insufficientBalanceNotices}
+        timeoutNotices={timeoutNotices}
+      />
+
+      {/* Betting panels — full width below canvas */}
+      <div className="flex gap-2 p-2 bg-[#12121f] border-t border-white/5">
+        <BettingPanel
+          bet={bet0}
+          setBet={wrapSetBet(0)}
+          phase={phase}
+          multiplier={multiplier}
+          countdown={countdown}
+          roundId={roundId}
+          balance={balance}
+          onPlaceBet={handlePlaceBet}
+          onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
+          onCashOut={handleCashOut}
+          onWin={handleWin}
+          onInsufficientBalance={showInsufficientBalanceNotice}
+          onTimeout={showTimeoutNotice}
+        />
+        <BettingPanel
+          bet={bet1}
+          setBet={wrapSetBet(1)}
+          phase={phase}
+          multiplier={multiplier}
+          countdown={countdown}
+          roundId={roundId}
+          balance={balance}
+          onPlaceBet={handlePlaceBet}
+          onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
+          onCashOut={handleCashOut}
+          onWin={handleWin}
+          onInsufficientBalance={showInsufficientBalanceNotice}
+          onTimeout={showTimeoutNotice}
+        />
+      </div>
+
+      {/* All Bets / My Bets / Top + Chat — below betting panels, full width */}
+      <div className="flex-1 min-h-[340px]">
         <Sidebar
           phase={phase}
           multiplier={multiplier}
@@ -315,6 +292,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           onShareBet={handleShareBet}
         />
       </div>
+
       <div className="text-center text-[10px] text-white/20 py-1 bg-[#0a0a14]">
         🔒 Official Live Game&nbsp; · &nbsp;Secure &amp; Provably Fair&nbsp; · &nbsp;18+ Responsible Play
       </div>
