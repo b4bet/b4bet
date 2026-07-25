@@ -181,7 +181,6 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
-        // Optimistic placement for auto-bet
         setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
         void onPlaceBet(bet.amount).then((res) => {
           if (!res.ok) {
@@ -204,6 +203,7 @@ export function BettingPanel({
     if (canCancelQueue) { setBet((b) => ({ ...b, pendingNextRound: false })); return; }
     if (canCancel) { doCancel(); return; }
     if (isInsufficientBalance) { onInsufficientBalance?.(); return; }
+
     if (canPlace) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
@@ -211,25 +211,31 @@ export function BettingPanel({
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
 
-      // ── OPTIMISTIC PLACEMENT ──────────────────────────────────────────────
-      // Mark bet as placed immediately so UI shows CANCEL right away (like Spribe).
-      // If server rejects, we rollback placed → false and refund balance.
+      // Optimistic placement — show CANCEL immediately like Spribe
       const placedAtMs = Date.now();
       setBet((b) => ({ ...b, placed: true, placedAtMs }));
 
       void onPlaceBet(bet.amount).then((res) => {
         if (!res.ok) {
-          // Rollback optimistic placement
+          // Rollback optimistic placed state
           setBet((b) => ({ ...b, placed: false, betId: null }));
           store.credit(bet.amount);
-          if (res.reason === 'insufficient') onInsufficientBalance?.();
-          else if (res.reason === 'server_rejected') {
-            cms.toast({ title: 'Bet not placed', body: 'Round closed. Please try next round.', kind: 'alert' });
+
+          if (res.reason === 'insufficient') {
+            onInsufficientBalance?.();
+          } else if (res.reason === 'server_rejected') {
+            // ── SPRIBE BEHAVIOR ───────────────────────────────────────────────
+            // Round closed while we were sending — silently queue for next round.
+            // NO error toast. Button changes to "BET / Next round" automatically.
+            setBet((b) => ({ ...b, pendingNextRound: true }));
           }
+          // 'error' and other reasons: silent rollback, no toast spam
         }
       });
       return;
     }
+
+    // Flying phase — queue for next round
     if (canQueueNextRound) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
@@ -282,7 +288,7 @@ export function BettingPanel({
       </span>
     );
     buttonClass = 'bg-[#f97316] hover:bg-[#fb923c] shadow-[0_4px_15px_rgba(249,115,22,0.5)]';
-  } else if (canCancelQueue) {
+  } else if (canCancelQueue || (phase === 'flying' && !bet.placed && bet.pendingNextRound)) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-sm font-bold">CANCEL</span>
@@ -293,7 +299,7 @@ export function BettingPanel({
   } else if (canCancel) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
-        <span className="text-sm font-bold">CANCEL</span>
+        <span className="text-sm font-bold">CANCEL BET</span>
         <span className="text-[11px] opacity-75">{formatMoney(bet.amount)}</span>
       </span>
     );
@@ -307,23 +313,13 @@ export function BettingPanel({
     );
     buttonClass = 'bg-[#22c55e]/30 cursor-default';
   } else if (canQueueNextRound) {
-    if (bet.pendingNextRound) {
-      betLabel = (
-        <span className="flex flex-col items-center leading-tight">
-          <span className="text-sm font-bold">CANCEL</span>
-          <span className="text-[11px] opacity-75">Next round</span>
-        </span>
-      );
-      buttonClass = 'bg-[#ef4444] hover:bg-[#f87171] shadow-[0_4px_15px_rgba(239,68,68,0.4)]';
-    } else {
-      betLabel = (
-        <span className="flex flex-col items-center leading-tight">
-          <span className="text-sm font-bold">BET</span>
-          <span className="text-[11px] opacity-75">Next round</span>
-        </span>
-      );
-      buttonClass = 'bg-[#22c55e]/70 hover:bg-[#22c55e] shadow-[0_4px_15px_rgba(34,197,94,0.3)]';
-    }
+    betLabel = (
+      <span className="flex flex-col items-center leading-tight">
+        <span className="text-sm font-bold">BET</span>
+        <span className="text-[11px] opacity-75">Next round</span>
+      </span>
+    );
+    buttonClass = 'bg-[#22c55e]/70 hover:bg-[#22c55e] shadow-[0_4px_15px_rgba(34,197,94,0.3)]';
   } else if (phase === 'crashed') {
     betLabel = <span className="text-sm font-bold opacity-40">BET</span>;
     buttonClass = 'bg-white/10 cursor-not-allowed';
@@ -335,7 +331,6 @@ export function BettingPanel({
     );
     buttonClass = 'bg-[#ef4444]/70 cursor-not-allowed';
   } else {
-    // Default: ready to bet
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-sm font-bold">BET</span>
@@ -353,6 +348,7 @@ export function BettingPanel({
     !canCancel &&
     !canQueueNextRound &&
     !canCancelQueue &&
+    !bet.pendingNextRound &&
     !(isInsufficientBalance);
 
   return (
@@ -412,7 +408,7 @@ export function BettingPanel({
           type="button"
           className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer border border-white/10"
           onClick={() => adjustAmount(-50)}
-          disabled={bet.placed}
+          disabled={bet.placed || bet.pendingNextRound}
         >
           <Minus className="w-3.5 h-3.5" />
         </button>
@@ -423,7 +419,7 @@ export function BettingPanel({
             max={limits.max}
             className="w-full bg-white/10 rounded-lg px-2 py-2 text-white text-sm font-bold text-center focus:outline-none focus:ring-1 focus:ring-green-500/50 border border-white/10 disabled:opacity-50"
             value={amountInput}
-            disabled={bet.placed}
+            disabled={bet.placed || bet.pendingNextRound}
             onChange={(e) => {
               setAmountInput(e.target.value);
               const v = parseFloat(e.target.value);
@@ -439,7 +435,7 @@ export function BettingPanel({
           type="button"
           className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer border border-white/10"
           onClick={() => adjustAmount(50)}
-          disabled={bet.placed}
+          disabled={bet.placed || bet.pendingNextRound}
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
@@ -451,7 +447,7 @@ export function BettingPanel({
           <button
             key={value}
             type="button"
-            disabled={bet.placed}
+            disabled={bet.placed || bet.pendingNextRound}
             className="flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer bg-white/8 hover:bg-white/15 text-white/70 disabled:opacity-40 disabled:cursor-not-allowed border border-white/10"
             onClick={() => {
               setAmount(value);
