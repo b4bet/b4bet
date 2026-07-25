@@ -56,10 +56,10 @@ interface BettingPanelProps {
 }
 
 const QUICK_ADDS: { label: string; value: number }[] = [
+  { label: '100', value: 100 },
   { label: '200', value: 200 },
   { label: '500', value: 500 },
   { label: '1K', value: 1000 },
-  { label: '2K', value: 2000 },
 ];
 
 export function BettingPanel({
@@ -79,7 +79,6 @@ export function BettingPanel({
 }: BettingPanelProps) {
   const [amountInput, setAmountInput] = useState<string>(String(bet.amount));
   const [autoCashoutInput, setAutoCashoutInput] = useState<string>(String(bet.autoCashoutValue));
-  const [lastQuickBet, setLastQuickBet] = useState<number | null>(null);
 
   useEffect(() => { setAmountInput(String(bet.amount)); }, [bet.amount]);
   useEffect(() => { setAutoCashoutInput(String(bet.autoCashoutValue)); }, [bet.autoCashoutValue]);
@@ -98,14 +97,17 @@ export function BettingPanel({
             nextRound.pendingNextRound = false;
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
+            // Optimistic: mark placed immediately
+            nextRound.placed = true;
+            nextRound.placedAtMs = Date.now();
             void onPlaceBet(b.amount).then((res) => {
               if (!res.ok) {
+                // Rollback — server rejected
                 setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
+                store.credit(b.amount);
                 if (res.reason === 'insufficient') onInsufficientBalance?.();
               }
             });
-            nextRound.placed = true;
-            nextRound.placedAtMs = Date.now();
           }
         }
         return nextRound;
@@ -179,10 +181,12 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
+        // Optimistic placement for auto-bet
+        setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
         void onPlaceBet(bet.amount).then((res) => {
-          if (res.ok) {
-            setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
-          } else {
+          if (!res.ok) {
+            setBet((b) => ({ ...b, autoBetEnabled: false, placed: false }));
+            store.credit(bet.amount);
             if (res.reason === 'insufficient') onInsufficientBalance?.();
           }
         });
@@ -206,11 +210,22 @@ export function BettingPanel({
         return;
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
+
+      // ── OPTIMISTIC PLACEMENT ──────────────────────────────────────────────
+      // Mark bet as placed immediately so UI shows CANCEL right away (like Spribe).
+      // If server rejects, we rollback placed → false and refund balance.
+      const placedAtMs = Date.now();
+      setBet((b) => ({ ...b, placed: true, placedAtMs }));
+
       void onPlaceBet(bet.amount).then((res) => {
-        if (res.ok) {
-          setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now() }));
-        } else {
+        if (!res.ok) {
+          // Rollback optimistic placement
+          setBet((b) => ({ ...b, placed: false, betId: null }));
+          store.credit(bet.amount);
           if (res.reason === 'insufficient') onInsufficientBalance?.();
+          else if (res.reason === 'server_rejected') {
+            cms.toast({ title: 'Bet not placed', body: 'Round closed. Please try next round.', kind: 'alert' });
+          }
         }
       });
       return;
@@ -254,90 +269,131 @@ export function BettingPanel({
     }
   }
 
-  // ── Button appearance ──────────────────────────────────────────────────────
-  let betLabel: React.ReactNode = 'BET';
-  let betShade = 'bg-aviator-green hover:bg-aviator-green-bright';
-  let betShadow = 'shadow-btn-green';
+  // ── Button appearance (Spribe-style) ───────────────────────────────────────
+  let betLabel: React.ReactNode;
+  let buttonClass = '';
 
   if (canCashOut) {
     const livePayout = bet.amount * multiplier;
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
-        <span className="text-xs font-semibold tracking-wider">CASH OUT</span>
-        <span className="text-sm font-bold">{formatMoney(livePayout)}</span>
+        <span className="text-sm font-bold tracking-wide">CASH OUT</span>
+        <span className="text-base font-extrabold">{formatMoney(livePayout)}</span>
       </span>
     );
-    betShade = 'bg-aviator-orange hover:bg-aviator-orange-bright';
-    betShadow = 'shadow-btn-orange';
+    buttonClass = 'bg-[#f97316] hover:bg-[#fb923c] shadow-[0_4px_15px_rgba(249,115,22,0.5)]';
   } else if (canCancelQueue) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
-        <span className="text-xs font-semibold tracking-wider">CANCEL</span>
-        <span className="text-[10px] opacity-70">Next round</span>
+        <span className="text-sm font-bold">CANCEL</span>
+        <span className="text-[11px] opacity-75">Next round</span>
       </span>
     );
-    betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
-    betShadow = 'shadow-btn-red';
+    buttonClass = 'bg-[#ef4444] hover:bg-[#f87171] shadow-[0_4px_15px_rgba(239,68,68,0.4)]';
   } else if (canCancel) {
-    betLabel = 'CANCEL';
-    betShade = 'bg-aviator-red hover:bg-aviator-red-bright';
-    betShadow = 'shadow-btn-red';
-  } else if (phase === 'flying' && bet.placed && bet.cashedOutAt !== null) {
-    betShade = 'bg-aviator-green/40';
-    betShadow = '';
-  } else if (canQueueNextRound) {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
-        <span className="text-xs font-semibold tracking-wider">BET</span>
-        <span className="text-[10px] opacity-70">Next round</span>
+        <span className="text-sm font-bold">CANCEL</span>
+        <span className="text-[11px] opacity-75">{formatMoney(bet.amount)}</span>
       </span>
     );
+    buttonClass = 'bg-[#ef4444] hover:bg-[#f87171] shadow-[0_4px_15px_rgba(239,68,68,0.4)]';
+  } else if (phase === 'flying' && bet.placed && bet.cashedOutAt !== null) {
+    betLabel = (
+      <span className="flex flex-col items-center leading-tight">
+        <span className="text-sm font-bold opacity-60">CASHED OUT</span>
+        <span className="text-[11px] opacity-50">{bet.cashedOutAt.toFixed(2)}x</span>
+      </span>
+    );
+    buttonClass = 'bg-[#22c55e]/30 cursor-default';
+  } else if (canQueueNextRound) {
+    if (bet.pendingNextRound) {
+      betLabel = (
+        <span className="flex flex-col items-center leading-tight">
+          <span className="text-sm font-bold">CANCEL</span>
+          <span className="text-[11px] opacity-75">Next round</span>
+        </span>
+      );
+      buttonClass = 'bg-[#ef4444] hover:bg-[#f87171] shadow-[0_4px_15px_rgba(239,68,68,0.4)]';
+    } else {
+      betLabel = (
+        <span className="flex flex-col items-center leading-tight">
+          <span className="text-sm font-bold">BET</span>
+          <span className="text-[11px] opacity-75">Next round</span>
+        </span>
+      );
+      buttonClass = 'bg-[#22c55e]/70 hover:bg-[#22c55e] shadow-[0_4px_15px_rgba(34,197,94,0.3)]';
+    }
   } else if (phase === 'crashed') {
-    betShade = 'bg-ink-600 opacity-50';
-    betShadow = '';
-  } else if (!canPlace && !isInsufficientBalance) {
-    betShade = 'bg-aviator-green/40';
-    betShadow = '';
+    betLabel = <span className="text-sm font-bold opacity-40">BET</span>;
+    buttonClass = 'bg-white/10 cursor-not-allowed';
+  } else if (isInsufficientBalance) {
+    betLabel = (
+      <span className="flex flex-col items-center leading-tight">
+        <span className="text-sm font-bold">LOW BALANCE</span>
+      </span>
+    );
+    buttonClass = 'bg-[#ef4444]/70 cursor-not-allowed';
+  } else {
+    // Default: ready to bet
+    betLabel = (
+      <span className="flex flex-col items-center leading-tight">
+        <span className="text-sm font-bold">BET</span>
+        <span className="text-[11px] opacity-75">{formatMoney(bet.amount)}</span>
+      </span>
+    );
+    buttonClass = canPlace
+      ? 'bg-[#22c55e] hover:bg-[#4ade80] shadow-[0_4px_20px_rgba(34,197,94,0.5)] active:scale-95'
+      : 'bg-[#22c55e]/30 cursor-not-allowed';
   }
 
-  const isButtonDisabled = !canPlace && !canCashOut && !canCancel && !isInsufficientBalance && !canQueueNextRound && !canCancelQueue;
+  const isButtonDisabled =
+    !canPlace &&
+    !canCashOut &&
+    !canCancel &&
+    !canQueueNextRound &&
+    !canCancelQueue &&
+    !(isInsufficientBalance);
 
   return (
-    <div className="flex-1 bg-[#1a1f2e] rounded-xl p-3 flex flex-col gap-2 border border-white/5 min-w-0">
-      {/* Top row: auto-cashout controls */}
-      <div className="flex items-center gap-2 text-xs">
-        <label className="flex items-center gap-1 cursor-pointer select-none">
+    <div className="flex-1 bg-[#1a1f2e] rounded-xl p-3 flex flex-col gap-2.5 border border-white/5 min-w-0">
+
+      {/* Top row: Auto bet + Auto W/D */}
+      <div className="flex items-center gap-3 text-xs">
+        <label className="flex items-center gap-1.5 cursor-pointer select-none">
           <input
             type="checkbox"
-            className="w-3 h-3 accent-green-500"
+            className="w-3.5 h-3.5 accent-green-500"
             checked={bet.autoBetEnabled}
             onChange={(e) => handleAutoBetToggle(e.target.checked)}
           />
-          <span className="text-white/60">Auto</span>
+          <span className="text-white/60 font-medium">Auto</span>
         </label>
-        <label className="flex items-center gap-1 cursor-pointer select-none ml-auto">
-          <span className="text-white/60">Auto W/D</span>
+
+        <label className="flex items-center gap-1.5 cursor-pointer select-none ml-auto">
+          <span className="text-white/60 font-medium">Auto W/D</span>
           <button
             type="button"
-            className={`w-8 h-4 rounded-full transition-colors ${
+            className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 relative ${
               bet.autoCashoutEnabled ? 'bg-green-500' : 'bg-white/20'
             }`}
             onClick={() => setBet((b) => ({ ...b, autoCashoutEnabled: !b.autoCashoutEnabled }))}
           >
             <span
-              className={`block w-3 h-3 rounded-full bg-white shadow transition-transform mx-0.5 ${
-                bet.autoCashoutEnabled ? 'translate-x-4' : 'translate-x-0'
+              className={`absolute top-1 w-3 h-3 rounded-full bg-white shadow transition-all ${
+                bet.autoCashoutEnabled ? 'left-5' : 'left-1'
               }`}
             />
           </button>
         </label>
+
         {bet.autoCashoutEnabled && (
           <div className="flex items-center gap-0.5">
             <input
               type="number"
               min="1.1"
               step="0.1"
-              className="w-12 bg-white/10 rounded px-1 py-0.5 text-white text-xs text-right focus:outline-none"
+              className="w-14 bg-white/10 rounded-lg px-1.5 py-0.5 text-white text-xs text-right focus:outline-none focus:ring-1 focus:ring-green-500/50"
               value={autoCashoutInput}
               onChange={(e) => {
                 setAutoCashoutInput(e.target.value);
@@ -345,73 +401,77 @@ export function BettingPanel({
                 if (!isNaN(v) && v >= 1.1) setBet((b) => ({ ...b, autoCashoutValue: v }));
               }}
             />
-            <span className="text-white/40">x</span>
+            <span className="text-white/40 text-xs">x</span>
           </div>
         )}
       </div>
 
-      {/* Amount row */}
+      {/* Amount row: [-] input [+] */}
       <div className="flex items-center gap-2">
         <button
           type="button"
-          className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer"
+          className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer border border-white/10"
           onClick={() => adjustAmount(-50)}
+          disabled={bet.placed}
         >
-          <Minus className="w-3 h-3" />
+          <Minus className="w-3.5 h-3.5" />
         </button>
-        <input
-          type="number"
-          min={limits.min}
-          max={limits.max}
-          className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-white text-sm font-bold text-center focus:outline-none min-w-0"
-          value={amountInput}
-          onChange={(e) => {
-            setAmountInput(e.target.value);
-            const v = parseFloat(e.target.value);
-            if (!isNaN(v)) setAmount(v);
-          }}
-          onBlur={() => setAmountInput(String(bet.amount))}
-        />
+        <div className="flex-1 relative">
+          <input
+            type="number"
+            min={limits.min}
+            max={limits.max}
+            className="w-full bg-white/10 rounded-lg px-2 py-2 text-white text-sm font-bold text-center focus:outline-none focus:ring-1 focus:ring-green-500/50 border border-white/10 disabled:opacity-50"
+            value={amountInput}
+            disabled={bet.placed}
+            onChange={(e) => {
+              setAmountInput(e.target.value);
+              const v = parseFloat(e.target.value);
+              if (!isNaN(v)) setAmount(v);
+            }}
+            onBlur={() => setAmountInput(String(bet.amount))}
+          />
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 text-xs pointer-events-none">
+            {store.currency}
+          </span>
+        </div>
         <button
           type="button"
-          className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer"
+          className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer border border-white/10"
           onClick={() => adjustAmount(50)}
+          disabled={bet.placed}
         >
-          <Plus className="w-3 h-3" />
-        </button>
-        <button
-          type="button"
-          disabled={isButtonDisabled}
-          className={`h-10 px-3 rounded-xl font-bold text-white transition-all flex items-center justify-center flex-shrink-0 cursor-pointer ${
-            betShade
-          } ${betShadow} disabled:opacity-40 disabled:cursor-not-allowed`}
-          style={{ minWidth: '72px' }}
-          onClick={handleBetClick}
-        >
-          {betLabel}
+          <Plus className="w-3.5 h-3.5" />
         </button>
       </div>
 
-      {/* Quick bet row */}
-      <div className="flex gap-1">
+      {/* Quick amounts */}
+      <div className="flex gap-1.5">
         {QUICK_ADDS.map(({ label, value }) => (
           <button
             key={value}
             type="button"
-            className={`flex-1 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-              lastQuickBet === value
-                ? 'bg-aviator-green text-white'
-                : 'bg-white/10 hover:bg-white/20 text-white/70'
-            }`}
+            disabled={bet.placed}
+            className="flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer bg-white/8 hover:bg-white/15 text-white/70 disabled:opacity-40 disabled:cursor-not-allowed border border-white/10"
             onClick={() => {
-              setLastQuickBet(value);
               setAmount(value);
+              setAmountInput(String(value));
             }}
           >
             {label}
           </button>
         ))}
       </div>
+
+      {/* ── MAIN ACTION BUTTON (full-width, Spribe-style) ── */}
+      <button
+        type="button"
+        disabled={isButtonDisabled}
+        className={`w-full h-14 rounded-xl font-bold text-white transition-all flex items-center justify-center cursor-pointer ${buttonClass} disabled:opacity-30 disabled:cursor-not-allowed`}
+        onClick={handleBetClick}
+      >
+        {betLabel}
+      </button>
     </div>
   );
 }
