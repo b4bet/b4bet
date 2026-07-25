@@ -4,9 +4,9 @@ import { HistoryBar } from './HistoryBar';
 import { FlightCanvas, type CashoutNotice, type InsufficientBalanceNotice, type TimeoutNotice } from './FlightCanvas';
 import { useGameAudio } from './game/useGameAudio';
 import { BettingPanel, createInitialBet, type BetState } from './BettingPanel';
-import { Sidebar, makeSimBet, type BetRecord, type ChatMessage } from './Sidebar';
+import { Sidebar, type BetRecord, type ChatMessage } from './Sidebar';
 import { useAviatorGame } from './game/useAviatorGame';
-import { formatMoney, randomAvatarColor, randomName } from './game/format';
+import { formatMoney } from './game/format';
 import { useBalance } from '../../lib/hooks';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
@@ -15,6 +15,9 @@ import { GameService } from '../../lib/game-service';
 import { aviatorLoop } from '../../lib/persistentGameEngine';
 
 const PLAYER_NAME = 'You';
+
+// BettingPanel imports this type — do NOT remove this export.
+export type PlaceBetResult = { ok: boolean; reason?: string };
 
 interface AviatorGameProps {
   onBack?: () => void;
@@ -44,25 +47,19 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const showCashoutNotice = useCallback((amount: number, at: number) => {
     const id = Date.now() + Math.random();
     setCashoutNotices((prev) => [...prev, { id, multiplier: at, amount: amount * at }]);
-    setTimeout(() => {
-      setCashoutNotices((prev) => prev.filter((n) => n.id !== id));
-    }, 2500);
+    setTimeout(() => setCashoutNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
   }, []);
 
   const showInsufficientBalanceNotice = useCallback(() => {
     const id = Date.now() + Math.random();
     setInsufficientBalanceNotices((prev) => [...prev, { id }]);
-    setTimeout(() => {
-      setInsufficientBalanceNotices((prev) => prev.filter((n) => n.id !== id));
-    }, 2500);
+    setTimeout(() => setInsufficientBalanceNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
   }, []);
 
   const showTimeoutNotice = useCallback(() => {
     const id = Date.now() + Math.random();
     setTimeoutNotices((prev) => [...prev, { id }]);
-    setTimeout(() => {
-      setTimeoutNotices((prev) => prev.filter((n) => n.id !== id));
-    }, 2500);
+    setTimeout(() => setTimeoutNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
   }, []);
 
   const pendingPlayerBets = useRef<{ panel: 0 | 1; amount: number }[]>([]);
@@ -74,30 +71,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  useEffect(() => {
-    if (phase !== 'flying') return;
-    // No fake bets added during flight
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, roundId]);
-
-  useEffect(() => {
-    if (phase !== 'flying') return;
-    // No fake cashouts processed
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multiplier, phase]);
-
-  /**
-   * Called by BettingPanel when the player clicks BET.
-   *
-   * Returns a Promise<boolean> — true only if server accepted the bet.
-   *
-   * Uses debitLocalOnly() to avoid double-deduction: the server also
-   * deducts from Supabase in aviator_place_bet.
-   *
-   * IMPORTANT: if server rejects (success: false), we refund the local
-   * debit immediately so the UI balance stays correct.
-   */
-  const handlePlaceBet = useCallback(async (amount: number): Promise<boolean> => {
+  const handlePlaceBet = useCallback(async (amount: number): Promise<PlaceBetResult> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
       cms.toast({
@@ -105,17 +79,16 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`,
         kind: 'alert',
       });
-      return false;
+      return { ok: false, reason: 'range' };
     }
-    // Use debitLocalOnly: the server (aviator_place_bet) deducts from Supabase.
-    // debit() would also write to Supabase causing a double deduction.
-    const ok = store.debitLocalOnly(amount);
-    if (!ok) return false;
+
+    const debited = store.debitLocalOnly(amount);
+    if (!debited) return { ok: false, reason: 'insufficient' };
 
     const session = auth.getSession();
     if (!session) {
       store.credit(amount);
-      return false;
+      return { ok: false, reason: 'error' };
     }
 
     try {
@@ -126,30 +99,44 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       );
 
       if (!result.success) {
-        // Server rejected the bet — refund local debit so UI balance is correct.
+        // Server rejected the bet — refund local debit so UI balance is correct
         store.credit(amount);
         if (result.balance_after != null) {
           store.setBalance(result.balance_after);
         }
-        return false;
+        return { ok: false, reason: 'server_rejected' };
       }
 
-      // Bet accepted — dispatch bet_id so the panel can store it for fast cashout lookups
       if (result.bet_id) {
         const event = new CustomEvent('aviator:bet_registered', { detail: { betId: result.bet_id } });
         window.dispatchEvent(event);
       }
-      return true;
+      return { ok: true };
     } catch {
-      // Network/server error — refund local debit so UI balance is correct.
       store.credit(amount);
-      return false;
+      return { ok: false, reason: 'error' };
     }
   }, []);
 
   const handleCancelBet = useCallback(
-    (panel: 0 | 1, amount: number) => {
-      store.credit(amount);
+    (panel: 0 | 1, amount: number, betId?: string | null) => {
+      const session = auth.getSession();
+      if (session) {
+        void GameService.aviatorCancelBet(session.userId, amount, betId ?? null)
+          .then((res) => {
+            if (res.success && res.balance_after != null) {
+              store.setBalance(res.balance_after);
+            } else {
+              store.credit(amount);
+            }
+          })
+          .catch(() => {
+            store.credit(amount);
+          });
+      } else {
+        store.credit(amount);
+      }
+
       const id = `me-${roundId}-${panel}`;
       setAllBets((prev) => prev.filter((b) => b.id !== id));
       setMyBets((prev) => prev.filter((b) => b.id !== id));
@@ -193,7 +180,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         const next = updater(prev);
         if (!prev.placed && next.placed && prev.roundId === roundId) {
           recordPlayerBet(panel, next.amount);
-          // Listen for server bet_id and store it in this panel's state
           const handler = (e: Event) => {
             const detail = (e as CustomEvent<{ betId: string }>).detail;
             const setter2 = panel === 0 ? setBet0 : setBet1;
@@ -201,7 +187,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
             window.removeEventListener('aviator:bet_registered', handler);
           };
           window.addEventListener('aviator:bet_registered', handler);
-          // Auto-cleanup after 10s to avoid leaks
           setTimeout(() => window.removeEventListener('aviator:bet_registered', handler), 10_000);
         }
         if (prev.cashedOutAt === null && next.cashedOutAt !== null) {
@@ -252,6 +237,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   return (
     <div className="aviator-root flex flex-col h-full w-full bg-aviator-bg overflow-hidden">
+      {/* Header */}
       <Header
         balance={balance}
         soundOn={soundOn}
@@ -262,52 +248,59 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         onToggleAnimation={setAnimationOn}
         onBack={onBack}
       />
+
+      {/* History strip */}
       <HistoryBar history={history} />
-      <div className="flex flex-1 overflow-hidden">
-        <div className="flex flex-col flex-1 min-w-0">
-          <FlightCanvas
+
+      {/* Main scrollable area */}
+      <div className="flex flex-col flex-1 overflow-y-auto overflow-x-hidden">
+        {/* Flight canvas */}
+        <FlightCanvas
+          phase={phase}
+          multiplier={multiplier}
+          countdown={countdown}
+          lastCrash={lastCrash}
+          animationOn={animationOn}
+          cashouts={cashoutNotices}
+          insufficientBalanceNotices={insufficientBalanceNotices}
+          timeoutNotices={timeoutNotices}
+        />
+
+        {/* Betting panels */}
+        <div className="flex gap-2 p-2">
+          <BettingPanel
+            bet={bet0}
+            setBet={wrapSetBet(0)}
             phase={phase}
             multiplier={multiplier}
             countdown={countdown}
-            lastCrash={lastCrash}
-            animationOn={animationOn}
-            cashouts={cashoutNotices}
-            insufficientBalanceNotices={insufficientBalanceNotices}
-            timeoutNotices={timeoutNotices}
+            roundId={roundId}
+            balance={balance}
+            onPlaceBet={handlePlaceBet}
+            onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
+            onCashOut={handleCashOut}
+            onWin={handleWin}
+            onInsufficientBalance={showInsufficientBalanceNotice}
+            onTimeout={showTimeoutNotice}
           />
-          <div className="flex gap-2 p-2">
-            <BettingPanel
-              bet={bet0}
-              setBet={wrapSetBet(0)}
-              phase={phase}
-              multiplier={multiplier}
-              countdown={countdown}
-              roundId={roundId}
-              balance={balance}
-              onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount) => handleCancelBet(0, amount)}
-              onCashOut={handleCashOut}
-              onWin={handleWin}
-              onInsufficientBalance={showInsufficientBalanceNotice}
-              onTimeout={showTimeoutNotice}
-            />
-            <BettingPanel
-              bet={bet1}
-              setBet={wrapSetBet(1)}
-              phase={phase}
-              multiplier={multiplier}
-              countdown={countdown}
-              roundId={roundId}
-              balance={balance}
-              onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount) => handleCancelBet(1, amount)}
-              onCashOut={handleCashOut}
-              onWin={handleWin}
-              onInsufficientBalance={showInsufficientBalanceNotice}
-              onTimeout={showTimeoutNotice}
-            />
-          </div>
+          <BettingPanel
+            bet={bet1}
+            setBet={wrapSetBet(1)}
+            phase={phase}
+            multiplier={multiplier}
+            countdown={countdown}
+            roundId={roundId}
+            balance={balance}
+            onPlaceBet={handlePlaceBet}
+            onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
+            onCashOut={handleCashOut}
+            onWin={handleWin}
+            onInsufficientBalance={showInsufficientBalanceNotice}
+            onTimeout={showTimeoutNotice}
+          />
         </div>
+
+        {/* All Bets / My Bets / Top + Chat */}
         <Sidebar
           phase={phase}
           multiplier={multiplier}
@@ -319,6 +312,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           onShareBet={handleShareBet}
         />
       </div>
+
       <div className="text-center text-xs text-aviator-muted py-1 opacity-50">
         🔒 Official Live Game&nbsp;·&nbsp;Secure &amp; Provably Fair&nbsp;·&nbsp;18+ Responsible Play
       </div>
