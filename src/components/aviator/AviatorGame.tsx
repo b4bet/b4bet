@@ -20,6 +20,17 @@ interface AviatorGameProps {
   onBack?: () => void;
 }
 
+/**
+ * Result returned by handlePlaceBet.
+ *
+ * ok      – true if the bet was accepted by the server
+ * reason  – why the bet was rejected (only when ok === false)
+ *   'window_closed'  – plane already took off; caller should queue for next round
+ *   'insufficient'   – not enough balance
+ *   'error'          – any other server/network error
+ */
+export type PlaceBetResult = { ok: true } | { ok: false; reason: 'window_closed' | 'insufficient' | 'error' };
+
 export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
   const game = useAviatorGame();
   const { phase, multiplier, countdown, history, roundId, lastCrash } = game;
@@ -68,7 +79,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
     setTimeout(() => setTimeoutNotices((prev) => prev.filter((n) => n.id !== id)), 2500);
   }, []);
 
-  const handlePlaceBet = useCallback(async (amount: number): Promise<boolean> => {
+  const handlePlaceBet = useCallback(async (amount: number): Promise<PlaceBetResult> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
       cms.toast({
@@ -76,15 +87,15 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
         body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`,
         kind: 'alert',
       });
-      return false;
+      return { ok: false, reason: 'error' };
     }
 
     // Deduct balance locally (optimistic) — refund if server rejects
     const ok = store.debitLocalOnly(amount);
-    if (!ok) return false;
+    if (!ok) return { ok: false, reason: 'insufficient' };
 
     const session = auth.getSession();
-    if (!session) { store.credit(amount); return false; }
+    if (!session) { store.credit(amount); return { ok: false, reason: 'error' }; }
 
     try {
       const result = await GameService.aviatorPlaceBet(
@@ -94,24 +105,31 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
       );
 
       if (!result.success) {
-        // Server rejected — refund local balance and cancel optimistic placed state
         store.credit(amount);
-        // Show specific error if available
-        if (result.error === 'Insufficient balance') {
-          showInsufficientBalanceNotice();
-        } else if (result.error) {
-          cms.toast({ title: 'Bet failed', body: result.error, kind: 'alert' });
+
+        const err = result.error ?? '';
+
+        // Server says plane already took off — caller should queue for next round
+        if (err === 'Betting window closed' || err === 'Round already ended') {
+          return { ok: false, reason: 'window_closed' };
         }
-        return false;
+        if (err === 'Insufficient balance') {
+          showInsufficientBalanceNotice();
+          return { ok: false, reason: 'insufficient' };
+        }
+        if (err) {
+          cms.toast({ title: 'Bet failed', body: err, kind: 'alert' });
+        }
+        return { ok: false, reason: 'error' };
       }
 
       if (result.bet_id) {
         window.dispatchEvent(new CustomEvent('aviator:bet_registered', { detail: { betId: result.bet_id } }));
       }
-      return true;
+      return { ok: true };
     } catch {
       store.credit(amount);
-      return false;
+      return { ok: false, reason: 'error' };
     }
   }, [showInsufficientBalanceNotice]);
 
