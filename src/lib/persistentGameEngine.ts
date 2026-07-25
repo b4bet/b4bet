@@ -287,13 +287,9 @@ class AviatorLoop {
   /** SHA-256 hash of server seed — published before round starts for provably fair verification */
   private serverSeedHash: string | null = null;
   /**
-   * Tracks the highest phase "progress" we've reached locally so we never
-   * regress due to a stale server response.
-   *
-   * Order: waiting(0) → flying(1) → crashed(2) → waiting(0) ...
-   * We use a monotonic sequence number that increments every time we enter a
-   * new phase, so "waiting of round N+1" is distinguishable from
-   * "waiting of round N".
+   * Monotonic sequence number — increments on every phase transition.
+   * Used to distinguish "waiting of round N+1" from "waiting of round N"
+   * so stale server responses can never revert forward progress.
    */
   private phaseSeq = 0;
 
@@ -372,11 +368,12 @@ class AviatorLoop {
     }
 
     if (res.phase === 'flying') {
-      // If local engine has already crashed, don't go back to flying.
+      // If local engine has already crashed or is waiting for next round, ignore.
       if (this.phase === 'crashed') return;
 
       if (this.phase === 'waiting') {
         this.phase = 'flying';
+        this.phaseSeq += 1;
         this.multiplier = aviatorMultiplierAt(res.elapsed_ms);
       }
       this.phaseStart = now - res.elapsed_ms;
@@ -453,21 +450,19 @@ class AviatorLoop {
 
   private tick() {
     const now = Date.now();
-    const elapsed = now - this.phaseStart;
 
     if (now - this.lastPollMs >= AV_POLL_INTERVAL_MS) {
       this.lastPollMs = now;
       void this.syncFromServer();
     }
 
-    if (this.phase === 'waiting') {
-      if (elapsed >= AV_WAIT_MS) {
-        this.phase = 'flying';
-        this.phaseStart = now;
-        this.multiplier = 1.0;
-        this.phaseSeq += 1;
-      }
-    } else if (this.phase === 'flying') {
+    // NOTE: We do NOT advance waiting → flying locally.
+    // That transition only happens when the server confirms phase = 'flying'.
+    // This prevents a brief ~300ms window where multiplier shows 1.0x before
+    // the server confirms takeoff — which would prematurely trigger auto-cashout.
+
+    if (this.phase === 'flying') {
+      const elapsed = now - this.phaseStart;
       const m = aviatorMultiplierAt(elapsed);
       if (m >= AV_MAX_MULTIPLIER) {
         this.handleCrash(AV_MAX_MULTIPLIER, now);
@@ -475,6 +470,7 @@ class AviatorLoop {
         this.multiplier = m;
       }
     } else if (this.phase === 'crashed') {
+      const elapsed = now - this.phaseStart;
       if (elapsed >= AV_CRASH_HOLD_MS + 500) {
         this.phase = 'waiting';
         this.phaseStart = now;
