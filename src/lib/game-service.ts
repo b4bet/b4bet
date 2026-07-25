@@ -1,11 +1,14 @@
 /**
- * game-service.ts — Thin client wrapper around process-bet Edge Function + Supabase RPC.
+ * game-service.ts
+ *
+ * Thin client wrapper around the process-bet Edge Function.
  * ALL game outcomes are determined server-side.
+ * The browser is a pure display layer — it NEVER computes win/loss locally.
  */
 
-import { supabase } from '../integrations/supabase/client';
-
 const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
+
+// ── Types ────────────────────────────────────────────────────────────────────
 
 export interface CrashBustResult { bust_point: number; }
 export interface CrashSettleResult { success: boolean; win: number; verified_bust: number | null; balance_after: number; }
@@ -15,200 +18,197 @@ export interface MinesCashoutResult { success: boolean; payout: number; multipli
 export interface SunMoonResult { result: "sun" | "moon" | "tie"; }
 export interface SunMoonSettleResult { success: boolean; result: string; won: boolean; payout: number; profit: number; balance_after: number; }
 export interface TradingSettleResult { success: boolean; won: boolean; payout: number; profit: number; balance_after: number; }
-export interface AviatorRoundStartResult { success: boolean; round_id: number; started_at?: string; already_exists?: boolean; }
-export interface AviatorPlaceBetResult { success: boolean; balance_after: number; bet_id: string | null; error?: string; }
-export interface AviatorCancelBetResult { success: boolean; balance_after: number; error?: string; }
-export interface AviatorCashoutResult { success: boolean; won: boolean; cashout_at: number | null; win: number; balance_after: number; crash_point: number | null; }
+export interface AviatorRoundStartResult {
+  success: boolean;
+  round_id: number;
+  started_at?: string;
+  already_exists?: boolean;
+}
+export interface AviatorPlaceBetResult {
+  success: boolean;
+  balance_after: number | null;
+  bet_id: string | null;
+  error?: string;
+}
+export interface AviatorCashoutResult {
+  success: boolean;
+  won: boolean;
+  cashout_at: number | null;
+  win: number;
+  balance_after: number;
+  crash_point: number | null; // only non-null if round already crashed
+}
 export interface AviatorSettleResult { success: boolean; crash_point: number; }
-export interface AviatorRoundStatusResult { crashed: boolean; crash_point: number | null; }
-export interface AviatorCurrentRoundResult {
-  phase: 'waiting' | 'flying' | 'crashed';
-  elapsed_ms: number;
-  round_uuid: string | null;
+export interface AviatorRoundStatusResult {
+  /** True once the server's own clock has passed the crash point. */
+  crashed: boolean;
+  /** Only non-null when crashed === true — safe to display/use as the real crash value. */
   crash_point: number | null;
-  last_crash_point: number | null;
-  /** SHA-256 hash of the server seed — published before the round starts for provably fair verification */
-  server_seed_hash: string | null;
 }
-export interface AviatorHistoryResult { history: number[]; }
 
-/** Provably-fair round detail — mirrors CrashRoundDetail */
-export interface AviatorRoundDetail {
-  bust_point: number;
-  round_uuid: string | null;
-  /** Revealed after the round ends */
-  server_seed: string | null;
-  /** Published before the round starts */
-  server_seed_hash: string | null;
-  created_at: string | null;
-}
-export interface AviatorHistoryDetailResult { history: AviatorRoundDetail[]; }
+// ── Helper ───────────────────────────────────────────────────────────────────
 
 async function get<T>(params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams(params).toString();
-  const res = await fetch(`${EDGE_FN}?${qs}`, { method: "GET", headers: { "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY } });
+  const res = await fetch(`${EDGE_FN}?${qs}`, {
+    method: "GET",
+    headers: { "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY },
+  });
   const data = await res.json() as T & { error?: string };
   if (!res.ok || data.error) throw new Error((data as { error?: string }).error ?? "Server error");
   return data;
 }
 
 async function post<T>(body: Record<string, unknown>): Promise<T> {
-  const res = await fetch(EDGE_FN, { method: "POST", headers: { "Content-Type": "application/json", "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY }, body: JSON.stringify(body) });
+  const res = await fetch(EDGE_FN, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify(body),
+  });
   const data = await res.json() as T & { error?: string };
   if (!res.ok || data.error) throw new Error((data as { error?: string }).error ?? "Server error");
   return data;
 }
 
-/**
- * postSoft — like post() but only throws on real HTTP-level failures (res.ok === false).
- *
- * Use this for aviator endpoints that return { success: false, error: "..." } as a
- * normal business-logic response (e.g. "Betting window closed", "Round already ended").
- * With the old post() those soft failures were thrown as exceptions, causing the client
- * to catch them, refund the balance, and silently cancel the bet.
- */
-async function postSoft<T>(body: Record<string, unknown>): Promise<T> {
-  const res = await fetch(EDGE_FN, { method: "POST", headers: { "Content-Type": "application/json", "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY }, body: JSON.stringify(body) });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({})) as { error?: string };
-    throw new Error(data.error ?? "Server error");
-  }
-  return res.json() as Promise<T>;
-}
+// ── Game API ─────────────────────────────────────────────────────────────────
 
 export const GameService = {
+  // ── Crash ──────────────────────────────────────────────────────────────────
   crashGetBustPoint(roundId: number): Promise<CrashBustResult> {
     return get<CrashBustResult>({ action: "crash_get_bust", round_id: String(roundId) });
   },
+
   crashSettle(userId: string, roundId: number, amount: number, cashOutAt: number | null, bustPoint: number): Promise<CrashSettleResult> {
     const won = cashOutAt !== null && cashOutAt <= bustPoint;
-    return post<CrashSettleResult>({ game_type: "crash_settle", user_id: userId, round_id: roundId, amount, cash_out_at: cashOutAt, bust_point: bustPoint, win: won ? Math.round(amount * (cashOutAt ?? 0) * 100) / 100 : 0 });
+    return post<CrashSettleResult>({
+      game_type: "crash_settle",
+      user_id: userId,
+      round_id: roundId,
+      amount,
+      cash_out_at: cashOutAt,
+      bust_point: bustPoint,
+      win: won ? Math.round(amount * (cashOutAt ?? 0) * 100) / 100 : 0,
+    });
   },
+
+  // ── Mines ──────────────────────────────────────────────────────────────────
   minesStart(userId: string, mineCount: number, stake: number): Promise<MinesStartResult> {
     return post<MinesStartResult>({ game_type: "mines_start", user_id: userId, mine_count: mineCount, stake });
   },
+
   minesReveal(userId: string, sessionId: string, tileIndex: number): Promise<MinesRevealResult> {
     return post<MinesRevealResult>({ game_type: "mines_reveal", user_id: userId, session_id: sessionId, tile_index: tileIndex });
   },
+
   minesCashout(userId: string, sessionId: string): Promise<MinesCashoutResult> {
     return post<MinesCashoutResult>({ game_type: "mines_cashout", user_id: userId, session_id: sessionId });
   },
+
+  // ── Sun vs Moon ────────────────────────────────────────────────────────────
   sunMoonGetResult(roundId: number): Promise<SunMoonResult> {
     return get<SunMoonResult>({ action: "sunvsmoon_result", round_id: String(roundId) });
   },
+
   sunMoonSettle(userId: string, roundId: number, bet: "sun" | "moon" | "tie", stake: number): Promise<SunMoonSettleResult> {
     return post<SunMoonSettleResult>({ game_type: "sunvsmoon_settle", user_id: userId, round_id: roundId, bet, stake });
   },
-  tradingSettle(userId: string, symbol: string, direction: "UP" | "DOWN", stake: number, entryPrice: number, exitPrice: number, payoutPct: number): Promise<TradingSettleResult> {
-    return post<TradingSettleResult>({ game_type: "trading_settle", user_id: userId, symbol, direction, stake, entry_price: entryPrice, exit_price: exitPrice, payout_pct: payoutPct });
+
+  // ── Trading ────────────────────────────────────────────────────────────────
+  tradingSettle(
+    userId: string,
+    symbol: string,
+    direction: "UP" | "DOWN",
+    stake: number,
+    entryPrice: number,
+    exitPrice: number,
+    payoutPct: number,
+  ): Promise<TradingSettleResult> {
+    return post<TradingSettleResult>({
+      game_type: "trading_settle",
+      user_id: userId,
+      symbol,
+      direction,
+      stake,
+      entry_price: entryPrice,
+      exit_price: exitPrice,
+      payout_pct: payoutPct,
+    });
   },
 
-  // ── Aviator ──────────────────────────────────────────────────────────────
+  // ── Aviator ────────────────────────────────────────────────────────────────
 
-  /** Get current round state via Supabase RPC (handles all phase transitions). */
-  async aviatorGetCurrentRound(): Promise<AviatorCurrentRoundResult> {
-    const { data, error } = await supabase.rpc('aviator_get_current_round');
-    if (error) throw new Error(error.message);
-    const d = data as {
-      round_uuid: string | null;
-      phase: string;
-      elapsed_ms: number;
-      crash_point: number | null;
-      last_crash_point: number | null;
-      server_seed_hash: string | null;
-    };
-    return {
-      phase: (d.phase ?? 'waiting') as 'waiting' | 'flying' | 'crashed',
-      elapsed_ms: Number(d.elapsed_ms ?? 0),
-      round_uuid: d.round_uuid ?? null,
-      crash_point: d.crash_point != null ? Number(d.crash_point) : null,
-      last_crash_point: d.last_crash_point != null ? Number(d.last_crash_point) : null,
-      server_seed_hash: d.server_seed_hash ?? null,
-    };
+  /**
+   * Place a bet for the current Aviator round.
+   * Server deducts balance, inserts a pending bet row, and returns bet_id.
+   * Client must use debitLocalOnly() before calling this — do NOT use debit()
+   * or balance will be double-deducted.
+   */
+  aviatorPlaceBet(userId: string, betAmount: number, roundUuid: string | null): Promise<AviatorPlaceBetResult> {
+    return post<AviatorPlaceBetResult>({
+      action: "aviator_place_bet",
+      user_id: userId,
+      bet_amount: betAmount,
+      round_uuid: roundUuid,
+    });
   },
 
-  /** Get recent crash history (last 20 rounds). */
-  async aviatorGetHistory(): Promise<AviatorHistoryResult> {
-    const { data, error } = await supabase.from('aviator_rounds').select('bust_point').order('id', { ascending: false }).limit(20);
-    if (error) throw new Error(error.message);
-    const history = (data ?? []).map((r: { bust_point: unknown }) => Number(r.bust_point)).filter((v: number) => !isNaN(v) && v > 0);
-    return { history };
-  },
-
-  /** Get last 20 rounds with full provably-fair detail (seed + hash). */
-  async aviatorGetHistoryDetail(): Promise<AviatorHistoryDetailResult> {
-    const { data, error } = await supabase.rpc('aviator_get_history_detail');
-    if (error) throw new Error(error.message);
-    const result = data as { history: AviatorRoundDetail[] };
-    return { history: result.history ?? [] };
-  },
-
-  // Use postSoft so "Betting window closed" / "Round already ended" come back as
-  // { success: false, error: "..." } instead of being thrown as exceptions.
-  aviatorPlaceBet(userId: string, betAmount: number, roundUuid: string | null, placedAtMs?: number): Promise<AviatorPlaceBetResult> {
-    return postSoft<AviatorPlaceBetResult>({ action: "aviator_place_bet", user_id: userId, bet_amount: betAmount, round_uuid: roundUuid, placed_at_ms: placedAtMs ?? Date.now() });
-  },
-
-  aviatorCancelBet(userId: string, betAmount: number, betId: string | null): Promise<AviatorCancelBetResult> {
-    return postSoft<AviatorCancelBetResult>({ action: "aviator_cancel_bet", user_id: userId, bet_amount: betAmount, bet_id: betId });
-  },
-
+  /**
+   * Called at the START of each Aviator round (waiting phase).
+   * Server generates crash_point via crypto.getRandomValues() and stores it.
+   * Returns ONLY round metadata — crash point is NEVER returned here.
+   */
   aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
-    return post<AviatorRoundStartResult>({ action: "aviator_round_start", user_id: userId, round_id: roundId });
+    return post<AviatorRoundStartResult>({
+      game_type: "aviator_round_start",
+      user_id: userId,
+      round_id: roundId,
+    });
   },
 
-  aviatorCashout(userId: string, roundUuid: string | null, roundId: number, betAmount: number, cashoutAt: number, betId: string | null, placedAtMs?: number): Promise<AviatorCashoutResult> {
-    return postSoft<AviatorCashoutResult>({ action: "aviator_cashout", user_id: userId, bet_amount: betAmount, cashout_at: cashoutAt, round_uuid: roundUuid, round_id: roundId, bet_id: betId, placed_at_ms: placedAtMs ?? Date.now() });
+  /**
+   * Called when a player clicks Cash Out during flying phase.
+   * Server validates timing using its own clock + stored started_at.
+   * Atomically credits balance. Returns crash_point only if round crashed.
+   */
+  aviatorCashout(
+    userId: string,
+    roundId: number,
+    betAmount: number,
+    placedAtMs: number,
+  ): Promise<AviatorCashoutResult> {
+    return post<AviatorCashoutResult>({
+      game_type: "aviator_cashout",
+      user_id: userId,
+      round_id: roundId,
+      bet_amount: betAmount,
+      placed_at_ms: placedAtMs,
+    });
   },
 
-  aviatorSettle(userId: string, roundUuid: string | null, betAmount: number): Promise<AviatorSettleResult> {
-    return postSoft<AviatorSettleResult>({ action: "aviator_settle", user_id: userId, round_uuid: roundUuid, bet_amount: betAmount });
+  /**
+   * Called after a round ends for bets that did NOT cash out (always a loss).
+   * Server records the bet and returns the real crash_point for history display.
+   * @param roundUuid - the round UUID string (not a numeric id)
+   */
+  aviatorSettle(userId: string, roundUuid: string, _legacyRoundId: number, betAmount: number): Promise<AviatorSettleResult> {
+    return post<AviatorSettleResult>({
+      action: "aviator_settle",
+      user_id: userId,
+      round_uuid: roundUuid,
+      bet_amount: betAmount,
+    });
   },
 
-  aviatorRoundStatus(roundId: string): Promise<AviatorRoundStatusResult> {
-    return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: roundId });
-  },
-
-  // ── Crash (existing) ─────────────────────────────────────────────────────
-  async crashGetCurrentRound() {
-    const { data, error } = await supabase.rpc('crash_get_current_round');
-    if (error) throw new Error(error.message);
-    const d = data as {
-      round_uuid: string | null;
-      phase: string;
-      elapsed_ms: number;
-      crash_point: number | null;
-      last_crash_point: number | null;
-    };
-    return {
-      phase: (d.phase ?? 'waiting') as 'waiting' | 'flying' | 'crashed',
-      elapsed_ms: Number(d.elapsed_ms ?? 0),
-      round_uuid: d.round_uuid ?? null,
-      crash_point: d.crash_point != null ? Number(d.crash_point) : null,
-      last_crash_point: d.last_crash_point != null ? Number(d.last_crash_point) : null,
-    };
-  },
-
-  async crashGetHistory(): Promise<{ history: number[] }> {
-    const { data, error } = await supabase.rpc('crash_get_history');
-    if (error) throw new Error(error.message);
-    const r = data as { history: number[] };
-    return { history: r.history ?? [] };
-  },
-
-  async crashGetHistoryDetail(): Promise<{ history: CrashRoundDetail[] }> {
-    const { data, error } = await supabase.rpc('crash_get_history_detail');
-    if (error) throw new Error(error.message);
-    const r = data as { history: CrashRoundDetail[] };
-    return { history: r.history ?? [] };
+  /**
+   * Polled every ~300ms during the flying phase to detect when the server has
+   * passed its crash point. Returns crash_point only AFTER the server's own
+   * clock has crossed it — the client never learns the value early.
+   * No user auth required; all players see the same public crash event.
+   */
+  aviatorRoundStatus(roundId: number): Promise<AviatorRoundStatusResult> {
+    return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: String(roundId) });
   },
 };
-
-/** Provably-fair crash round detail */
-export interface CrashRoundDetail {
-  bust_point: number;
-  round_uuid: string | null;
-  server_seed: string | null;
-  server_seed_hash: string | null;
-  created_at: string | null;
-}
