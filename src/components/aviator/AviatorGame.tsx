@@ -217,8 +217,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   return (
-    <div className="flex flex-col h-full bg-[#0e0e1a] text-white overflow-y-auto overflow-x-hidden">
-      {/* Top header with balance/settings */}
+    <div className="flex flex-col h-full bg-[#0e0e1a] text-white overflow-hidden">
+      {/* Header */}
       <Header
         balance={balance}
         soundOn={soundOn}
@@ -230,70 +230,73 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         onBack={onBack}
       />
 
-      {/* Round history strip */}
+      {/* History strip */}
       <HistoryBar history={history} />
 
-      {/* Flight canvas — full width */}
-      <FlightCanvas
-        phase={phase}
-        multiplier={multiplier}
-        countdown={countdown}
-        lastCrash={lastCrash}
-        animationOn={animationOn}
-        cashouts={cashoutNotices}
-        insufficientBalanceNotices={insufficientBalanceNotices}
-        timeoutNotices={timeoutNotices}
-      />
-
-      {/* Betting panels — full width below canvas */}
-      <div className="flex gap-2 p-2 bg-[#12121f] border-t border-white/5">
-        <BettingPanel
-          bet={bet0}
-          setBet={wrapSetBet(0)}
+      {/* Main scrollable area — canvas + betting + bets list */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden">
+        {/* Flight canvas — original fixed height */}
+        <FlightCanvas
           phase={phase}
           multiplier={multiplier}
           countdown={countdown}
-          roundId={roundId}
-          balance={balance}
-          onPlaceBet={handlePlaceBet}
-          onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
-          onCashOut={handleCashOut}
-          onWin={handleWin}
-          onInsufficientBalance={showInsufficientBalanceNotice}
-          onTimeout={showTimeoutNotice}
+          lastCrash={lastCrash}
+          animationOn={animationOn}
+          cashouts={cashoutNotices}
+          insufficientBalanceNotices={insufficientBalanceNotices}
+          timeoutNotices={timeoutNotices}
         />
-        <BettingPanel
-          bet={bet1}
-          setBet={wrapSetBet(1)}
-          phase={phase}
-          multiplier={multiplier}
-          countdown={countdown}
-          roundId={roundId}
-          balance={balance}
-          onPlaceBet={handlePlaceBet}
-          onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
-          onCashOut={handleCashOut}
-          onWin={handleWin}
-          onInsufficientBalance={showInsufficientBalanceNotice}
-          onTimeout={showTimeoutNotice}
-        />
+
+        {/* Betting panels */}
+        <div className="flex gap-2 p-2 bg-[#12121f] border-t border-white/5">
+          <BettingPanel
+            bet={bet0}
+            setBet={wrapSetBet(0)}
+            phase={phase}
+            multiplier={multiplier}
+            countdown={countdown}
+            roundId={roundId}
+            balance={balance}
+            onPlaceBet={handlePlaceBet}
+            onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
+            onCashOut={handleCashOut}
+            onWin={handleWin}
+            onInsufficientBalance={showInsufficientBalanceNotice}
+            onTimeout={showTimeoutNotice}
+          />
+          <BettingPanel
+            bet={bet1}
+            setBet={wrapSetBet(1)}
+            phase={phase}
+            multiplier={multiplier}
+            countdown={countdown}
+            roundId={roundId}
+            balance={balance}
+            onPlaceBet={handlePlaceBet}
+            onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
+            onCashOut={handleCashOut}
+            onWin={handleWin}
+            onInsufficientBalance={showInsufficientBalanceNotice}
+            onTimeout={showTimeoutNotice}
+          />
+        </div>
+
+        {/* All Bets / My Bets / Top + Chat — below betting panels */}
+        <div className="min-h-[360px]">
+          <Sidebar
+            phase={phase}
+            multiplier={multiplier}
+            allBets={allBets}
+            myBets={myBets}
+            chat={chat}
+            canShareBet={canShareBet}
+            onSendChat={handleSendChat}
+            onShareBet={handleShareBet}
+          />
+        </div>
       </div>
 
-      {/* All Bets / My Bets / Top + Chat — below betting panels, full width */}
-      <div className="flex-1 min-h-[340px]">
-        <Sidebar
-          phase={phase}
-          multiplier={multiplier}
-          allBets={allBets}
-          myBets={myBets}
-          chat={chat}
-          canShareBet={canShareBet}
-          onSendChat={handleSendChat}
-          onShareBet={handleShareBet}
-        />
-      </div>
-
-      <div className="text-center text-[10px] text-white/20 py-1 bg-[#0a0a14]">
+      <div className="text-center text-[10px] text-white/20 py-1 bg-[#0a0a14] flex-shrink-0">
         🔒 Official Live Game&nbsp; · &nbsp;Secure &amp; Provably Fair&nbsp; · &nbsp;18+ Responsible Play
       </div>
     </div>
