@@ -253,14 +253,14 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   return (
     <div className="aviator-root flex flex-col h-full w-full bg-aviator-bg overflow-hidden">
       <Header
-        onBack={onBack}
+        balance={balance}
         soundOn={soundOn}
-        onSoundToggle={setSoundOn}
+        onToggleSound={setSoundOn}
         musicOn={musicOn}
-        onMusicToggle={setMusicOn}
+        onToggleMusic={setMusicOn}
         animationOn={animationOn}
-        onAnimationToggle={setAnimationOn}
-        lastCrash={lastCrash}
+        onToggleAnimation={setAnimationOn}
+        onBack={onBack}
       />
       <HistoryBar history={history} />
       <div className="flex flex-1 overflow-hidden">
