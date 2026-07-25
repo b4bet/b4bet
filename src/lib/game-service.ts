@@ -43,6 +43,20 @@ export interface AviatorRoundStatusResult {
   crashed: boolean;
   crash_point: number | null;
 }
+export interface AviatorCurrentRoundResult {
+  phase: 'waiting' | 'flying' | 'crashed';
+  elapsed_ms: number;
+  round_uuid: string | null;
+  crash_point: number | null;
+  last_crash_point: number | null;
+  server_seed_hash?: string | null;
+}
+export interface AviatorHistoryResult {
+  history: number[];
+}
+export interface AviatorHistoryDetailResult {
+  history: { bust_point: number | string; round_uuid?: string | null; server_seed?: string | null }[];
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -159,6 +173,29 @@ export const GameService = {
   // ── Aviator ────────────────────────────────────────────────────────────────
 
   /**
+   * Fetch the current Aviator round state from the server.
+   * Called by AviatorLoop.syncFromServer() every AV_POLL_INTERVAL_MS.
+   */
+  aviatorGetCurrentRound(): Promise<AviatorCurrentRoundResult> {
+    return get<AviatorCurrentRoundResult>({ action: "aviator_current_round" });
+  },
+
+  /**
+   * Fetch the recent Aviator round history (crash points only).
+   */
+  aviatorGetHistory(): Promise<AviatorHistoryResult> {
+    return get<AviatorHistoryResult>({ action: "aviator_history" });
+  },
+
+  /**
+   * Fetch detailed Aviator round history (with provably-fair fields).
+   * Falls back gracefully to aviatorGetHistory() if not supported.
+   */
+  aviatorGetHistoryDetail(): Promise<AviatorHistoryDetailResult> {
+    return get<AviatorHistoryDetailResult>({ action: "aviator_history_detail" });
+  },
+
+  /**
    * Place a bet for the current Aviator round.
    * Uses postSoft so server soft-rejections (round ended, window closed)
    * come back as { success: false } instead of thrown exceptions.
@@ -188,19 +225,24 @@ export const GameService = {
 
   /**
    * Called when a player clicks Cash Out during flying phase.
+   * Signature matches AviatorLoop.cashoutBet() call in persistentGameEngine.ts.
    */
   aviatorCashout(
     userId: string,
+    roundUuid: string | null,
     roundId: number,
     betAmount: number,
-    placedAtMs: number,
+    multiplier: number,
+    betId: string | null,
   ): Promise<AviatorCashoutResult> {
     return post<AviatorCashoutResult>({
-      game_type: "aviator_cashout",
+      action: "aviator_cashout",
       user_id: userId,
+      round_uuid: roundUuid,
       round_id: roundId,
       bet_amount: betAmount,
-      placed_at_ms: placedAtMs,
+      cashout_at: multiplier,
+      bet_id: betId,
     });
   },
 
