@@ -47,7 +47,6 @@ serve(async (req) => {
         .single();
 
       if (!row) {
-        // No row yet — tell client we are in waiting phase
         return new Response(
           JSON.stringify({ phase: "waiting", elapsed_ms: 0, round_uuid: null, crash_point: null, last_crash_point: null }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -70,7 +69,6 @@ serve(async (req) => {
     }
 
     // ── aviator_history ──────────────────────────────────────────────────────
-    // Returns the last 20 crash points for the history bar.
     if (action === "aviator_history") {
       const { data: rows } = await supabase
         .from("aviator_rounds")
@@ -141,24 +139,19 @@ serve(async (req) => {
 
       const CANCEL_GRACE_MS = 2000;
 
-      const { data: currentRound } = await supabase
-        .from("aviator_current_round")
-        .select("phase, phase_started_at")
-        .eq("id", 1)
-        .single();
+      // Use RPC to get current (possibly transitioned) phase
+      const { data: rpcData } = await supabase.rpc('aviator_get_current_round');
+      const currentPhase = (rpcData as { phase?: string } | null)?.phase;
+      const currentElapsedMs = Number((rpcData as { elapsed_ms?: number } | null)?.elapsed_ms ?? 0);
 
-      if (currentRound && currentRound.phase === "flying") {
-        const phaseStartedAt = new Date(currentRound.phase_started_at).getTime();
-        const elapsedSinceFlying = Date.now() - phaseStartedAt;
-        if (elapsedSinceFlying > CANCEL_GRACE_MS) {
-          return new Response(
-            JSON.stringify({ success: false, error: "Round already started, cannot cancel" }),
-            { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
-          );
-        }
+      if (currentPhase === "flying" && currentElapsedMs > CANCEL_GRACE_MS) {
+        return new Response(
+          JSON.stringify({ success: false, error: "Round already started, cannot cancel" }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        );
       }
 
-      if (currentRound && currentRound.phase === "crashed") {
+      if (currentPhase === "crashed") {
         return new Response(
           JSON.stringify({ success: false, error: "Round already ended, cannot cancel" }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
@@ -249,36 +242,33 @@ serve(async (req) => {
       const roundUuid = payload.round_uuid ?? null;
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
-      const clientPlacedAtMs = payload.placed_at_ms ? Number(payload.placed_at_ms) : Date.now();
+      // Use the RPC which auto-transitions stale phases (crashed→waiting, waiting→flying).
+      // This prevents the bug where the raw table is stuck in 'crashed' phase and every
+      // bet placed during the next waiting phase gets rejected as "Round already ended".
+      const { data: rpcData, error: rpcError } = await supabase.rpc('aviator_get_current_round');
+      if (rpcError) throw new Error(`Failed to get round state: ${rpcError.message}`);
 
-      const { data: currentRound } = await supabase
-        .from("aviator_current_round")
-        .select("phase, phase_started_at, crash_point")
-        .eq("id", 1)
-        .single();
+      const currentPhase = (rpcData as { phase?: string } | null)?.phase ?? 'waiting';
+      // Server-side elapsed_ms — not affected by client clock skew
+      const serverElapsedMs = Number((rpcData as { elapsed_ms?: number } | null)?.elapsed_ms ?? 0);
 
-      if (currentRound) {
-        const phaseStartedAt = new Date(currentRound.phase_started_at).getTime();
-
-        if (currentRound.phase === "flying") {
-          const gracePeriodMs = 5000;
-          if (clientPlacedAtMs > phaseStartedAt + gracePeriodMs) {
-            return new Response(
-              JSON.stringify({ success: false, error: "Betting window closed", balance_after: null }),
-              { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
-            );
-          }
+      // Flying phase: only allow bets placed within the first 5 seconds (server time)
+      if (currentPhase === "flying") {
+        const FLYING_GRACE_MS = 5000;
+        if (serverElapsedMs > FLYING_GRACE_MS) {
+          return new Response(
+            JSON.stringify({ success: false, error: "Betting window closed", balance_after: null }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+          );
         }
+      }
 
-        if (currentRound.phase === "crashed") {
-          const gracePeriodMs = 5000;
-          if (clientPlacedAtMs > phaseStartedAt + gracePeriodMs) {
-            return new Response(
-              JSON.stringify({ success: false, error: "Round already ended", balance_after: null }),
-              { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
-            );
-          }
-        }
+      // Crashed phase: never accept new bets (next waiting phase will be handled above)
+      if (currentPhase === "crashed") {
+        return new Response(
+          JSON.stringify({ success: false, error: "Round already ended", balance_after: null }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        );
       }
 
       const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
