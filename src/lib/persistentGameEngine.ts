@@ -258,7 +258,6 @@ export interface AviatorEngineState {
 }
 
 const AV_WAIT_MS = 6_000;
-const AV_CRASH_HOLD_MS = 3_000;
 const AV_MAX_MULTIPLIER = 200;
 const AV_POLL_INTERVAL_MS = 300;
 const AV_HISTORY_CAP = 20;
@@ -361,7 +360,7 @@ class AviatorLoop {
 
       if (this.phase !== 'crashed') {
         const cp = res.crash_point ?? res.last_crash_point ?? AV_MAX_MULTIPLIER;
-        this.handleCrash(cp, now - Math.min(res.elapsed_ms, AV_CRASH_HOLD_MS - 1));
+        this.handleCrash(cp, now - Math.min(res.elapsed_ms, 2999));
       }
       this.phaseStart = now - res.elapsed_ms;
       return;
@@ -461,6 +460,14 @@ class AviatorLoop {
     // This prevents a brief ~300ms window where multiplier shows 1.0x before
     // the server confirms takeoff — which would prematurely trigger auto-cashout.
 
+    // NOTE: We do NOT advance crashed → waiting locally either.
+    // The previous implementation did this after 3.5s, but it caused a race
+    // condition: the client showed 'waiting' while the server was still in
+    // 'crashed'. If a user placed a bet during that window, the server rejected
+    // it with "Round already ended", causing the bet to silently cancel or queue.
+    // Now crashed → waiting only happens when the server poll confirms it,
+    // which adds at most 300ms (one poll cycle) of extra crash display time.
+
     if (this.phase === 'flying') {
       const elapsed = now - this.phaseStart;
       const m = aviatorMultiplierAt(elapsed);
@@ -468,16 +475,6 @@ class AviatorLoop {
         this.handleCrash(AV_MAX_MULTIPLIER, now);
       } else {
         this.multiplier = m;
-      }
-    } else if (this.phase === 'crashed') {
-      const elapsed = now - this.phaseStart;
-      if (elapsed >= AV_CRASH_HOLD_MS + 500) {
-        this.phase = 'waiting';
-        this.phaseStart = now;
-        this.multiplier = 1.0;
-        this.lastCrash = null;
-        this.crashPoint = null;
-        this.phaseSeq += 1;
       }
     }
 
