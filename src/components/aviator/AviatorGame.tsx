@@ -81,6 +81,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       return { ok: false, reason: 'range' };
     }
 
+    // Debit locally (optimistic) — BettingPanel calls this AFTER marking placed=true
     const debited = store.debitLocalOnly(amount);
     if (!debited) return { ok: false, reason: 'insufficient' };
 
@@ -116,12 +117,30 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   const handleCancelBet = useCallback(
     (panel: 0 | 1, amount: number, betId?: string | null) => {
-      store.credit(amount);
+      // Notify server to cancel and refund
+      const session = auth.getSession();
+      if (session) {
+        void GameService.aviatorCancelBet(session.userId, amount, betId ?? null)
+          .then((res) => {
+            if (res.success && res.balance_after != null) {
+              store.setBalance(res.balance_after);
+            } else {
+              // Server didn't handle cancel — refund locally
+              store.credit(amount);
+            }
+          })
+          .catch(() => {
+            // Non-fatal — refund locally
+            store.credit(amount);
+          });
+      } else {
+        store.credit(amount);
+      }
+
       const id = `me-${roundId}-${panel}`;
       setAllBets((prev) => prev.filter((b) => b.id !== id));
       setMyBets((prev) => prev.filter((b) => b.id !== id));
       pendingPlayerBets.current = pendingPlayerBets.current.filter((p) => p.panel !== panel);
-      void betId;
     },
     [roundId],
   );
@@ -233,9 +252,9 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       {/* History strip */}
       <HistoryBar history={history} />
 
-      {/* Main scrollable area — canvas + betting + bets list */}
+      {/* Main scrollable area */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
-        {/* Flight canvas — original fixed height */}
+        {/* Flight canvas */}
         <FlightCanvas
           phase={phase}
           multiplier={multiplier}
@@ -281,7 +300,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           />
         </div>
 
-        {/* All Bets / My Bets / Top + Chat — below betting panels */}
+        {/* All Bets / My Bets / Top + Chat */}
         <div className="min-h-[360px]">
           <Sidebar
             phase={phase}
