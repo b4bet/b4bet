@@ -36,13 +36,11 @@ export interface AviatorCashoutResult {
   cashout_at: number | null;
   win: number;
   balance_after: number;
-  crash_point: number | null; // only non-null if round already crashed
+  crash_point: number | null;
 }
 export interface AviatorSettleResult { success: boolean; crash_point: number; }
 export interface AviatorRoundStatusResult {
-  /** True once the server's own clock has passed the crash point. */
   crashed: boolean;
-  /** Only non-null when crashed === true — safe to display/use as the real crash value. */
   crash_point: number | null;
 }
 
@@ -75,12 +73,9 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
 }
 
 /**
- * Soft post — throws ONLY on actual HTTP errors (4xx/5xx without a parseable body).
+ * Soft post — only throws on HTTP 5xx server failures.
  * Soft rejections like { success: false, error: "Round already ended" } on HTTP 200
- * are returned as-is so the caller can inspect result.success without going into catch.
- *
- * Use this for aviatorPlaceBet so "Betting window closed" / "Round already ended"
- * come back as { success: false } instead of being thrown and triggering a balance refund.
+ * are returned as-is so the caller can inspect result.success.
  */
 async function postSoft<T>(body: Record<string, unknown>): Promise<T> {
   const res = await fetch(EDGE_FN, {
@@ -92,7 +87,6 @@ async function postSoft<T>(body: Record<string, unknown>): Promise<T> {
     body: JSON.stringify(body),
   });
   const data = await res.json() as T;
-  // Only throw on actual server-level failures (no parseable body etc.)
   if (res.status >= 500) throw new Error("Server error");
   return data;
 }
@@ -166,13 +160,9 @@ export const GameService = {
 
   /**
    * Place a bet for the current Aviator round.
-   * Server deducts balance, inserts a pending bet row, and returns bet_id.
-   * Client must use debitLocalOnly() before calling this — do NOT use debit()
-   * or balance will be double-deducted.
-   *
-   * Uses postSoft so "Betting window closed" / "Round already ended" come back as
-   * { success: false, error: "..." } instead of being thrown as exceptions.
-   * This prevents the catch block from triggering a balance refund on soft rejections.
+   * Uses postSoft so server soft-rejections (round ended, window closed)
+   * come back as { success: false } instead of thrown exceptions.
+   * Client must call store.debitLocalOnly() before this — server also deducts.
    */
   aviatorPlaceBet(userId: string, betAmount: number, roundUuid: string | null, placedAtMs?: number): Promise<AviatorPlaceBetResult> {
     return postSoft<AviatorPlaceBetResult>({
@@ -185,9 +175,8 @@ export const GameService = {
   },
 
   /**
-   * Called at the START of each Aviator round (waiting phase).
-   * Server generates crash_point via crypto.getRandomValues() and stores it.
-   * Returns ONLY round metadata — crash point is NEVER returned here.
+   * Called at the START of each Aviator round.
+   * Server generates crash_point and stores it — never returned here.
    */
   aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
     return post<AviatorRoundStartResult>({
@@ -199,8 +188,6 @@ export const GameService = {
 
   /**
    * Called when a player clicks Cash Out during flying phase.
-   * Server validates timing using its own clock + stored started_at.
-   * Atomically credits balance. Returns crash_point only if round crashed.
    */
   aviatorCashout(
     userId: string,
@@ -219,8 +206,7 @@ export const GameService = {
 
   /**
    * Called after a round ends for bets that did NOT cash out (always a loss).
-   * Server records the bet and returns the real crash_point for history display.
-   * @param roundUuid - the round UUID string (not a numeric id)
+   * @param roundUuid - the round UUID string
    */
   aviatorSettle(userId: string, roundUuid: string, _legacyRoundId: number, betAmount: number): Promise<AviatorSettleResult> {
     return post<AviatorSettleResult>({
@@ -232,10 +218,7 @@ export const GameService = {
   },
 
   /**
-   * Polled every ~300ms during the flying phase to detect when the server has
-   * passed its crash point. Returns crash_point only AFTER the server's own
-   * clock has crossed it — the client never learns the value early.
-   * No user auth required; all players see the same public crash event.
+   * Polled every ~300ms during flying phase to detect server crash.
    */
   aviatorRoundStatus(roundId: number): Promise<AviatorRoundStatusResult> {
     return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: String(roundId) });

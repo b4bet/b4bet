@@ -4,9 +4,9 @@ import { HistoryBar } from './HistoryBar';
 import { FlightCanvas, type CashoutNotice, type InsufficientBalanceNotice, type TimeoutNotice } from './FlightCanvas';
 import { useGameAudio } from './game/useGameAudio';
 import { BettingPanel, createInitialBet, type BetState } from './BettingPanel';
-import { Sidebar, makeSimBet, type BetRecord, type ChatMessage } from './Sidebar';
+import { Sidebar, type BetRecord, type ChatMessage } from './Sidebar';
 import { useAviatorGame } from './game/useAviatorGame';
-import { formatMoney, randomAvatarColor, randomName } from './game/format';
+import { formatMoney } from './game/format';
 import { useBalance } from '../../lib/hooks';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
@@ -17,12 +17,12 @@ import { aviatorLoop } from '../../lib/persistentGameEngine';
 const PLAYER_NAME = 'You';
 
 /**
- * Result returned by handlePlaceBet (and onPlaceBet prop).
+ * Result returned by handlePlaceBet / onPlaceBet prop.
  *   ok: true  — bet accepted by server
- *   ok: false — rejected; reason describes why:
- *     'range'           – amount out of min/max limits
+ *   ok: false — rejected; reason:
+ *     'range'           – amount out of min/max
  *     'insufficient'    – not enough balance
- *     'server_rejected' – server returned success:false (round ended etc.)
+ *     'server_rejected' – server returned success:false
  *     'error'           – network or unexpected error
  */
 export type PlaceBetResult = { ok: boolean; reason?: string };
@@ -85,25 +85,9 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  useEffect(() => {
-    if (phase !== 'flying') return;
-    // No fake bets added during flight
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, roundId]);
-
-  useEffect(() => {
-    if (phase !== 'flying') return;
-    // No fake cashouts processed
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [multiplier, phase]);
-
   /**
-   * Called by BettingPanel when the player clicks BET.
-   *
-   * Returns PlaceBetResult: { ok: true } on success or { ok: false, reason } on failure.
-   *
-   * Uses debitLocalOnly() to avoid double-deduction: the server (aviator_place_bet)
-   * also deducts from Supabase balance.
+   * Place bet via server. Returns PlaceBetResult.
+   * Uses debitLocalOnly — server also deducts, so debit() would double-deduct.
    */
   const handlePlaceBet = useCallback(async (amount: number): Promise<PlaceBetResult> => {
     const limits = store.getGameLimits('aviator');
@@ -116,8 +100,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       return { ok: false, reason: 'range' };
     }
 
-    // Use debitLocalOnly: the server (aviator_place_bet) deducts from Supabase.
-    // debit() would also write to Supabase causing a double deduction.
     const debited = store.debitLocalOnly(amount);
     if (!debited) return { ok: false, reason: 'insufficient' };
 
@@ -136,27 +118,23 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       );
 
       if (!result.success) {
-        // Server soft-rejected (e.g. "Round already ended", "Betting window closed")
-        // Refund the local debit so balance stays accurate.
         store.credit(amount);
         return { ok: false, reason: 'server_rejected' };
       }
 
-      // Bet accepted — dispatch bet_id for panel state update
       if (result.bet_id) {
         const event = new CustomEvent('aviator:bet_registered', { detail: { betId: result.bet_id } });
         window.dispatchEvent(event);
       }
       return { ok: true };
     } catch {
-      // Network / server error — refund local debit
       store.credit(amount);
       return { ok: false, reason: 'error' };
     }
   }, []);
 
   const handleCancelBet = useCallback(
-    (panel: 0 | 1, amount: number, _betId?: string | null) => {
+    (panel: 0 | 1, amount: number) => {
       store.credit(amount);
       const id = `me-${roundId}-${panel}`;
       setAllBets((prev) => prev.filter((b) => b.id !== id));
@@ -201,7 +179,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         const next = updater(prev);
         if (!prev.placed && next.placed && prev.roundId === roundId) {
           recordPlayerBet(panel, next.amount);
-          // Listen for server bet_id and store it in this panel's state
           const handler = (e: Event) => {
             const detail = (e as CustomEvent<{ betId: string }>).detail;
             const setter2 = panel === 0 ? setBet0 : setBet1;
@@ -209,7 +186,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
             window.removeEventListener('aviator:bet_registered', handler);
           };
           window.addEventListener('aviator:bet_registered', handler);
-          // Auto-cleanup after 10s to avoid leaks
           setTimeout(() => window.removeEventListener('aviator:bet_registered', handler), 10_000);
         }
         if (prev.cashedOutAt === null && next.cashedOutAt !== null) {
@@ -291,7 +267,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               roundId={roundId}
               balance={balance}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
+              onCancelBet={(amount) => handleCancelBet(0, amount)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
@@ -306,7 +282,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               roundId={roundId}
               balance={balance}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
+              onCancelBet={(amount) => handleCancelBet(1, amount)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
