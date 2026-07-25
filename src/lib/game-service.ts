@@ -46,7 +46,7 @@ export interface AviatorRoundStatusResult {
   crash_point: number | null;
 }
 
-// ── Helper ───────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function get<T>(params: Record<string, string>): Promise<T> {
   const qs = new URLSearchParams(params).toString();
@@ -59,6 +59,7 @@ async function get<T>(params: Record<string, string>): Promise<T> {
   return data;
 }
 
+/** Standard post — throws if HTTP error or response has { error: "..." } field. */
 async function post<T>(body: Record<string, unknown>): Promise<T> {
   const res = await fetch(EDGE_FN, {
     method: "POST",
@@ -70,6 +71,29 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
   });
   const data = await res.json() as T & { error?: string };
   if (!res.ok || data.error) throw new Error((data as { error?: string }).error ?? "Server error");
+  return data;
+}
+
+/**
+ * Soft post — throws ONLY on actual HTTP errors (4xx/5xx without a parseable body).
+ * Soft rejections like { success: false, error: "Round already ended" } on HTTP 200
+ * are returned as-is so the caller can inspect result.success without going into catch.
+ *
+ * Use this for aviatorPlaceBet so "Betting window closed" / "Round already ended"
+ * come back as { success: false } instead of being thrown and triggering a balance refund.
+ */
+async function postSoft<T>(body: Record<string, unknown>): Promise<T> {
+  const res = await fetch(EDGE_FN, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+    },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json() as T;
+  // Only throw on actual server-level failures (no parseable body etc.)
+  if (res.status >= 500) throw new Error("Server error");
   return data;
 }
 
@@ -145,13 +169,18 @@ export const GameService = {
    * Server deducts balance, inserts a pending bet row, and returns bet_id.
    * Client must use debitLocalOnly() before calling this — do NOT use debit()
    * or balance will be double-deducted.
+   *
+   * Uses postSoft so "Betting window closed" / "Round already ended" come back as
+   * { success: false, error: "..." } instead of being thrown as exceptions.
+   * This prevents the catch block from triggering a balance refund on soft rejections.
    */
-  aviatorPlaceBet(userId: string, betAmount: number, roundUuid: string | null): Promise<AviatorPlaceBetResult> {
-    return post<AviatorPlaceBetResult>({
+  aviatorPlaceBet(userId: string, betAmount: number, roundUuid: string | null, placedAtMs?: number): Promise<AviatorPlaceBetResult> {
+    return postSoft<AviatorPlaceBetResult>({
       action: "aviator_place_bet",
       user_id: userId,
       bet_amount: betAmount,
       round_uuid: roundUuid,
+      placed_at_ms: placedAtMs ?? Date.now(),
     });
   },
 
