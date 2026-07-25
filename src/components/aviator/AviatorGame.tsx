@@ -89,13 +89,13 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   /**
    * Called by BettingPanel when the player clicks BET.
    *
-   * Returns a Promise<boolean> — true if bet was accepted by the server.
+   * Returns a Promise<boolean> — true only if server accepted the bet.
    *
    * Uses debitLocalOnly() to avoid double-deduction: the server also
    * deducts from Supabase in aviator_place_bet.
    *
-   * IMPORTANT: if the server rejects the bet (success: false), we refund
-   * the local debit immediately so the UI balance stays consistent.
+   * IMPORTANT: if server rejects (success: false), we refund the local
+   * debit immediately so the UI balance stays correct.
    */
   const handlePlaceBet = useCallback(async (amount: number): Promise<boolean> => {
     const limits = store.getGameLimits('aviator');
@@ -114,7 +114,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
     const session = auth.getSession();
     if (!session) {
-      // Refund local debit if no session
       store.credit(amount);
       return false;
     }
@@ -127,10 +126,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       );
 
       if (!result.success) {
-        // Server rejected the bet (window closed, insufficient balance, etc.)
-        // Refund the local-only debit so the UI balance stays correct.
+        // Server rejected the bet — refund local debit so UI balance is correct.
         store.credit(amount);
-        // If server returned an updated balance, sync it
         if (result.balance_after != null) {
           store.setBalance(result.balance_after);
         }
@@ -144,7 +141,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       }
       return true;
     } catch {
-      // Network / server error — refund local debit so UI balance is correct.
+      // Network/server error — refund local debit so UI balance is correct.
       store.credit(amount);
       return false;
     }
@@ -271,8 +268,10 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           <FlightCanvas
             phase={phase}
             multiplier={multiplier}
+            countdown={countdown}
+            lastCrash={lastCrash}
             animationOn={animationOn}
-            cashoutNotices={cashoutNotices}
+            cashouts={cashoutNotices}
             insufficientBalanceNotices={insufficientBalanceNotices}
             timeoutNotices={timeoutNotices}
           />
@@ -311,6 +310,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         </div>
         <Sidebar
           phase={phase}
+          multiplier={multiplier}
           allBets={allBets}
           myBets={myBets}
           chat={chat}
