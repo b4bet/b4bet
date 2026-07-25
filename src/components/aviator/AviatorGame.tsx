@@ -31,8 +31,8 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
 
   const { playCashOut } = useGameAudio(phase, soundOn, musicOn);
 
-  const [bet0, setBet0] = useState<BetState>(() => createInitialBet(1));
-  const [bet1, setBet1] = useState<BetState>(() => createInitialBet(1));
+  const [bet0, setBet0] = useState<BetState>(() => createInitialBet(roundId));
+  const [bet1, setBet1] = useState<BetState>(() => createInitialBet(roundId));
 
   const [allBets, setAllBets] = useState<BetRecord[]>([]);
   const [myBets, setMyBets] = useState<BetRecord[]>([]);
@@ -78,6 +78,8 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
       });
       return false;
     }
+
+    // Deduct balance locally (optimistic) — refund if server rejects
     const ok = store.debitLocalOnly(amount);
     if (!ok) return false;
 
@@ -90,7 +92,20 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
         amount,
         aviatorLoop.getRoundUuid(),
       );
-      if (result.success && result.bet_id) {
+
+      if (!result.success) {
+        // Server rejected — refund local balance and cancel optimistic placed state
+        store.credit(amount);
+        // Show specific error if available
+        if (result.error === 'Insufficient balance') {
+          showInsufficientBalanceNotice();
+        } else if (result.error) {
+          cms.toast({ title: 'Bet failed', body: result.error, kind: 'alert' });
+        }
+        return false;
+      }
+
+      if (result.bet_id) {
         window.dispatchEvent(new CustomEvent('aviator:bet_registered', { detail: { betId: result.bet_id } }));
       }
       return true;
@@ -98,7 +113,7 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
       store.credit(amount);
       return false;
     }
-  }, []);
+  }, [showInsufficientBalanceNotice]);
 
   const handleCancelBet = useCallback(
     (panel: 0 | 1, amount: number, betId: string | null) => {
@@ -149,7 +164,8 @@ export default function AviatorGame({ onBack: _onBack }: AviatorGameProps) {
       const setter = panel === 0 ? setBet0 : setBet1;
       setter((prev) => {
         const next = updater(prev);
-        if (!prev.placed && next.placed && prev.roundId === roundId) {
+        // Record bet when placed transitions false → true
+        if (!prev.placed && next.placed) {
           recordPlayerBet(panel, next.amount);
           const handler = (e: Event) => {
             const detail = (e as CustomEvent<{ betId: string }>).detail;
