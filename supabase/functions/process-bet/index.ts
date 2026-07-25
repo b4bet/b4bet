@@ -38,31 +38,49 @@ serve(async (req) => {
     const action = (payload.action ?? payload.game_type ?? "") as string;
 
     // ── aviator_current_round ────────────────────────────────────────────────
-    // Returns the current round state so the client engine can sync with server.
+    // Calls the self-advancing RPC so phases progress automatically:
+    //   waiting(6s) → flying(until crash_point hit) → crashed(3s) → waiting
     if (action === "aviator_current_round") {
-      const { data: row } = await supabase
-        .from("aviator_current_round")
-        .select("round_uuid, phase, phase_started_at, crash_point, last_crash_point")
-        .eq("id", 1)
-        .single();
+      const { data: rpcResult, error: rpcError } = await supabase.rpc("aviator_get_current_round");
 
-      if (!row) {
+      if (rpcError || !rpcResult) {
+        // Fallback: read table directly if RPC not yet deployed
+        const { data: row } = await supabase
+          .from("aviator_current_round")
+          .select("round_uuid, phase, phase_started_at, crash_point, last_crash_point")
+          .eq("id", 1)
+          .single();
+
+        if (!row) {
+          return new Response(
+            JSON.stringify({ phase: "waiting", elapsed_ms: 0, round_uuid: null, crash_point: null, last_crash_point: null }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+
+        const phaseStartedAt = new Date(row.phase_started_at).getTime();
+        const elapsed_ms = Math.max(0, Date.now() - phaseStartedAt);
         return new Response(
-          JSON.stringify({ phase: "waiting", elapsed_ms: 0, round_uuid: null, crash_point: null, last_crash_point: null }),
+          JSON.stringify({
+            phase: row.phase ?? "waiting",
+            elapsed_ms,
+            round_uuid: row.round_uuid ?? null,
+            crash_point: row.crash_point != null ? Number(row.crash_point) : null,
+            last_crash_point: row.last_crash_point != null ? Number(row.last_crash_point) : null,
+          }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
-      const phaseStartedAt = new Date(row.phase_started_at).getTime();
-      const elapsed_ms = Math.max(0, Date.now() - phaseStartedAt);
-
+      // RPC returns JSONB — extract fields
+      const r = rpcResult as Record<string, unknown>;
       return new Response(
         JSON.stringify({
-          phase: row.phase ?? "waiting",
-          elapsed_ms,
-          round_uuid: row.round_uuid ?? null,
-          crash_point: row.crash_point != null ? Number(row.crash_point) : null,
-          last_crash_point: row.last_crash_point != null ? Number(row.last_crash_point) : null,
+          phase: r.phase ?? "waiting",
+          elapsed_ms: Number(r.elapsed_ms ?? 0),
+          round_uuid: r.round_uuid ?? null,
+          crash_point: r.crash_point != null ? Number(r.crash_point) : null,
+          last_crash_point: r.last_crash_point != null ? Number(r.last_crash_point) : null,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -79,6 +97,26 @@ serve(async (req) => {
       const history = (rows ?? [])
         .map((r: { bust_point: unknown }) => Number(r.bust_point))
         .filter((v: number) => !isNaN(v) && v > 0);
+
+      return new Response(
+        JSON.stringify({ history }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── aviator_history_detail ───────────────────────────────────────────────
+    if (action === "aviator_history_detail") {
+      const { data: rows } = await supabase
+        .from("aviator_rounds")
+        .select("bust_point, round_uuid")
+        .order("id", { ascending: false })
+        .limit(20);
+
+      const history = (rows ?? []).map((r: { bust_point: unknown; round_uuid: unknown }) => ({
+        bust_point: Number(r.bust_point),
+        round_uuid: r.round_uuid ?? null,
+        server_seed: null,
+      }));
 
       return new Response(
         JSON.stringify({ history }),
@@ -140,7 +178,6 @@ serve(async (req) => {
 
       const CANCEL_GRACE_MS = 2000;
 
-      // Read phase directly from table — do NOT use RPC (it would transition phases)
       const { data: roundRow } = await supabase
         .from("aviator_current_round")
         .select("phase, phase_started_at")
@@ -200,11 +237,15 @@ serve(async (req) => {
     if (action === "aviator_cashout") {
       const { user_id, bet_amount, cashout_at, placed_at_ms } = payload;
       const betNum = Number(bet_amount);
-      const cashoutMultiplier = Number(cashout_at ?? payload.cashout_multiplier ?? payload.multiplier ?? 0);
+      // Accept cashout_at >= 1.0 (multiplier can be exactly 1.00x at round start)
+      const cashoutMultiplier = Math.max(
+        1.0,
+        Number(cashout_at ?? payload.cashout_multiplier ?? payload.multiplier ?? 1.0)
+      );
       const roundUuid = payload.round_uuid ?? null;
       const betId = payload.bet_id ?? null;
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
-      if (!cashoutMultiplier || cashoutMultiplier < 1.01) throw new Error("Invalid cashout multiplier");
+      if (cashoutMultiplier <= 0) throw new Error("Invalid cashout multiplier");
 
       if (betId) {
         const { data: existingBet } = await supabase.from("bets").select("id, status, win_amount, multiplier").eq("id", betId).maybeSingle();
@@ -214,10 +255,11 @@ serve(async (req) => {
         }
         if (existingBet && existingBet.status === "lost") {
           const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
-          return new Response(JSON.stringify({ success: false, won: false, win: 0, balance_after: Number(profile?.balance ?? null), crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
+          return new Response(JSON.stringify({ success: false, won: false, win: 0, balance_after: Number(profile?.balance ?? 0), crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
         }
       }
 
+      // Check if round has already crashed
       let bustPoint: number | null = null;
       if (roundUuid) {
         const { data: roundData } = await supabase.from("aviator_rounds").select("bust_point").eq("round_uuid", roundUuid).order("id", { ascending: false }).limit(1);
@@ -250,21 +292,7 @@ serve(async (req) => {
       const roundUuid = payload.round_uuid ?? null;
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
-      // ── CRITICAL FIX ────────────────────────────────────────────────────────
-      // Read phase directly from the table WITHOUT calling the RPC.
-      //
-      // The RPC (aviator_get_current_round) does automatic phase transitions:
-      //   waiting → flying, flying → crashed, crashed → waiting
-      //
-      // Calling the RPC here had a fatal race condition:
-      //   1. Server table is in 'flying' phase, crash_point already exceeded by elapsed time
-      //   2. RPC call transitions flying → crashed and returns phase='crashed'
-      //   3. Edge Function rejects the bet with "Round already ended"
-      //   4. Client (which showed 'waiting' from its last poll) sees immediate cancel
-      //
-      // Directly reading the table avoids ALL phase transition side-effects.
-      // The phase stored in the table is the ground truth for the current state.
-      // ────────────────────────────────────────────────────────────────────────
+      // Read phase directly from table — NOT via RPC to avoid unwanted phase transitions
       const { data: roundRow, error: roundErr } = await supabase
         .from("aviator_current_round")
         .select("phase, phase_started_at, round_uuid")
@@ -277,8 +305,6 @@ serve(async (req) => {
       const phaseStartedAt = new Date(roundRow.phase_started_at).getTime();
       const serverElapsedMs = Math.max(0, Date.now() - phaseStartedAt);
 
-      // Flying phase: allow bets only within the first 5 seconds of takeoff
-      // (grace window for clients that were in 'waiting' when takeoff happened)
       if (currentPhase === "flying") {
         const FLYING_GRACE_MS = 5000;
         if (serverElapsedMs > FLYING_GRACE_MS) {
@@ -289,15 +315,12 @@ serve(async (req) => {
         }
       }
 
-      // Crashed phase: never accept bets
       if (currentPhase === "crashed") {
         return new Response(
           JSON.stringify({ success: false, error: "Round already ended", balance_after: null }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
         );
       }
-
-      // 'waiting' phase: accept all bets
 
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
@@ -306,7 +329,6 @@ serve(async (req) => {
         .single();
       if (profileError || !profile) throw new Error("User profile not found");
 
-      // Explicitly cast bigint balance to number
       const currentBalance = Number(profile.balance);
 
       if (currentBalance < betNum) {
@@ -345,7 +367,7 @@ serve(async (req) => {
       );
     }
 
-    // ── aviator_settle / aviator_settle_lost ─────────────────────────────────
+    // ── aviator_settle ───────────────────────────────────────────────────────
     if (action === "aviator_settle" || action === "aviator_settle_lost") {
       const { user_id, bet_amount, bust_point, round_uuid } = payload;
       if (user_id && bet_amount) {
@@ -378,9 +400,9 @@ serve(async (req) => {
       return new Response(JSON.stringify({ crashed: false, crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ── Legacy handlers (aviator, crash, dice) ───────────────────────────────
-    if (action === "aviator" || action === "crash" || action === "dice" ||
-        payload.bet_amount !== undefined) {
+    // ── Legacy handlers (crash, dice) ────────────────────────────────────────
+    if (action === "crash" || action === "dice" ||
+        (payload.game_type !== undefined && payload.bet_amount !== undefined)) {
 
       const { game_type, bet_amount, user_id } = payload;
 
@@ -405,13 +427,7 @@ serve(async (req) => {
       let multiplier = 1;
       let won = false;
 
-      const rand = getSecureRandom();
-      if (game_type === "aviator") {
-        const crashPoint = Math.max(1.01, Math.floor(Math.exp(rand * 3) * 100) / 100);
-        const autoCashout = 2.5;
-        multiplier = Math.min(crashPoint, autoCashout);
-        won = multiplier >= autoCashout;
-      } else if (game_type === "crash") {
+      if (game_type === "crash") {
         multiplier = Math.max(1.01, Math.exp(getSecureRandom() * 5));
         won = false;
       } else if (game_type === "dice") {
