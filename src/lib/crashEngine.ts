@@ -205,12 +205,14 @@ class CrashEngine {
         try { sessionStorage.setItem(SESSION_ROUND_KEY, this.lastKnownRoundId); } catch { /* ignore */ }
 
         // Safety guard: settle any placed-but-unsettled bets before wiping.
-        // Under normal operation (DB fix applied) this should never trigger because
-        // bets are either cashed out or settled by settleBustedBets() before the
-        // crashed→waiting transition. But kept as a safety net.
+        // The round ended before we processed the crash phase locally (fast round
+        // or missed poll). Settle as a LOSS — do NOT refund with store.credit()
+        // because the round ran and the player lost their stake.
         for (const slot of Object.values(this.state.bets)) {
           if (slot.placed && slot.cashedOutAt === null && slot.win === null) {
-            store.credit(slot.amount);
+            slot.win = 0;
+            const bustPt = this.state.bustPoint > 0 ? this.state.bustPoint : this.state.multiplier;
+            void settleSlotOnServer({ ...slot }, this.state.roundId, bustPt);
           }
         }
 
