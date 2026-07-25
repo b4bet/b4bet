@@ -16,6 +16,17 @@ import { aviatorLoop } from '../../lib/persistentGameEngine';
 
 const PLAYER_NAME = 'You';
 
+/**
+ * Result returned by handlePlaceBet (and onPlaceBet prop).
+ *   ok: true  — bet accepted by server
+ *   ok: false — rejected; reason describes why:
+ *     'range'           – amount out of min/max limits
+ *     'insufficient'    – not enough balance
+ *     'server_rejected' – server returned success:false (round ended etc.)
+ *     'error'           – network or unexpected error
+ */
+export type PlaceBetResult = { ok: boolean; reason?: string };
+
 interface AviatorGameProps {
   onBack?: () => void;
 }
@@ -89,14 +100,12 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   /**
    * Called by BettingPanel when the player clicks BET.
    *
-   * Returns a Promise<{ ok: boolean; reason?: string }> —
-   *   ok: true  → bet was accepted by server, balance already deducted server-side
-   *   ok: false → bet rejected or network error, local balance refunded
+   * Returns PlaceBetResult: { ok: true } on success or { ok: false, reason } on failure.
    *
    * Uses debitLocalOnly() to avoid double-deduction: the server (aviator_place_bet)
    * also deducts from Supabase balance.
    */
-  const handlePlaceBet = useCallback(async (amount: number): Promise<{ ok: boolean; reason?: string }> => {
+  const handlePlaceBet = useCallback(async (amount: number): Promise<PlaceBetResult> => {
     const limits = store.getGameLimits('aviator');
     if (amount < limits.min || amount > limits.max) {
       cms.toast({
@@ -147,7 +156,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   const handleCancelBet = useCallback(
-    (panel: 0 | 1, amount: number) => {
+    (panel: 0 | 1, amount: number, _betId?: string | null) => {
       store.credit(amount);
       const id = `me-${roundId}-${panel}`;
       setAllBets((prev) => prev.filter((b) => b.id !== id));
@@ -282,7 +291,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               roundId={roundId}
               balance={balance}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount) => handleCancelBet(0, amount)}
+              onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
@@ -297,7 +306,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               roundId={roundId}
               balance={balance}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount) => handleCancelBet(1, amount)}
+              onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
