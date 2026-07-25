@@ -39,7 +39,7 @@ serve(async (req) => {
 
     // ── aviator_current_round ────────────────────────────────────────────────
     // Calls the self-advancing RPC so phases progress automatically:
-    //   waiting(6s) → flying(until crash_point hit) → crashed(3s) → waiting
+    // waiting(6s) → flying(until crash_point hit) → crashed(3s) → waiting
     if (action === "aviator_current_round") {
       const { data: rpcResult, error: rpcError } = await supabase.rpc("aviator_get_current_round");
 
@@ -47,13 +47,13 @@ serve(async (req) => {
         // Fallback: read table directly if RPC not yet deployed
         const { data: row } = await supabase
           .from("aviator_current_round")
-          .select("round_uuid, phase, phase_started_at, crash_point, last_crash_point")
+          .select("round_uuid, phase, phase_started_at, crash_point, last_crash_point, server_seed_hash")
           .eq("id", 1)
           .single();
 
         if (!row) {
           return new Response(
-            JSON.stringify({ phase: "waiting", elapsed_ms: 0, round_uuid: null, crash_point: null, last_crash_point: null }),
+            JSON.stringify({ phase: "waiting", elapsed_ms: 0, round_uuid: null, crash_point: null, last_crash_point: null, server_seed_hash: null }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
@@ -67,6 +67,7 @@ serve(async (req) => {
             round_uuid: row.round_uuid ?? null,
             crash_point: row.crash_point != null ? Number(row.crash_point) : null,
             last_crash_point: row.last_crash_point != null ? Number(row.last_crash_point) : null,
+            server_seed_hash: row.server_seed_hash ?? null,
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
@@ -81,6 +82,7 @@ serve(async (req) => {
           round_uuid: r.round_uuid ?? null,
           crash_point: r.crash_point != null ? Number(r.crash_point) : null,
           last_crash_point: r.last_crash_point != null ? Number(r.last_crash_point) : null,
+          server_seed_hash: r.server_seed_hash ?? null,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -106,16 +108,27 @@ serve(async (req) => {
 
     // ── aviator_history_detail ───────────────────────────────────────────────
     if (action === "aviator_history_detail") {
+      // Use the DB function that returns server seeds for provably fair verification
+      const { data: rpcData, error: rpcErr } = await supabase.rpc("aviator_get_history_detail");
+      if (!rpcErr && rpcData) {
+        return new Response(
+          JSON.stringify(rpcData),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Fallback: plain table query
       const { data: rows } = await supabase
         .from("aviator_rounds")
-        .select("bust_point, round_uuid")
+        .select("bust_point, round_uuid, server_seed, server_seed_hash")
         .order("id", { ascending: false })
         .limit(20);
 
-      const history = (rows ?? []).map((r: { bust_point: unknown; round_uuid: unknown }) => ({
+      const history = (rows ?? []).map((r: { bust_point: unknown; round_uuid: unknown; server_seed: unknown; server_seed_hash: unknown }) => ({
         bust_point: Number(r.bust_point),
         round_uuid: r.round_uuid ?? null,
-        server_seed: null,
+        server_seed: r.server_seed ?? null,
+        server_seed_hash: r.server_seed_hash ?? null,
       }));
 
       return new Response(
@@ -237,7 +250,6 @@ serve(async (req) => {
     if (action === "aviator_cashout") {
       const { user_id, bet_amount, cashout_at, placed_at_ms } = payload;
       const betNum = Number(bet_amount);
-      // Accept cashout_at >= 1.0 (multiplier can be exactly 1.00x at round start)
       const cashoutMultiplier = Math.max(
         1.0,
         Number(cashout_at ?? payload.cashout_multiplier ?? payload.multiplier ?? 1.0)
@@ -259,7 +271,6 @@ serve(async (req) => {
         }
       }
 
-      // Check if round has already crashed
       let bustPoint: number | null = null;
       if (roundUuid) {
         const { data: roundData } = await supabase.from("aviator_rounds").select("bust_point").eq("round_uuid", roundUuid).order("id", { ascending: false }).limit(1);
@@ -305,8 +316,9 @@ serve(async (req) => {
       const phaseStartedAt = new Date(roundRow.phase_started_at).getTime();
       const serverElapsedMs = Math.max(0, Date.now() - phaseStartedAt);
 
+      // Flying phase: accept bets within the first 15 seconds (wider grace for slow connections)
       if (currentPhase === "flying") {
-        const FLYING_GRACE_MS = 5000;
+        const FLYING_GRACE_MS = 15000;
         if (serverElapsedMs > FLYING_GRACE_MS) {
           return new Response(
             JSON.stringify({ success: false, error: "Betting window closed", balance_after: null }),
@@ -345,7 +357,8 @@ serve(async (req) => {
         .eq("id", user_id);
       if (updateError) throw new Error(`Balance deduction failed: ${updateError.message}`);
 
-      const { data: betRecord } = await supabase
+      // Insert bet record and return the new bet ID
+      const { data: betRecord, error: betInsertError } = await supabase
         .from("bets")
         .insert({
           user_id,
@@ -354,15 +367,22 @@ serve(async (req) => {
           win_amount: 0,
           multiplier: 0,
           status: "pending",
-          bet_details: { game: "aviator", round_id: round_id ?? null, round_uuid: roundUuid },
+          bet_details: { game: "aviator", round_id: round_id ?? null, round_uuid: roundUuid ?? roundRow.round_uuid ?? null },
           placed_at: new Date().toISOString(),
         })
         .select("id")
-        .maybeSingle()
-        .catch(() => ({ data: null }));
+        .maybeSingle();
+
+      if (betInsertError) {
+        // Bet record failed — refund balance to keep DB consistent
+        await supabase.from("profiles").update({ balance: currentBalance }).eq("id", user_id);
+        throw new Error(`Bet record failed: ${betInsertError.message}`);
+      }
+
+      const betId = (betRecord as { id?: string } | null)?.id ?? null;
 
       return new Response(
-        JSON.stringify({ success: true, balance_after: newBalance, bet_id: (betRecord as { id?: string } | null)?.id ?? null }),
+        JSON.stringify({ success: true, balance_after: newBalance, bet_id: betId }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
