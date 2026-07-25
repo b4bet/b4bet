@@ -286,6 +286,16 @@ class AviatorLoop {
   private bootstrapped = false;
   /** SHA-256 hash of server seed — published before round starts for provably fair verification */
   private serverSeedHash: string | null = null;
+  /**
+   * Tracks the highest phase "progress" we've reached locally so we never
+   * regress due to a stale server response.
+   *
+   * Order: waiting(0) → flying(1) → crashed(2) → waiting(0) ...
+   * We use a monotonic sequence number that increments every time we enter a
+   * new phase, so "waiting of round N+1" is distinguishable from
+   * "waiting of round N".
+   */
+  private phaseSeq = 0;
 
   constructor() {
     void this.syncFromServer();
@@ -349,6 +359,10 @@ class AviatorLoop {
     }
 
     if (res.phase === 'crashed') {
+      // If local engine has already advanced past this crash (into waiting),
+      // ignore the stale server response to prevent bouncing back.
+      if (this.phase === 'waiting') return;
+
       if (this.phase !== 'crashed') {
         const cp = res.crash_point ?? res.last_crash_point ?? AV_MAX_MULTIPLIER;
         this.handleCrash(cp, now - Math.min(res.elapsed_ms, AV_CRASH_HOLD_MS - 1));
@@ -358,7 +372,10 @@ class AviatorLoop {
     }
 
     if (res.phase === 'flying') {
-      if (this.phase === 'waiting' || this.phase === 'crashed') {
+      // If local engine has already crashed, don't go back to flying.
+      if (this.phase === 'crashed') return;
+
+      if (this.phase === 'waiting') {
         this.phase = 'flying';
         this.multiplier = aviatorMultiplierAt(res.elapsed_ms);
       }
@@ -378,6 +395,7 @@ class AviatorLoop {
         this.multiplier = 1.0;
         this.crashPoint = null;
         this.lastCrash = null;
+        this.phaseSeq += 1;
       }
       this.phaseStart = now - res.elapsed_ms;
       return;
@@ -447,6 +465,7 @@ class AviatorLoop {
         this.phase = 'flying';
         this.phaseStart = now;
         this.multiplier = 1.0;
+        this.phaseSeq += 1;
       }
     } else if (this.phase === 'flying') {
       const m = aviatorMultiplierAt(elapsed);
@@ -462,6 +481,7 @@ class AviatorLoop {
         this.multiplier = 1.0;
         this.lastCrash = null;
         this.crashPoint = null;
+        this.phaseSeq += 1;
       }
     }
 
@@ -475,6 +495,7 @@ class AviatorLoop {
     this.lastCrash = crashAt;
     this.crashPoint = crashAt;
     this.history = [crashAt, ...this.history].slice(0, AV_HISTORY_CAP);
+    this.phaseSeq += 1;
     bus.emit('engine:aviator:state', this.getState());
   }
 
