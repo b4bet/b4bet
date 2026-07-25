@@ -134,12 +134,24 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   const handleCancelBet = useCallback(
-    (panel: 0 | 1, amount: number) => {
+    (panel: 0 | 1, amount: number, betId?: string | null) => {
       store.credit(amount);
       const id = `me-${roundId}-${panel}`;
       setAllBets((prev) => prev.filter((b) => b.id !== id));
       setMyBets((prev) => prev.filter((b) => b.id !== id));
       pendingPlayerBets.current = pendingPlayerBets.current.filter((p) => p.panel !== panel);
+      // Cancel on server if we have a betId
+      if (betId) {
+        const session = auth.getSession();
+        if (session) {
+          void GameService.aviatorPlaceBet
+            // Use the cancel endpoint if available — for now just let the server
+            // auto-expire the pending bet at round end (it stays as a 'lost' with 0 win).
+            // TODO: call aviator_cancel_bet when that endpoint is wired up.
+            // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+            , betId;
+        }
+      }
     },
     [roundId],
   );
@@ -237,6 +249,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   return (
     <div className="flex flex-col h-full bg-[#0e0e1a] text-white overflow-hidden">
       <Header
+        balance={balance}
         soundOn={soundOn}
         musicOn={musicOn}
         animationOn={animationOn}
@@ -245,15 +258,16 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         onToggleAnimation={() => setAnimationOn((v) => !v)}
         onBack={onBack}
       />
-      <HistoryBar history={history} lastCrash={lastCrash} />
+      <HistoryBar history={history} />
       <div className="flex flex-1 overflow-hidden">
         <div className="flex flex-col flex-1 overflow-hidden">
           <FlightCanvas
             phase={phase}
             multiplier={multiplier}
             countdown={countdown}
+            lastCrash={lastCrash}
             animationOn={animationOn}
-            cashoutNotices={cashoutNotices}
+            cashouts={cashoutNotices}
             insufficientBalanceNotices={insufficientBalanceNotices}
             timeoutNotices={timeoutNotices}
           />
@@ -267,7 +281,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               roundId={roundId}
               balance={balance}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount) => handleCancelBet(0, amount)}
+              onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
@@ -282,7 +296,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
               roundId={roundId}
               balance={balance}
               onPlaceBet={handlePlaceBet}
-              onCancelBet={(amount) => handleCancelBet(1, amount)}
+              onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
               onCashOut={handleCashOut}
               onWin={handleWin}
               onInsufficientBalance={showInsufficientBalanceNotice}
@@ -291,6 +305,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           </div>
         </div>
         <Sidebar
+          phase={phase}
+          multiplier={multiplier}
           allBets={allBets}
           myBets={myBets}
           chat={chat}
