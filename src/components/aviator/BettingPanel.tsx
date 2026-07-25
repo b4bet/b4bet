@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import type { Phase } from './game/useAviatorGame';
+import type { PlaceBetResult } from './AviatorGame';
 import { formatMoney } from './game/format';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
@@ -46,7 +47,7 @@ interface BettingPanelProps {
   countdown: number;
   roundId: number;
   balance: number;
-  onPlaceBet: (amount: number) => Promise<boolean>;
+  onPlaceBet: (amount: number) => Promise<PlaceBetResult>;
   onCancelBet: (amount: number, betId: string | null) => void;
   onCashOut: (amount: number, at: number) => void;
   onWin: (amount: number) => void;
@@ -116,10 +117,10 @@ export function BettingPanel({
             nextRound.pendingNextRound = false;
             cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
           } else {
-            void onPlaceBet(b.amount).then((ok) => {
-              if (!ok) {
+            void onPlaceBet(b.amount).then((res) => {
+              if (!res.ok) {
                 setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
-                onInsufficientBalance?.();
+                if (res.reason === 'insufficient') onInsufficientBalance?.();
               } else {
                 betPlacedThisPhaseRef.current = true;
               }
@@ -190,12 +191,12 @@ export function BettingPanel({
       }
       if (bet.amount > balance) { onInsufficientBalance?.(); return; }
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
-        void onPlaceBet(bet.amount).then((ok) => {
-          if (ok) {
+        void onPlaceBet(bet.amount).then((res) => {
+          if (res.ok) {
             setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now(), roundId }));
             betPlacedThisPhaseRef.current = true;
           } else {
-            onInsufficientBalance?.();
+            if (res.reason === 'insufficient') onInsufficientBalance?.();
           }
         });
       } else {
@@ -226,12 +227,19 @@ export function BettingPanel({
       setBet((b) => ({ ...b, placed: true, placedAtMs: Date.now(), roundId }));
       betPlacedThisPhaseRef.current = true;
 
-      void onPlaceBet(bet.amount).then((ok) => {
-        if (!ok) {
-          // Revert on failure
-          setBet((b) => ({ ...b, placed: false }));
-          betPlacedThisPhaseRef.current = false;
-          onInsufficientBalance?.();
+      void onPlaceBet(bet.amount).then((res) => {
+        if (!res.ok) {
+          if (res.reason === 'window_closed') {
+            // Plane took off just as we placed — keep the bet queued for next round
+            // instead of cancelling. Balance was already refunded by handlePlaceBet.
+            setBet((b) => ({ ...b, placed: false, pendingNextRound: true }));
+            betPlacedThisPhaseRef.current = false;
+          } else {
+            // Real failure (insufficient balance, error) — fully revert
+            setBet((b) => ({ ...b, placed: false }));
+            betPlacedThisPhaseRef.current = false;
+            if (res.reason === 'insufficient') onInsufficientBalance?.();
+          }
         }
       });
       return;
@@ -259,6 +267,7 @@ export function BettingPanel({
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
     const at = atOverride ?? multiplier;
+    // Optimistically mark as cashed out so UI responds immediately
     setBet((b) => ({ ...b, cashedOutAt: at }));
     try {
       const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs, at, bet.betId);
@@ -267,9 +276,14 @@ export function BettingPanel({
         onCashOut(bet.amount, res.cashout_at ?? at);
         onWin(res.win);
       } else {
+        // Server rejected the cashout (plane crashed before it was processed).
+        // Revert the optimistic cashedOutAt so the crash effect can settle the bet.
+        setBet((b) => ({ ...b, cashedOutAt: null }));
         if (res.crash_point !== null) aviatorLoop.reportServerCrash(res.crash_point);
       }
     } catch {
+      // Network / unexpected error — revert optimistic state
+      setBet((b) => ({ ...b, cashedOutAt: null }));
       cms.toast({ title: 'Cashout error', body: 'Could not confirm cashout. Please check your balance.', kind: 'alert' });
     }
   }
