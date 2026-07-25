@@ -62,6 +62,11 @@ const QUICK_ADDS: { label: string; value: number }[] = [
   { label: '2K', value: 2000 },
 ];
 
+// How long to wait after phase becomes 'flying' before allowing auto-cashout.
+// This covers the round-trip time for bet registration so we never cashout
+// a bet that hasn't been confirmed by the server yet.
+const AUTO_CASHOUT_GRACE_MS = 600;
+
 export function BettingPanel({
   bet,
   setBet,
@@ -93,10 +98,16 @@ export function BettingPanel({
   const prevPhaseRef = useRef<Phase>(phase);
   // Whether the active bet was placed during this waiting phase (guards crash settlement)
   const betPlacedThisPhaseRef = useRef(false);
+  // Timestamp when the current flying phase started — used to enforce auto-cashout grace period
+  const flyingStartRef = useRef<number>(0);
 
   useEffect(() => {
     const prev = prevPhaseRef.current;
     prevPhaseRef.current = phase;
+
+    if (phase === 'flying' && prev !== 'flying') {
+      flyingStartRef.current = Date.now();
+    }
 
     // ── New waiting phase started (crashed/flying → waiting) ───────────────
     // Fire auto-bet or pending-next-round bet. Skip if bet is still placed
@@ -119,8 +130,17 @@ export function BettingPanel({
           } else {
             void onPlaceBet(b.amount).then((res) => {
               if (!res.ok) {
-                setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
-                if (res.reason === 'insufficient') onInsufficientBalance?.();
+                if (res.reason === 'window_closed') {
+                  // FIX: Race condition — plane took off while we were placing the auto-bet.
+                  // Queue for next round and keep autoBetEnabled active (old code wrongly
+                  // disabled autoBet here, causing the bet to visually cancel at takeoff).
+                  setBet((bb) => ({ ...bb, placed: false, pendingNextRound: true }));
+                  betPlacedThisPhaseRef.current = false;
+                } else {
+                  // Real failure (insufficient balance, server error) — disable auto-bet
+                  setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
+                  if (res.reason === 'insufficient') onInsufficientBalance?.();
+                }
               } else {
                 betPlacedThisPhaseRef.current = true;
               }
@@ -139,7 +159,23 @@ export function BettingPanel({
 
   // ── Auto cash-out trigger ──────────────────────────────────────────────
   useEffect(() => {
-    if (bet.placed && bet.cashedOutAt === null && bet.autoCashoutEnabled && phase === 'flying' && multiplier >= bet.autoCashoutValue) {
+    if (
+      bet.placed &&
+      bet.cashedOutAt === null &&
+      bet.autoCashoutEnabled &&
+      phase === 'flying' &&
+      multiplier >= bet.autoCashoutValue
+    ) {
+      // FIX: Enforce a grace period after the flying phase starts.
+      // Without this, the effect fires the moment phase becomes 'flying',
+      // potentially before the bet-placement server response has returned,
+      // causing a cashout request for a bet that isn't registered yet.
+      const flyingAge = Date.now() - flyingStartRef.current;
+      if (flyingAge < AUTO_CASHOUT_GRACE_MS) {
+        const delay = AUTO_CASHOUT_GRACE_MS - flyingAge;
+        const t = setTimeout(() => { void doCashOut(bet.autoCashoutValue); }, delay);
+        return () => clearTimeout(t);
+      }
       void doCashOut(bet.autoCashoutValue);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
