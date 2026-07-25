@@ -30,6 +30,11 @@ export interface AviatorPlaceBetResult {
   bet_id: string | null;
   error?: string;
 }
+export interface AviatorCancelBetResult {
+  success: boolean;
+  balance_after: number | null;
+  error?: string;
+}
 export interface AviatorCashoutResult {
   success: boolean;
   won: boolean;
@@ -199,7 +204,6 @@ export const GameService = {
    * Place a bet for the current Aviator round.
    * Uses postSoft so server soft-rejections (round ended, window closed)
    * come back as { success: false } instead of thrown exceptions.
-   * Client must call store.debitLocalOnly() before this — server also deducts.
    */
   aviatorPlaceBet(userId: string, betAmount: number, roundUuid: string | null, placedAtMs?: number): Promise<AviatorPlaceBetResult> {
     return postSoft<AviatorPlaceBetResult>({
@@ -212,8 +216,20 @@ export const GameService = {
   },
 
   /**
+   * Cancel a pending bet before/during early flying phase.
+   * Server refunds the bet amount back to the user's balance.
+   */
+  aviatorCancelBet(userId: string, betAmount: number, betId: string | null): Promise<AviatorCancelBetResult> {
+    return postSoft<AviatorCancelBetResult>({
+      action: "aviator_cancel_bet",
+      user_id: userId,
+      bet_amount: betAmount,
+      bet_id: betId,
+    });
+  },
+
+  /**
    * Called at the START of each Aviator round.
-   * Server generates crash_point and stores it — never returned here.
    */
   aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
     return post<AviatorRoundStartResult>({
@@ -225,7 +241,6 @@ export const GameService = {
 
   /**
    * Called when a player clicks Cash Out during flying phase.
-   * Signature matches AviatorLoop.cashoutBet() call in persistentGameEngine.ts.
    */
   aviatorCashout(
     userId: string,
@@ -248,9 +263,8 @@ export const GameService = {
 
   /**
    * Called after a round ends for bets that did NOT cash out (always a loss).
-   * @param roundUuid - the round UUID string
    */
-  aviatorSettle(userId: string, roundUuid: string, _legacyRoundId: number, betAmount: number): Promise<AviatorSettleResult> {
+  aviatorSettle(userId: string, roundUuid: string | null, _legacyRoundId: number, betAmount: number): Promise<AviatorSettleResult> {
     return post<AviatorSettleResult>({
       action: "aviator_settle",
       user_id: userId,
