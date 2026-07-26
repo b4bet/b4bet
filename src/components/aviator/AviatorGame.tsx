@@ -99,7 +99,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       );
 
       if (!result.success) {
-        // Server rejected the bet — refund local debit so UI balance is correct
         store.credit(amount);
         if (result.balance_after != null) {
           store.setBalance(result.balance_after);
@@ -151,13 +150,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCashoutNotice]);
 
-  // handleWin intentionally does NOT call store.credit(win).
-  // BettingPanel.doCashOut already calls store.setBalance(res.balance_after)
-  // which sets the correct server-authoritative balance. Calling credit() here
-  // as well would double-add the win amount.
   const handleWin = useCallback((_win: number) => {
     // Balance is already updated via store.setBalance(res.balance_after) in doCashOut.
-    // Nothing to do here — keep the callback for future UI hooks (win animation, etc).
   }, []);
 
   const recordPlayerBet = useCallback(
@@ -271,8 +265,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           timeoutNotices={timeoutNotices}
         />
 
-        {/* Betting panels */}
-        <div className="flex gap-2 p-2">
+        {/* Betting panels — Panel 1 full width on top, Panel 2 full width below */}
+        <div className="flex flex-col gap-2 p-2">
           <BettingPanel
             bet={bet0}
             setBet={wrapSetBet(0)}
