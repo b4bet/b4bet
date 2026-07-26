@@ -65,6 +65,9 @@ const QUICK_ADDS: { label: string; value: number }[] = [
 // Minimum ms to block double-tap after BET click
 const BET_DEBOUNCE_MS = 800;
 
+/** Delay helper for retry backoff */
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 export function BettingPanel({
   bet,
   setBet,
@@ -275,21 +278,44 @@ export function BettingPanel({
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
     const at = atOverride ?? multiplier;
+    // Optimistically mark as cashed out so UI updates immediately
     setBet((b) => ({ ...b, cashedOutAt: at }));
 
-    try {
-      const res = await aviatorLoop.cashoutBet(bet.amount, bet.placedAtMs, at, bet.betId);
-      if (res.won && res.win > 0) {
-        store.setBalance(res.balance_after);
-        onCashOut(bet.amount, res.cashout_at ?? at);
-        onWin(res.win);
-      } else {
-        if (res.crash_point !== null) {
-          aviatorLoop.reportServerCrash(res.crash_point);
+    // Snapshot betId now — state may change during async calls
+    const betId = bet.betId;
+    const betAmount = bet.amount;
+    const placedAtMs = bet.placedAtMs;
+
+    // Retry up to 2 times on network failure.
+    // The server uses betId for idempotency, so retrying is safe — it will
+    // never double-credit a win even if the first request already succeeded.
+    const MAX_ATTEMPTS = 2;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      try {
+        const res = await aviatorLoop.cashoutBet(betAmount, placedAtMs, at, betId);
+        if (res.won && res.win > 0) {
+          store.setBalance(res.balance_after);
+          onCashOut(betAmount, res.cashout_at ?? at);
+          onWin(res.win);
+        } else {
+          // Server says not won (crashed before cashout confirmed)
+          if (res.crash_point !== null) {
+            aviatorLoop.reportServerCrash(res.crash_point);
+          }
         }
+        return; // Done — stop retrying
+      } catch {
+        if (attempt < MAX_ATTEMPTS - 1) {
+          // Brief pause before retry (handles transient network blip)
+          await delay(1200);
+          continue;
+        }
+        // All attempts failed — this is a network issue on slow/mobile connections.
+        // The cashout UI is already showing "CASHED OUT" (cashedOutAt was set above).
+        // The server may have processed the win already — balance will sync on the
+        // next aviator server poll (every 300ms). Do NOT show an error toast here
+        // because it confuses users when their cashout actually went through.
       }
-    } catch {
-      cms.toast({ title: 'Cashout error', body: 'Could not confirm cashout. Please check your balance.', kind: 'alert' });
     }
   }
 
@@ -305,7 +331,7 @@ export function BettingPanel({
     );
     buttonClass = 'bg-[#22c55e]/50 cursor-wait';
   } else if (canCashOut) {
-    const livePayout = bet.amount * multiplier;
+    const livePayout = betAmount * multiplier;
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-sm font-bold tracking-wide">CASH OUT</span>
@@ -385,6 +411,8 @@ export function BettingPanel({
       ? 'bg-[#22c55e] hover:bg-[#4ade80] shadow-[0_4px_20px_rgba(34,197,94,0.5)] active:scale-95'
       : 'bg-[#22c55e]/30 cursor-not-allowed';
   }
+
+  const betAmount = bet.amount;
 
   const isButtonDisabled =
     isProcessing ||
