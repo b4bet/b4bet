@@ -1,10 +1,11 @@
 /**
- * CrashHistoryTabs — All Bets shows real bets from Supabase (no fake players).
+ * CrashHistoryTabs — All Bets shows real bets from Supabase (live + historical).
+ * Realtime subscription updates the list instantly when new bets arrive.
  * My Bets shows the current user's own crash bets.
  * Top shows the leaderboard seeded from the store.
  */
-import { useEffect, useMemo, useState } from 'react';
-import { useCrashMyBets } from '../lib/hooks';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCrashMyBets, useCrashState } from '../lib/hooks';
 import { store } from '../lib/store';
 import { supabase } from '../integrations/supabase/client';
 
@@ -29,51 +30,90 @@ interface RealBet {
   multiplier: number | null;
   win: number;
   ts: number;
+  status: string;
 }
-
-const CRASH_GAME_ID = 'ee8ae2ab-d62c-4378-a377-55b3f7be4b3e';
 
 export default function CrashHistoryTabs() {
   const [tab, setTab] = useState<Tab>('all');
   const [range, setRange] = useState<Range>('day');
   const mine = useCrashMyBets();
+  const crashState = useCrashState();
 
   // Real bets from Supabase
   const [allBets, setAllBets] = useState<RealBet[]>([]);
   const [loadingAll, setLoadingAll] = useState(false);
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+
+  const fetchBets = async () => {
+    setLoadingAll(true);
+    // Crash bets have bustPoint or cashOutAt in bet_details (no game key, or game key absent)
+    // We exclude aviator, sunvsmoon, mines explicitly
+    const { data } = await supabase
+      .from('bets')
+      .select('id, user_id, bet_amount, win_amount, multiplier, placed_at, status, profiles(username, display_name)')
+      .not('bet_details->>game', 'eq', 'aviator')
+      .not('bet_details->>game', 'eq', 'sunvsmoon')
+      .not('bet_details->>game', 'eq', 'mines')
+      .order('placed_at', { ascending: false })
+      .limit(50);
+
+    if (data) {
+      const rows: RealBet[] = (data as Array<{
+        id: string;
+        user_id: string;
+        bet_amount: number;
+        win_amount: number | null;
+        multiplier: number | null;
+        placed_at: string | null;
+        status: string;
+        profiles: { username: string | null; display_name: string | null } | null;
+      }>).map((b) => ({
+        id: b.id,
+        user: b.profiles?.display_name ?? b.profiles?.username ?? (b.user_id.slice(0, 6) + '…'),
+        stake: Number(b.bet_amount),
+        multiplier: b.multiplier != null ? Number(b.multiplier) : null,
+        win: Number(b.win_amount ?? 0),
+        ts: b.placed_at ? new Date(b.placed_at).getTime() : Date.now(),
+        status: b.status ?? 'unknown',
+      }));
+      setAllBets(rows);
+    }
+    setLoadingAll(false);
+  };
 
   useEffect(() => {
     if (tab !== 'all') return;
-    setLoadingAll(true);
-    supabase
-      .from('bets')
-      .select('id, user_id, bet_amount, win_amount, multiplier, placed_at, profiles(username)')
-      .eq('game_id', CRASH_GAME_ID)
-      .order('placed_at', { ascending: false })
-      .limit(30)
-      .then(({ data }) => {
-        if (data) {
-          const rows: RealBet[] = (data as Array<{
-            id: string;
-            user_id: string;
-            bet_amount: number;
-            win_amount: number | null;
-            multiplier: number | null;
-            placed_at: string | null;
-            profiles: { username: string } | null;
-          }>).map((b) => ({
-            id: b.id,
-            user: b.profiles?.username ?? b.user_id.slice(0, 8) + '…',
-            stake: Number(b.bet_amount),
-            multiplier: b.multiplier != null ? Number(b.multiplier) : null,
-            win: Number(b.win_amount ?? 0),
-            ts: b.placed_at ? new Date(b.placed_at).getTime() : Date.now(),
-          }));
-          setAllBets(rows);
-        }
-        setLoadingAll(false);
-      });
+
+    void fetchBets();
+
+    // Realtime subscription — new bets appear instantly
+    const ch = supabase
+      .channel('crash_bets_live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'bets' },
+        () => { void fetchBets(); },
+      )
+      .subscribe();
+
+    channelRef.current = ch;
+
+    return () => {
+      void supabase.removeChannel(ch);
+      channelRef.current = null;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
+
+  // Refresh when crash round changes (new round = new bets incoming)
+  const prevRoundId = useRef(crashState.roundId);
+  useEffect(() => {
+    if (crashState.roundId !== prevRoundId.current) {
+      prevRoundId.current = crashState.roundId;
+      if (tab === 'all') void fetchBets();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [crashState.roundId, tab]);
 
   const topRows = useMemo(() => {
     const cutoff = Date.now() - RANGE_MS[range];
@@ -127,7 +167,7 @@ export default function CrashHistoryTabs() {
       {/* Body */}
       <div className="max-h-72 overflow-y-auto scrollbar-thin overflow-x-auto">
 
-        {/* ── ALL BETS — real Supabase data, no fake players ─── */}
+        {/* ── ALL BETS — realtime from Supabase ─── */}
         {tab === 'all' && (
           <table className="w-full text-[11px]">
             <thead className="text-slate-500 uppercase tracking-wider sticky top-0 bg-slatepanel-900">
@@ -149,8 +189,19 @@ export default function CrashHistoryTabs() {
                 <tr key={b.id} className="border-t border-borderline-900/60">
                   <td className="py-1.5 px-1 text-slate-200 font-semibold">{b.user}</td>
                   <td className="px-1 text-right text-slate-300">{store.currency}{b.stake}</td>
-                  <td className={`px-1 text-right font-bold ${b.multiplier != null && b.multiplier >= 2 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
-                    {b.multiplier != null ? `${b.multiplier.toFixed(2)}×` : '—'}
+                  <td className={`px-1 text-right font-bold ${
+                    b.status === 'pending'
+                      ? 'text-yellow-400'
+                      : b.multiplier != null && b.multiplier >= 2
+                        ? 'text-emeraldwin-400'
+                        : 'text-coral-400'
+                  }`}>
+                    {b.status === 'pending'
+                      ? <span className="animate-pulse">Live</span>
+                      : b.multiplier != null
+                        ? `${b.multiplier.toFixed(2)}×`
+                        : '—'
+                    }
                   </td>
                   <td className="px-1 text-right text-white font-semibold">
                     {b.win > 0 ? `${store.currency}${b.win.toFixed(2)}` : '—'}
