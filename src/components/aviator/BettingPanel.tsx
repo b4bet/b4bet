@@ -269,15 +269,18 @@ export function BettingPanel({
     // Optimistically mark as cashed out so UI updates immediately
     setBet((b) => ({ ...b, cashedOutAt: at }));
 
-    // Snapshot values now — state may change during async calls
+    // Snapshot values now — state changes during async calls
     const snapBetId = bet.betId;
     const snapAmount = bet.amount;
     const snapPlacedAtMs = bet.placedAtMs;
 
-    // Retry up to 2 times on network failure.
-    // The server uses betId for idempotency — retrying never double-credits.
-    const MAX_ATTEMPTS = 2;
-    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    // Retry is ONLY safe when we have a betId — the server uses it as an
+    // idempotency key to prevent double-crediting.
+    // Without a betId there is NO deduplication on the server, so we must
+    // send exactly ONE request. Balance auto-syncs from the 300ms server poll.
+    const maxAttempts = snapBetId ? 2 : 1;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
         const res = await aviatorLoop.cashoutBet(snapAmount, snapPlacedAtMs, at, snapBetId);
         if (res.won && res.win > 0) {
@@ -285,22 +288,20 @@ export function BettingPanel({
           onCashOut(snapAmount, res.cashout_at ?? at);
           onWin(res.win);
         } else {
-          // Server says not won (crashed before cashout confirmed)
+          // Server says not won (crashed before cashout was confirmed)
           if (res.crash_point !== null) {
             aviatorLoop.reportServerCrash(res.crash_point);
           }
         }
         return; // success — stop retrying
       } catch {
-        if (attempt < MAX_ATTEMPTS - 1) {
-          // Brief pause before retry — handles transient network blip on mobile
+        if (attempt < maxAttempts - 1) {
+          // Brief pause before retry on transient network failure
           await delay(1200);
           continue;
         }
-        // All attempts failed — cashout UI already shows "CASHED OUT".
-        // The server likely processed the win already; balance will sync
-        // automatically from the next 300ms server poll.
-        // NO toast shown — a false error toast is worse than silence.
+        // All attempts failed — UI already shows "CASHED OUT".
+        // Balance will sync from next server poll (every 300ms). No toast shown.
       }
     }
   }
