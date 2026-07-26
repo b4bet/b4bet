@@ -131,6 +131,116 @@ serve(async (req) => {
       );
     }
 
+    // ── crash_current_round ──────────────────────────────────────────────────
+    if (action === "crash_current_round") {
+      const { data: row } = await supabase
+        .from("crash_current_round")
+        .select("round_uuid, phase, phase_started_at, crash_point, last_crash_point, server_seed_hash")
+        .eq("id", 1)
+        .single();
+
+      if (!row) {
+        return new Response(
+          JSON.stringify({ phase: "waiting", elapsed_ms: 0, round_uuid: null, crash_point: null, last_crash_point: null, server_seed_hash: null }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const phaseStartedAt = new Date(row.phase_started_at).getTime();
+      const elapsed_ms = Math.max(0, Date.now() - phaseStartedAt);
+
+      return new Response(
+        JSON.stringify({
+          phase: row.phase ?? "waiting",
+          elapsed_ms,
+          round_uuid: row.round_uuid ?? null,
+          crash_point: row.crash_point != null ? Number(row.crash_point) : null,
+          last_crash_point: row.last_crash_point != null ? Number(row.last_crash_point) : null,
+          server_seed_hash: row.server_seed_hash ?? null,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── crash_history ────────────────────────────────────────────────────────
+    if (action === "crash_history") {
+      const { data: rows } = await supabase
+        .from("crash_rounds")
+        .select("bust_point")
+        .order("id", { ascending: false })
+        .limit(20);
+
+      const history = (rows ?? [])
+        .map((r: { bust_point: unknown }) => Number(r.bust_point))
+        .filter((v: number) => !isNaN(v) && v > 0);
+
+      return new Response(
+        JSON.stringify({ history }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── crash_history_detail ─────────────────────────────────────────────────
+    if (action === "crash_history_detail") {
+      const { data: rows } = await supabase
+        .from("crash_rounds")
+        .select("bust_point, round_uuid, server_seed, server_seed_hash, created_at")
+        .order("id", { ascending: false })
+        .limit(20);
+
+      const history = (rows ?? []).map((r: { bust_point: unknown; round_uuid: unknown; server_seed: unknown; server_seed_hash: unknown; created_at: unknown }) => ({
+        bust_point: Number(r.bust_point),
+        round_uuid: r.round_uuid ?? null,
+        server_seed: r.server_seed ?? null,
+        server_seed_hash: r.server_seed_hash ?? null,
+        created_at: r.created_at ?? null,
+      }));
+
+      return new Response(
+        JSON.stringify({ history }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── aviator_bets — all bets for a given round (All Bets tab) ────────────
+    if (action === "aviator_bets") {
+      const round_uuid = payload.round_uuid as string | undefined;
+      if (!round_uuid) {
+        return new Response(
+          JSON.stringify({ bets: [] }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const { data: rows } = await supabase
+        .from("bets")
+        .select("user_id, bet_amount, win_amount, multiplier, status, placed_at, bet_details")
+        .contains("bet_details", { game: "aviator", round_uuid })
+        .order("placed_at", { ascending: true })
+        .limit(200);
+
+      const bets = (rows ?? []).map((b: {
+        user_id: unknown;
+        bet_amount: unknown;
+        win_amount: unknown;
+        multiplier: unknown;
+        status: unknown;
+        placed_at: unknown;
+      }) => ({
+        user_id: b.user_id,
+        bet_amount: Number(b.bet_amount),
+        win_amount: b.win_amount != null ? Number(b.win_amount) : null,
+        multiplier: b.multiplier != null ? Number(b.multiplier) : null,
+        status: b.status,
+        placed_at: b.placed_at,
+      }));
+
+      return new Response(
+        JSON.stringify({ bets }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // ── sunvsmoon_result ─────────────────────────────────────────────────────
     if (action === "sunvsmoon_result") {
       const round_id = payload.round_id;
