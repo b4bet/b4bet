@@ -62,11 +62,7 @@ const QUICK_ADDS: { label: string; value: number }[] = [
   { label: '1K', value: 1000 },
 ];
 
-// Minimum ms to block double-tap after BET click
 const BET_DEBOUNCE_MS = 800;
-
-/** Delay helper for retry backoff */
-const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 export function BettingPanel({
   bet,
@@ -86,22 +82,29 @@ export function BettingPanel({
   const [amountInput, setAmountInput] = useState<string>(String(bet.amount));
   const [autoCashoutInput, setAutoCashoutInput] = useState<string>(String(bet.autoCashoutValue));
 
-  // Prevent double-tap / rapid re-click from cancelling an optimistic bet
   const betClickedAt = useRef<number>(0);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Synchronous guard: prevents doCashOut from firing more than once per round.
-  // React state updates (cashedOutAt) are batched and async, so the auto-cashout
-  // useEffect can fire multiple times before cashedOutAt propagates — this ref
-  // blocks re-entry immediately on the first call.
+  // Single-fire guard: set synchronously in doCashOut before any await.
+  // Prevents auto-cashout useEffect from re-triggering on each multiplier tick
+  // before React re-renders with the updated cashedOutAt state.
   const cashoutFiredRef = useRef(false);
 
   useEffect(() => { setAmountInput(String(bet.amount)); }, [bet.amount]);
   useEffect(() => { setAutoCashoutInput(String(bet.autoCashoutValue)); }, [bet.autoCashoutValue]);
 
-  // Reset the cashout guard each time a new round starts or bet is placed
+  // Reset cashout guard only when a completely new bet is placed (roundId+placed combo).
+  // Using a combined key avoids resetting when placed flips false→true between rounds.
+  const prevPlacedRoundRef = useRef<string>('');
   useEffect(() => {
-    cashoutFiredRef.current = false;
+    const key = `${roundId}-${bet.placed}`;
+    if (key !== prevPlacedRoundRef.current) {
+      prevPlacedRoundRef.current = key;
+      // Only reset guard when bet becomes placed (not when it becomes unplaced)
+      if (bet.placed) {
+        cashoutFiredRef.current = false;
+      }
+    }
   }, [roundId, bet.placed]);
 
   const limits = store.getGameLimits('aviator');
@@ -151,7 +154,6 @@ export function BettingPanel({
   // Round crashed without cash-out — bet is lost.
   useEffect(() => {
     if (phase === 'crashed' && bet.placed && bet.cashedOutAt === null) {
-      // Reset cashout guard so it can fire next round
       cashoutFiredRef.current = false;
       const session = auth.getSession();
       if (session) {
@@ -279,52 +281,36 @@ export function BettingPanel({
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
 
-    // SYNCHRONOUS guard — must be checked and set before any await.
-    // The auto-cashout useEffect fires every 50ms (on each multiplier tick).
-    // React state (cashedOutAt) is async, so bet.cashedOutAt is still null
-    // on subsequent ticks before the state update re-renders.
-    // This ref prevents any second call from proceeding within the same round.
+    // Synchronous single-fire guard — set BEFORE any await so subsequent calls
+    // within the same round (auto-cashout re-triggers on each 50ms multiplier tick)
+    // are blocked immediately without waiting for React state to update.
     if (cashoutFiredRef.current) return;
     cashoutFiredRef.current = true;
 
     const at = atOverride ?? multiplier;
-    // Optimistically mark as cashed out so UI updates immediately
     setBet((b) => ({ ...b, cashedOutAt: at }));
 
-    // Snapshot values now — state changes during async calls
     const snapBetId = bet.betId;
     const snapAmount = bet.amount;
     const snapPlacedAtMs = bet.placedAtMs;
 
-    // Retry is ONLY safe when we have a betId — the server uses it as an
-    // idempotency key to prevent double-crediting.
-    // Without a betId there is NO deduplication on the server, so exactly
-    // ONE request is sent. Balance auto-syncs from the 300ms server poll.
-    const maxAttempts = snapBetId ? 2 : 1;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const res = await aviatorLoop.cashoutBet(snapAmount, snapPlacedAtMs, at, snapBetId);
-        if (res.won && res.win > 0) {
-          store.setBalance(res.balance_after);
-          onCashOut(snapAmount, res.cashout_at ?? at);
-          onWin(res.win);
-        } else {
-          // Server says not won (crashed before cashout was confirmed)
-          if (res.crash_point !== null) {
-            aviatorLoop.reportServerCrash(res.crash_point);
-          }
+    try {
+      const res = await aviatorLoop.cashoutBet(snapAmount, snapPlacedAtMs, at, snapBetId);
+      if (res.won && res.win > 0) {
+        // Use setBalanceFromServer to update locally without writing back to DB.
+        // The server already wrote the correct balance. Writing again from the client
+        // would be a no-op at best or cause a Realtime feedback loop at worst.
+        store.setBalanceFromServer(res.balance_after);
+        onCashOut(snapAmount, res.cashout_at ?? at);
+        onWin(res.win);
+      } else {
+        if (res.crash_point !== null) {
+          aviatorLoop.reportServerCrash(res.crash_point);
         }
-        return; // success — stop retrying
-      } catch {
-        if (attempt < maxAttempts - 1) {
-          // Brief pause before retry on transient network failure
-          await delay(1200);
-          continue;
-        }
-        // All attempts failed — UI already shows "CASHED OUT".
-        // Balance will sync from next server poll (every 300ms). No toast shown.
       }
+    } catch {
+      // Network failure — UI already shows "CASHED OUT". Balance will sync
+      // from the next 300ms server poll. No toast (cashout likely succeeded).
     }
   }
 

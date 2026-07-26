@@ -38,13 +38,10 @@ serve(async (req) => {
     const action = (payload.action ?? payload.game_type ?? "") as string;
 
     // ── aviator_current_round ────────────────────────────────────────────────
-    // Calls the self-advancing RPC so phases progress automatically:
-    // waiting(6s) → flying(until crash_point hit) → crashed(3s) → waiting
     if (action === "aviator_current_round") {
       const { data: rpcResult, error: rpcError } = await supabase.rpc("aviator_get_current_round");
 
       if (rpcError || !rpcResult) {
-        // Fallback: read table directly if RPC not yet deployed
         const { data: row } = await supabase
           .from("aviator_current_round")
           .select("round_uuid, phase, phase_started_at, crash_point, last_crash_point, server_seed_hash")
@@ -73,7 +70,6 @@ serve(async (req) => {
         );
       }
 
-      // RPC returns JSONB — extract fields
       const r = rpcResult as Record<string, unknown>;
       return new Response(
         JSON.stringify({
@@ -108,7 +104,6 @@ serve(async (req) => {
 
     // ── aviator_history_detail ───────────────────────────────────────────────
     if (action === "aviator_history_detail") {
-      // Use the DB function that returns server seeds for provably fair verification
       const { data: rpcData, error: rpcErr } = await supabase.rpc("aviator_get_history_detail");
       if (!rpcErr && rpcData) {
         return new Response(
@@ -117,7 +112,6 @@ serve(async (req) => {
         );
       }
 
-      // Fallback: plain table query
       const { data: rows } = await supabase
         .from("aviator_rounds")
         .select("bust_point, round_uuid, server_seed, server_seed_hash")
@@ -216,12 +210,10 @@ serve(async (req) => {
         );
       }
 
-      // Atomic increment for cancel refund
       const { data: newBalanceData, error: refundError } = await supabase
         .rpc("profiles_add_balance", { p_user_id: user_id, p_amount: betNum });
 
       if (refundError) {
-        // Fallback to read-then-write if RPC not yet deployed
         const { data: profile, error: profileError } = await supabase
           .from("profiles")
           .select("balance")
@@ -272,37 +264,79 @@ serve(async (req) => {
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
       if (cashoutMultiplier <= 0) throw new Error("Invalid cashout multiplier");
 
-      // Idempotency check — if the bet is already resolved, return cached result
+      // ── Idempotency via betId ────────────────────────────────────────────
+      // If we have a betId, check if this bet is already resolved.
       if (betId) {
-        const { data: existingBet } = await supabase.from("bets").select("id, status, win_amount, multiplier").eq("id", betId).maybeSingle();
+        const { data: existingBet } = await supabase
+          .from("bets")
+          .select("id, status, win_amount, multiplier")
+          .eq("id", betId)
+          .maybeSingle();
         if (existingBet && existingBet.status === "won") {
           const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
-          return new Response(JSON.stringify({ success: true, won: true, win: existingBet.win_amount ?? 0, balance_after: Number(profile?.balance ?? 0), cashout_at: Number(existingBet.multiplier ?? cashoutMultiplier), crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+          return new Response(
+            JSON.stringify({ success: true, won: true, win: existingBet.win_amount ?? 0, balance_after: Number(profile?.balance ?? 0), cashout_at: Number(existingBet.multiplier ?? cashoutMultiplier), crash_point: null }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
         }
         if (existingBet && existingBet.status === "lost") {
           const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
-          return new Response(JSON.stringify({ success: false, won: false, win: 0, balance_after: Number(profile?.balance ?? 0), crash_point: null }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
+          return new Response(
+            JSON.stringify({ success: false, won: false, win: 0, balance_after: Number(profile?.balance ?? 0), crash_point: null }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+          );
         }
       }
 
+      // ── Idempotency via round_uuid (no betId case) ───────────────────────
+      // Prevents double-credit when cashout fires multiple times without a betId
+      // (e.g. auto-cashout effect + manual click, or network retry).
+      if (roundUuid) {
+        const { data: existingCashout } = await supabase
+          .from("bets")
+          .select("id, status, win_amount, multiplier")
+          .eq("user_id", user_id)
+          .eq("status", "won")
+          .contains("bet_details", { round_uuid: roundUuid, game: "aviator" })
+          .maybeSingle();
+        if (existingCashout) {
+          // Already cashed out this round — return cached result, DO NOT credit again
+          const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+          return new Response(
+            JSON.stringify({ success: true, won: true, win: existingCashout.win_amount ?? 0, balance_after: Number(profile?.balance ?? 0), cashout_at: Number(existingCashout.multiplier ?? cashoutMultiplier), crash_point: null }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
+
+      // ── Verify cashout is before crash ───────────────────────────────────
       let bustPoint: number | null = null;
       if (roundUuid) {
-        const { data: roundData } = await supabase.from("aviator_rounds").select("bust_point").eq("round_uuid", roundUuid).order("id", { ascending: false }).limit(1);
-        if (roundData && roundData.length > 0 && roundData[0].bust_point != null) bustPoint = Number(roundData[0].bust_point);
+        const { data: roundData } = await supabase
+          .from("aviator_rounds")
+          .select("bust_point")
+          .eq("round_uuid", roundUuid)
+          .order("id", { ascending: false })
+          .limit(1);
+        if (roundData && roundData.length > 0 && roundData[0].bust_point != null) {
+          bustPoint = Number(roundData[0].bust_point);
+        }
       }
       if (bustPoint !== null && cashoutMultiplier > bustPoint) {
-        return new Response(JSON.stringify({ success: false, won: false, win: 0, balance_after: null, crash_point: bustPoint, reason: `Cashout at ${cashoutMultiplier}x is after crash at ${bustPoint}x` }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 });
+        return new Response(
+          JSON.stringify({ success: false, won: false, win: 0, balance_after: null, crash_point: bustPoint }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        );
       }
 
       const winAmount = Math.round(betNum * cashoutMultiplier);
 
-      // ── Atomic balance update — safe for concurrent dual-panel cashouts ──
+      // ── Atomic balance update ────────────────────────────────────────────
       const { data: newBalanceData, error: balanceRpcError } = await supabase
         .rpc("profiles_add_balance", { p_user_id: user_id, p_amount: winAmount });
 
       let newBalance: number;
       if (balanceRpcError) {
-        // Fallback: read-then-write (only used if migration hasn't run yet)
         const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
         if (profileError || !profile) throw new Error("User profile not found");
         newBalance = Number(profile.balance) + winAmount;
@@ -313,12 +347,17 @@ serve(async (req) => {
       }
 
       const now = new Date().toISOString();
+      const betDetails = { game: "aviator", cashOutAt: cashoutMultiplier, bustPoint: bustPoint ?? 0, round_uuid: roundUuid, placed_at_ms: placed_at_ms ?? null };
       if (betId) {
-        await supabase.from("bets").update({ win_amount: winAmount, multiplier: cashoutMultiplier, status: "won", resolved_at: now, bet_details: { game: "aviator", cashOutAt: cashoutMultiplier, bustPoint: bustPoint ?? 0, round_uuid: roundUuid, placed_at_ms: placed_at_ms ?? null } }).eq("id", betId).catch(() => {});
+        await supabase.from("bets").update({ win_amount: winAmount, multiplier: cashoutMultiplier, status: "won", resolved_at: now, bet_details: betDetails }).eq("id", betId).catch(() => {});
       } else {
-        await supabase.from("bets").insert({ user_id, round_id: null, bet_amount: betNum, win_amount: winAmount, multiplier: cashoutMultiplier, status: "won", bet_details: { game: "aviator", cashOutAt: cashoutMultiplier, bustPoint: bustPoint ?? 0, round_uuid: roundUuid, placed_at_ms: placed_at_ms ?? null }, placed_at: placed_at_ms ? new Date(Number(placed_at_ms)).toISOString() : now, resolved_at: now }).catch(() => {});
+        await supabase.from("bets").insert({ user_id, round_id: null, bet_amount: betNum, win_amount: winAmount, multiplier: cashoutMultiplier, status: "won", bet_details: betDetails, placed_at: placed_at_ms ? new Date(Number(placed_at_ms)).toISOString() : now, resolved_at: now }).catch(() => {});
       }
-      return new Response(JSON.stringify({ success: true, won: true, win: winAmount, balance_after: newBalance, cashout_at: cashoutMultiplier, crash_point: bustPoint }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+      return new Response(
+        JSON.stringify({ success: true, won: true, win: winAmount, balance_after: newBalance, cashout_at: cashoutMultiplier, crash_point: bustPoint }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     // ── aviator_place_bet ────────────────────────────────────────────────────
@@ -328,7 +367,6 @@ serve(async (req) => {
       const roundUuid = payload.round_uuid ?? null;
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
 
-      // Read phase directly from table — NOT via RPC to avoid unwanted phase transitions
       const { data: roundRow, error: roundErr } = await supabase
         .from("aviator_current_round")
         .select("phase, phase_started_at, round_uuid")
@@ -341,7 +379,6 @@ serve(async (req) => {
       const phaseStartedAt = new Date(roundRow.phase_started_at).getTime();
       const serverElapsedMs = Math.max(0, Date.now() - phaseStartedAt);
 
-      // Flying phase: accept bets within the first 15 seconds (wider grace for slow connections)
       if (currentPhase === "flying") {
         const FLYING_GRACE_MS = 15000;
         if (serverElapsedMs > FLYING_GRACE_MS) {
@@ -382,7 +419,6 @@ serve(async (req) => {
         .eq("id", user_id);
       if (updateError) throw new Error(`Balance deduction failed: ${updateError.message}`);
 
-      // Insert bet record and return the new bet ID
       const { data: betRecord, error: betInsertError } = await supabase
         .from("bets")
         .insert({
@@ -399,7 +435,6 @@ serve(async (req) => {
         .maybeSingle();
 
       if (betInsertError) {
-        // Bet record failed — refund balance to keep DB consistent
         await supabase.from("profiles").update({ balance: currentBalance }).eq("id", user_id);
         throw new Error(`Bet record failed: ${betInsertError.message}`);
       }
