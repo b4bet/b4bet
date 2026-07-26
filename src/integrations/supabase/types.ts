@@ -49,44 +49,17 @@ export interface BetRow {
   multiplier: number; status: string; placed_at: string; resolved_at: string | null;
 }
 
+// Generic row type for any table not explicitly defined
+export type GenericRow = Record<string, Json | undefined>;
+
 export type Database = {
   __InternalSupabase: { PostgrestVersion: "14.5" }
   public: {
     Tables: {
-      crash_pending_bets: {
-        Row: {
-          id: string
-          user_id: string | null
-          username: string
-          bet_amount: number
-          round_uuid: string
-          cash_out_at: number | null
-          status: string
-          placed_at: string
-          win_amount: number
-        }
-        Insert: {
-          id?: string
-          user_id?: string | null
-          username: string
-          bet_amount: number
-          round_uuid: string
-          cash_out_at?: number | null
-          status?: string
-          placed_at?: string
-          win_amount?: number
-        }
-        Update: {
-          id?: string
-          user_id?: string | null
-          username?: string
-          bet_amount?: number
-          round_uuid?: string
-          cash_out_at?: number | null
-          status?: string
-          placed_at?: string
-          win_amount?: number
-        }
+      [tableName: string]: {
+        Row: GenericRow
+        Insert: GenericRow
+        Update: GenericRow
       }
     }
     Views: { [_ in never]: never }
@@ -218,6 +191,10 @@ export type Database = {
       get_crash_all_bets: {
         Args: { p_limit?: number }
         Returns: BetRow[]
+      }
+      [fnName: string]: {
+        Args: Record<string, unknown>
+        Returns: unknown
       }
     }
     Enums: { [_ in never]: never }
