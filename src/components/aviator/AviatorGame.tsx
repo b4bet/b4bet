@@ -34,6 +34,7 @@ async function fetchRoundBets(roundUuid: string): Promise<BetRecord[]> {
     const data = await res.json() as {
       bets?: {
         user_id: string;
+        username: string | null;
         bet_amount: number;
         win_amount: number | null;
         multiplier: number | null;
@@ -44,7 +45,7 @@ async function fetchRoundBets(roundUuid: string): Promise<BetRecord[]> {
     const session = auth.getSession();
     return (data.bets ?? []).map((b, i) => ({
       id: `server-${b.user_id}-${i}`,
-      name: b.user_id === session?.userId ? PLAYER_NAME : randomName(),
+      name: b.user_id === session?.userId ? PLAYER_NAME : (b.username ?? randomName()),
       color: b.user_id === session?.userId ? '#22c55e' : randomAvatarColor(),
       amount: b.bet_amount,
       cashedOutAt: b.status === 'won' && b.multiplier != null ? b.multiplier : null,
