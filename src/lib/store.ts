@@ -216,12 +216,9 @@ class Store {
           ? await supabase.from('profiles').select('balance').eq('id', session.userId).single()
           : await supabase.from('profiles').select('balance').eq('username', session.username).single();
         if (profile) {
-          // Coerce to number — Supabase REST returns bigint as number, but
-          // some paths may return it as string depending on the client config.
           this.balance = Number((profile as { balance: number | string }).balance) || 0;
         } else if (profileErr) {
           console.warn('[store] failed to load profile balance:', profileErr.message);
-          // On error, fall back to 0 so UI doesn't hang on loading state forever
           this.balance = 0;
         }
         bus.emit(Topics.Balance, this.balance);
@@ -239,8 +236,6 @@ class Store {
               },
               (evt) => {
                 const row = evt.new as { balance?: number | string };
-                // Supabase Realtime sends bigint columns as strings — coerce
-                // to number with Number() and validate with isFinite()
                 const parsed = Number(row.balance);
                 if (isFinite(parsed)) {
                   this.balance = parsed;
@@ -291,6 +286,11 @@ class Store {
     supabase.rpc('admin_credit_balance', { p_username: username, p_amount: amount }).then(() => {}).catch(() => {});
   }
 
+  /**
+   * setBalance — updates local state AND writes back to Supabase.
+   * Use for client-initiated changes (admin credits, local adjustments).
+   * Do NOT use after a server cashout — use setBalanceFromServer() instead.
+   */
   setBalance(next: number) {
     this.balance = Math.max(0, Math.round(next * 100) / 100);
     try {
@@ -320,6 +320,26 @@ class Store {
     bus.emit(Topics.Balance, this.balance);
   }
 
+  /**
+   * setBalanceFromServer — updates local state WITHOUT writing back to Supabase.
+   *
+   * Use this when the server has already updated the balance (e.g. after aviator_cashout).
+   * Writing back to Supabase from the client would be redundant and could cause a
+   * Realtime feedback loop: client writes → Realtime fires → client reads stale value.
+   */
+  setBalanceFromServer(next: number) {
+    this.balance = Math.max(0, Math.round(next * 100) / 100);
+    try {
+      const session = auth.getSession();
+      if (session) {
+        this.balancesByUser[session.username.toLowerCase()] = this.balance;
+        this.persistBalances();
+        // No Supabase write — server already updated the DB
+      }
+    } catch { /* ignore */ }
+    bus.emit(Topics.Balance, this.balance);
+  }
+
   credit(amount: number) { this.setBalance(Math.max(0, this.balance) + amount); }
 
   debit(amount: number): boolean {
@@ -338,9 +358,6 @@ class Store {
    * Use this when the server-side Edge Function (e.g. aviator_place_bet) is
    * responsible for deducting from the database. Calling the regular debit()
    * here would cause a double-deduction: once client-side and once server-side.
-   *
-   * Returns true if balance was sufficient and deduction succeeded.
-   * Returns false if balance is insufficient (no deduction performed).
    */
   debitLocalOnly(amount: number): boolean {
     if (!auth.getSession()) {
@@ -377,11 +394,6 @@ class Store {
 
   // ---- Admin Config ----
 
-  /**
-   * Load per-game min/max limits from the `games` table and merge them into
-   * perGameLimits so that getGameLimits() always reflects what the admin set
-   * in GameSettingsTab (which writes to `games`, not just admin_config).
-   */
   async loadGameLimitsFromGamesTable() {
     try {
       const { data } = await supabase.from('games').select('slug, min_bet, max_bet, is_active');
@@ -434,7 +446,6 @@ class Store {
             }
           }
 
-          // Keep crashQuickStakes in sync with crash handler's quickStakes
           const crashHandler = this.admin.gameHandlers['crash'];
           if (crashHandler?.quickStakes?.length) {
             this.admin.crashQuickStakes = crashHandler.quickStakes;
@@ -445,8 +456,6 @@ class Store {
       }
     } catch { /* ignore */ }
 
-    // Always overlay limits from games table — this is the source of truth for
-    // per-game min/max set via GameSettingsTab.
     await this.loadGameLimitsFromGamesTable();
   }
 
@@ -678,13 +687,6 @@ class Store {
     });
   }
 
-  /**
-   * applyRedeemCodeAsync — Supabase-backed redeem with real userId tracking.
-   * 1. Loads fresh codes from Supabase to prevent race conditions.
-   * 2. Validates and records usage with real userId.
-   * 3. Credits balance via Supabase.
-   * 4. Saves updated codes back to Supabase.
-   */
   async applyRedeemCodeAsync(code: string, userId: string): Promise<{ status: 'success' | 'used' | 'invalid'; bonus: number }> {
     await this.loadRedeemCodesFromSupabase();
 
