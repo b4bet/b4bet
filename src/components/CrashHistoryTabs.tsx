@@ -1,9 +1,9 @@
 /**
  * CrashHistoryTabs
  *
- * All Bets  — current live round ki bets (engine local state + Supabase realtime)
- * My Bets   — logged-in user ki bets from Supabase (RPC)
- * Top       — top earners in time range (RPC)
+ * All Bets  — current live round ki bets from crash_pending_bets (realtime)
+ * My Bets   — logged-in user ki settled bets from Supabase
+ * Top       — top earners in time range
  */
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../integrations/supabase/client';
@@ -25,14 +25,14 @@ function fmtTime(ts: string) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-// A live bet row shown in All Bets
-interface LiveBetRow {
-  key: string;
+interface PendingBetRow {
+  id: string;
   username: string;
   bet_amount: number;
-  cash_out_at: number | null;
-  status: 'active' | 'won' | 'lost';
   win_amount: number;
+  cash_out_at: number | null;
+  status: string;
+  placed_at: string;
 }
 
 interface MyBetRow {
@@ -54,82 +54,42 @@ export default function CrashHistoryTabs() {
   const [tab, setTab] = useState<Tab>('all');
   const [range, setRange] = useState<Range>('day');
   const session = useAuth();
-
-  // ── All Bets (live current round) ──────────────────────────────────
-  // Engine bets — current user's slots (local)
   const engineBets = useCrashBets();
   const crashState = useCrashState();
 
-  // Remote live bets from Supabase for current round (other users)
-  const [remoteBets, setRemoteBets] = useState<LiveBetRow[]>([]);
+  // ── All Bets: realtime from crash_pending_bets ──────────────────────────
+  const [pendingBets, setPendingBets] = useState<PendingBetRow[]>([]);
   const channelRef = useRef<RealtimeChannel | null>(null);
-  const roundIdRef = useRef<string>('');
 
-  // Subscribe to bets table realtime for current round
+  // Initial load + realtime subscribe for All Bets
   useEffect(() => {
     if (tab !== 'all') return;
 
-    // Fetch current round id once
+    // Initial fetch
     void supabase
-      .from('crash_current_round')
-      .select('round_uuid')
-      .limit(1)
-      .single()
+      .from('crash_pending_bets')
+      .select('*')
+      .order('placed_at', { ascending: false })
+      .limit(50)
       .then(({ data }) => {
-        const roundUuid = data?.round_uuid as string | undefined;
-        if (roundUuid) roundIdRef.current = roundUuid;
-
-        // Initial load: fetch all bets for this round from RPC
-        void supabase
-          .rpc('get_crash_live_bets', { p_limit: 50 })
-          .then(({ data: rows }) => {
-            if (rows) {
-              setRemoteBets(
-                (rows as { id: string; username: string; bet_amount: number; win_amount: number; cash_out_at: number | null; status: string }[]).map(
-                  (r) => ({
-                    key: r.id,
-                    username: r.username,
-                    bet_amount: Number(r.bet_amount),
-                    cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
-                    status: r.status === 'won' ? 'won' : r.status === 'lost' ? 'lost' : 'active',
-                    win_amount: Number(r.win_amount),
-                  })
-                )
-              );
-            }
-          });
+        if (data) setPendingBets(data as PendingBetRow[]);
       });
 
-    // Subscribe to new bets inserting in real time
+    // Realtime: any INSERT/UPDATE/DELETE on crash_pending_bets
     const ch = supabase
-      .channel('crash_live_bets_tab')
+      .channel('crash_pending_bets_live')
       .on(
         'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'bets',
-          filter: `game_id=eq.ee8ae2ab-d62c-4378-a377-55b3f7be4b3e`,
-        },
-        (payload) => {
-          // Reload live bets when any crash bet changes
+        { event: '*', schema: 'public', table: 'crash_pending_bets' },
+        () => {
+          // Reload on any change
           void supabase
-            .rpc('get_crash_live_bets', { p_limit: 50 })
-            .then(({ data: rows }) => {
-              if (rows) {
-                setRemoteBets(
-                  (rows as { id: string; username: string; bet_amount: number; win_amount: number; cash_out_at: number | null; status: string }[]).map(
-                    (r) => ({
-                      key: r.id,
-                      username: r.username,
-                      bet_amount: Number(r.bet_amount),
-                      cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
-                      status: r.status === 'won' ? 'won' : r.status === 'lost' ? 'lost' : 'active',
-                      win_amount: Number(r.win_amount),
-                    })
-                  )
-                );
-              }
+            .from('crash_pending_bets')
+            .select('*')
+            .order('placed_at', { ascending: false })
+            .limit(50)
+            .then(({ data }) => {
+              if (data) setPendingBets(data as PendingBetRow[]);
             });
         }
       )
@@ -142,55 +102,34 @@ export default function CrashHistoryTabs() {
     };
   }, [tab]);
 
-  // When round changes (new round starts), clear remote bets
-  useEffect(() => {
-    if (crashState.roundId && crashState.roundId !== roundIdRef.current) {
-      roundIdRef.current = crashState.roundId;
-      setRemoteBets([]);
-      // Reload bets for new round
-      void supabase
-        .rpc('get_crash_live_bets', { p_limit: 50 })
-        .then(({ data: rows }) => {
-          if (rows) {
-            setRemoteBets(
-              (rows as { id: string; username: string; bet_amount: number; win_amount: number; cash_out_at: number | null; status: string }[]).map(
-                (r) => ({
-                  key: r.id,
-                  username: r.username,
-                  bet_amount: Number(r.bet_amount),
-                  cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
-                  status: r.status === 'won' ? 'won' : r.status === 'lost' ? 'lost' : 'active',
-                  win_amount: Number(r.win_amount),
-                })
-              )
-            );
-          }
-        });
-    }
-  }, [crashState.roundId]);
+  // Merge engine local bets (self) with pending bets from DB (others)
+  // Engine bets are source of truth for the current user
+  const myUsername = (session?.username ?? '').toLowerCase();
 
-  // Build display list: engine slots (local user) + remote other users
-  // Avoid duplicates by username
-  const localRows: LiveBetRow[] = Object.values(engineBets)
+  const engineRows = Object.values(engineBets)
     .filter((slot) => slot.placed)
     .map((slot) => ({
-      key: `local-${slot.id}`,
+      id: `local-${slot.id}`,
       username: session?.username ?? 'You',
       bet_amount: slot.amount,
-      cash_out_at: slot.cashedOutAt,
-      status: slot.cashedOut ? 'won' : crashState.phase === 'busted' && !slot.cashedOut ? 'lost' : 'active',
       win_amount: slot.win ?? 0,
-    }));
+      cash_out_at: slot.cashedOutAt,
+      status: slot.cashedOut
+        ? 'won'
+        : crashState.phase === 'busted' && !slot.cashedOut
+        ? 'lost'
+        : 'active',
+      placed_at: new Date().toISOString(),
+    } satisfies PendingBetRow));
 
-  // Remove from remote any row matching current user (engine is source of truth for self)
-  const myUsername = (session?.username ?? '').toLowerCase();
-  const dedupedRemote = remoteBets.filter(
+  // Remove own rows from DB list (engine is source of truth for self)
+  const otherRows = pendingBets.filter(
     (r) => r.username.toLowerCase() !== myUsername
   );
 
-  const allBetsDisplay: LiveBetRow[] = [...localRows, ...dedupedRemote];
+  const allBetsDisplay = [...engineRows, ...otherRows];
 
-  // ── My Bets ────────────────────────────────────────────────────────
+  // ── My Bets ─────────────────────────────────────────────────────────────
   const [myBets, setMyBets] = useState<MyBetRow[]>([]);
   const [myLoading, setMyLoading] = useState(false);
 
@@ -216,7 +155,7 @@ export default function CrashHistoryTabs() {
       });
   }, [tab, session?.userId]);
 
-  // ── Top Players ────────────────────────────────────────────────────
+  // ── Top Players ─────────────────────────────────────────────────────────
   const [topRows, setTopRows] = useState<TopRow[]>([]);
   const [topLoading, setTopLoading] = useState(false);
 
@@ -235,7 +174,7 @@ export default function CrashHistoryTabs() {
       });
   }, [tab, range]);
 
-  // ── Render ─────────────────────────────────────────────────────────
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-2">
       {/* Tabs */}
@@ -256,7 +195,7 @@ export default function CrashHistoryTabs() {
         ))}
       </div>
 
-      {/* Time-range chips — Top only */}
+      {/* Range chips — Top only */}
       {tab === 'top' && (
         <div className="flex gap-1.5 px-1 flex-wrap">
           {(['day', 'week', 'month', 'year'] as Range[]).map((r) => (
@@ -278,7 +217,7 @@ export default function CrashHistoryTabs() {
 
       <div className="overflow-auto max-h-56 rounded-xl border border-borderline-900">
 
-        {/* ── ALL BETS (live current round) */}
+        {/* ── ALL BETS (live current round) ── */}
         {tab === 'all' && (
           <table className="w-full text-xs text-left">
             <thead className="sticky top-0 bg-slatepanel-800 text-slate-400">
@@ -294,9 +233,9 @@ export default function CrashHistoryTabs() {
                 <tr><td colSpan={4} className="py-4 text-center text-slate-500">Waiting for bets…</td></tr>
               )}
               {allBetsDisplay.map((b) => (
-                <tr key={b.key} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
+                <tr key={b.id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
                   <td className="py-1.5 px-2 text-slate-200 truncate max-w-[80px]">{b.username}</td>
-                  <td className="py-1.5 px-2 text-slate-300">{store.currency}{b.bet_amount}</td>
+                  <td className="py-1.5 px-2 text-slate-300">{store.currency}{Number(b.bet_amount)}</td>
                   <td className={`py-1.5 px-2 font-bold ${
                     b.status === 'won'
                       ? 'text-emeraldwin-400'
@@ -313,7 +252,7 @@ export default function CrashHistoryTabs() {
                   <td className={`py-1.5 px-2 ${
                     b.status === 'won' ? 'text-emeraldwin-300' : 'text-slate-500'
                   }`}>
-                    {b.status === 'won' ? `${store.currency}${b.win_amount}` : '—'}
+                    {b.status === 'won' ? `${store.currency}${Number(b.win_amount)}` : '—'}
                   </td>
                 </tr>
               ))}
@@ -321,7 +260,7 @@ export default function CrashHistoryTabs() {
           </table>
         )}
 
-        {/* ── MY BETS */}
+        {/* ── MY BETS ── */}
         {tab === 'mine' && (
           <table className="w-full text-xs text-left">
             <thead className="sticky top-0 bg-slatepanel-800 text-slate-400">
@@ -371,7 +310,7 @@ export default function CrashHistoryTabs() {
           </table>
         )}
 
-        {/* ── TOP PLAYERS */}
+        {/* ── TOP PLAYERS ── */}
         {tab === 'top' && (
           <table className="w-full text-xs text-left">
             <thead className="sticky top-0 bg-slatepanel-800 text-slate-400">
