@@ -216,19 +216,32 @@ serve(async (req) => {
         );
       }
 
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("balance")
-        .eq("id", user_id)
-        .single();
-      if (profileError || !profile) throw new Error("User profile not found");
+      // Atomic increment for cancel refund
+      const { data: newBalanceData, error: refundError } = await supabase
+        .rpc("profiles_add_balance", { p_user_id: user_id, p_amount: betNum });
 
-      const newBalance = Number(profile.balance) + betNum;
-      const { error: updateError } = await supabase
-        .from("profiles")
-        .update({ balance: newBalance })
-        .eq("id", user_id);
-      if (updateError) throw new Error(`Balance refund failed: ${updateError.message}`);
+      if (refundError) {
+        // Fallback to read-then-write if RPC not yet deployed
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("balance")
+          .eq("id", user_id)
+          .single();
+        if (profileError || !profile) throw new Error("User profile not found");
+        const newBalance = Number(profile.balance) + betNum;
+        const { error: updateError } = await supabase
+          .from("profiles")
+          .update({ balance: newBalance })
+          .eq("id", user_id);
+        if (updateError) throw new Error(`Balance refund failed: ${updateError.message}`);
+        if (bet_id) {
+          await supabase.from("bets").delete().eq("id", bet_id).eq("user_id", user_id).eq("status", "pending").catch(() => {});
+        }
+        return new Response(
+          JSON.stringify({ success: true, balance_after: newBalance }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
 
       if (bet_id) {
         await supabase
@@ -241,7 +254,7 @@ serve(async (req) => {
       }
 
       return new Response(
-        JSON.stringify({ success: true, balance_after: newBalance }),
+        JSON.stringify({ success: true, balance_after: Number(newBalanceData) }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -259,6 +272,7 @@ serve(async (req) => {
       if (!user_id || !betNum) throw new Error("Missing required fields: user_id, bet_amount");
       if (cashoutMultiplier <= 0) throw new Error("Invalid cashout multiplier");
 
+      // Idempotency check — if the bet is already resolved, return cached result
       if (betId) {
         const { data: existingBet } = await supabase.from("bets").select("id, status, win_amount, multiplier").eq("id", betId).maybeSingle();
         if (existingBet && existingBet.status === "won") {
@@ -281,11 +295,22 @@ serve(async (req) => {
       }
 
       const winAmount = Math.round(betNum * cashoutMultiplier);
-      const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
-      if (profileError || !profile) throw new Error("User profile not found");
-      const newBalance = Number(profile.balance) + winAmount;
-      const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
-      if (updateError) throw new Error(`Balance update failed: ${updateError.message}`);
+
+      // ── Atomic balance update — safe for concurrent dual-panel cashouts ──
+      const { data: newBalanceData, error: balanceRpcError } = await supabase
+        .rpc("profiles_add_balance", { p_user_id: user_id, p_amount: winAmount });
+
+      let newBalance: number;
+      if (balanceRpcError) {
+        // Fallback: read-then-write (only used if migration hasn't run yet)
+        const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+        if (profileError || !profile) throw new Error("User profile not found");
+        newBalance = Number(profile.balance) + winAmount;
+        const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
+        if (updateError) throw new Error(`Balance update failed: ${updateError.message}`);
+      } else {
+        newBalance = Number(newBalanceData);
+      }
 
       const now = new Date().toISOString();
       if (betId) {
