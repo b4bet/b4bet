@@ -52,7 +52,43 @@ export interface BetRow {
 export type Database = {
   __InternalSupabase: { PostgrestVersion: "14.5" }
   public: {
-    Tables: { [_ in never]: never }
+    Tables: {
+      crash_pending_bets: {
+        Row: {
+          id: string
+          user_id: string | null
+          username: string
+          bet_amount: number
+          round_uuid: string
+          cash_out_at: number | null
+          status: string
+          placed_at: string
+          win_amount: number
+        }
+        Insert: {
+          id?: string
+          user_id?: string | null
+          username: string
+          bet_amount: number
+          round_uuid: string
+          cash_out_at?: number | null
+          status?: string
+          placed_at?: string
+          win_amount?: number
+        }
+        Update: {
+          id?: string
+          user_id?: string | null
+          username?: string
+          bet_amount?: number
+          round_uuid?: string
+          cash_out_at?: number | null
+          status?: string
+          placed_at?: string
+          win_amount?: number
+        }
+      }
+    }
     Views: { [_ in never]: never }
     Functions: {
       admin_staff_login: {
@@ -167,6 +203,22 @@ export type Database = {
         Args: { p_ip: string }
         Returns: boolean
       }
+      get_crash_my_bets: {
+        Args: { p_user_id: string; p_limit?: number }
+        Returns: BetRow[]
+      }
+      get_crash_top_players: {
+        Args: { p_since: string; p_limit?: number }
+        Returns: { user_id: string; username: string; earnings: number }[]
+      }
+      get_crash_live_bets: {
+        Args: { p_limit?: number }
+        Returns: BetRow[]
+      }
+      get_crash_all_bets: {
+        Args: { p_limit?: number }
+        Returns: BetRow[]
+      }
     }
     Enums: { [_ in never]: never }
     CompositeTypes: { [_ in never]: never }
@@ -174,7 +226,7 @@ export type Database = {
 }
 
 type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
-type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof DatabaseWithoutInternals, "public">]
 
 export type Tables<
   DefaultSchemaTableNameOrOptions extends
@@ -197,13 +249,13 @@ export type Tables<
     : never
   : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
         DefaultSchema["Views"])
-  ? (DefaultSchema["Tables"] &
-      DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
-      Row: infer R
-    }
-    ? R
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R
+      }
+      ? R
+      : never
     : never
-  : never
 
 export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
@@ -223,12 +275,12 @@ export type TablesInsert<
     ? I
     : never
   : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
-  ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
-      Insert: infer I
-    }
-    ? I
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Insert: infer I
+      }
+      ? I
+      : never
     : never
-  : never
 
 export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
@@ -248,12 +300,12 @@ export type TablesUpdate<
     ? U
     : never
   : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
-  ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
-      Update: infer U
-    }
-    ? U
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Update: infer U
+      }
+      ? U
+      : never
     : never
-  : never
 
 export type Enums<
   DefaultSchemaEnumNameOrOptions extends
@@ -269,8 +321,8 @@ export type Enums<
 }
   ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
   : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
-  ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
-  : never
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+    : never
 
 export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
@@ -286,8 +338,8 @@ export type CompositeTypes<
 }
   ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
   : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
-  ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
-  : never
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+    : never
 
 export const Constants = {
   public: {
