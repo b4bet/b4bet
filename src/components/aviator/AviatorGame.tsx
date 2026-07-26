@@ -7,6 +7,7 @@ import { BettingPanel, createInitialBet, type BetState } from './BettingPanel';
 import { Sidebar, type BetRecord, type ChatMessage } from './Sidebar';
 import { useAviatorGame } from './game/useAviatorGame';
 import { formatMoney } from './game/format';
+import { randomAvatarColor, randomName } from './game/format';
 import { useBalance } from '../../lib/hooks';
 import { store } from '../../lib/store';
 import { cms } from '../../lib/cms';
@@ -21,6 +22,38 @@ export type PlaceBetResult = { ok: boolean; reason?: string };
 
 interface AviatorGameProps {
   onBack?: () => void;
+}
+
+// Fetch all bets for the current round from the server
+async function fetchRoundBets(roundUuid: string): Promise<BetRecord[]> {
+  try {
+    const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
+    const res = await fetch(`${EDGE_FN}?action=aviator_bets&round_uuid=${roundUuid}`, {
+      headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
+    });
+    const data = await res.json() as {
+      bets?: {
+        user_id: string;
+        bet_amount: number;
+        win_amount: number | null;
+        multiplier: number | null;
+        status: string;
+        placed_at: string;
+      }[];
+    };
+    const session = auth.getSession();
+    return (data.bets ?? []).map((b, i) => ({
+      id: `server-${b.user_id}-${i}`,
+      name: b.user_id === session?.userId ? PLAYER_NAME : randomName(),
+      color: b.user_id === session?.userId ? '#22c55e' : randomAvatarColor(),
+      amount: b.bet_amount,
+      cashedOutAt: b.status === 'won' && b.multiplier != null ? b.multiplier : null,
+      win: b.status === 'won' && b.win_amount != null ? b.win_amount : null,
+      isPlayer: b.user_id === session?.userId,
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export default function AviatorGame({ onBack }: AviatorGameProps) {
@@ -44,6 +77,35 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const [insufficientBalanceNotices, setInsufficientBalanceNotices] = useState<InsufficientBalanceNotice[]>([]);
   const [timeoutNotices, setTimeoutNotices] = useState<TimeoutNotice[]>([]);
 
+  // Poll server bets every 2s during waiting/flying
+  const lastFetchedRoundUuid = useRef<string | null>(null);
+  useEffect(() => {
+    const roundUuid = aviatorLoop.getRoundUuid();
+    if (!roundUuid) return;
+
+    // Reset on new round
+    if (roundUuid !== lastFetchedRoundUuid.current) {
+      lastFetchedRoundUuid.current = roundUuid;
+      setAllBets([]);
+      setMyBets([]);
+    }
+
+    if (phase === 'crashed') return;
+
+    const poll = async () => {
+      const bets = await fetchRoundBets(roundUuid);
+      if (bets.length > 0) {
+        setAllBets(bets);
+        setMyBets(bets.filter((b) => b.isPlayer));
+      }
+    };
+
+    void poll();
+    const interval = setInterval(() => { void poll(); }, 2000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, roundId]);
+
   const showCashoutNotice = useCallback((amount: number, at: number) => {
     const id = Date.now() + Math.random();
     setCashoutNotices((prev) => [...prev, { id, multiplier: at, amount: amount * at }]);
@@ -63,13 +125,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   const pendingPlayerBets = useRef<{ panel: 0 | 1; amount: number }[]>([]);
-
-  useEffect(() => {
-    if (phase === 'waiting' && countdown > 5.6) {
-      setAllBets([]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roundId]);
 
   const handlePlaceBet = useCallback(async (amount: number): Promise<PlaceBetResult> => {
     const limits = store.getGameLimits('aviator');
@@ -154,31 +209,13 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // Balance is already updated via store.setBalance(res.balance_after) in doCashOut.
   }, []);
 
-  const recordPlayerBet = useCallback(
-    (panel: 0 | 1, amount: number) => {
-      const record: BetRecord = {
-        id: `me-${roundId}-${panel}`,
-        name: PLAYER_NAME,
-        color: '#22c55e',
-        amount,
-        cashedOutAt: null,
-        win: null,
-        isPlayer: true,
-      };
-      setAllBets((prev) => [record, ...prev]);
-      setMyBets((prev) => [record, ...prev]);
-      pendingPlayerBets.current.push({ panel, amount });
-    },
-    [roundId],
-  );
-
   const wrapSetBet = useCallback(
     (panel: 0 | 1) => (updater: (b: BetState) => BetState) => {
       const setter = panel === 0 ? setBet0 : setBet1;
       setter((prev) => {
         const next = updater(prev);
         if (!prev.placed && next.placed && prev.roundId === roundId) {
-          recordPlayerBet(panel, next.amount);
+          pendingPlayerBets.current.push({ panel, amount: next.amount });
           const handler = (e: Event) => {
             const detail = (e as CustomEvent<{ betId: string }>).detail;
             const setter2 = panel === 0 ? setBet0 : setBet1;
@@ -188,26 +225,10 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           window.addEventListener('aviator:bet_registered', handler);
           setTimeout(() => window.removeEventListener('aviator:bet_registered', handler), 10_000);
         }
-        if (prev.cashedOutAt === null && next.cashedOutAt !== null) {
-          setAllBets((ab) =>
-            ab.map((b) =>
-              b.id === `me-${roundId}-${panel}`
-                ? { ...b, cashedOutAt: next.cashedOutAt, win: b.amount * next.cashedOutAt! }
-                : b,
-            ),
-          );
-          setMyBets((mb) =>
-            mb.map((b) =>
-              b.id === `me-${roundId}-${panel}`
-                ? { ...b, cashedOutAt: next.cashedOutAt, win: b.amount * next.cashedOutAt! }
-                : b,
-            ),
-          );
-        }
         return next;
       });
     },
-    [roundId, recordPlayerBet],
+    [roundId],
   );
 
   const canShareBet = bet0.cashedOutAt !== null || bet1.cashedOutAt !== null;
@@ -236,7 +257,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   return (
     <div className="aviator-root flex flex-col h-full w-full bg-aviator-bg overflow-hidden">
-      {/* Header */}
       <Header
         balance={balance}
         soundOn={soundOn}
@@ -248,12 +268,9 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         onBack={onBack}
       />
 
-      {/* History strip */}
       <HistoryBar history={history} />
 
-      {/* Main scrollable area */}
       <div className="flex flex-col flex-1 overflow-y-auto overflow-x-hidden">
-        {/* Flight canvas */}
         <FlightCanvas
           phase={phase}
           multiplier={multiplier}
@@ -265,7 +282,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           timeoutNotices={timeoutNotices}
         />
 
-        {/* Betting panels — Panel 1 full width on top, Panel 2 full width below */}
+        {/* Betting panels — Panel 1 on top, Panel 2 below */}
         <div className="flex flex-col gap-2 p-2">
           <BettingPanel
             bet={bet0}
@@ -299,7 +316,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           />
         </div>
 
-        {/* All Bets / My Bets / Top + Chat */}
         <Sidebar
           phase={phase}
           multiplier={multiplier}
