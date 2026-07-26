@@ -1,7 +1,8 @@
 /**
  * CrashHistoryTabs — All Bets shows real crash bets from Supabase (live + historical).
  * Crash bets are identified by having `bustPoint` in bet_details and NO `game` key.
- * Realtime subscription updates the list instantly when new bets arrive.
+ * Strategy: fetch 500 rows, deduplicate to ONE latest bet per user, so all active
+ * players always appear regardless of how many bets one user has placed.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useCrashMyBets, useCrashState } from '../lib/hooks';
@@ -58,15 +59,16 @@ export default function CrashHistoryTabs() {
   const fetchBets = async () => {
     setLoadingAll(true);
     try {
-      // Crash bets have `bustPoint` in bet_details and NO `game` key
-      // Use filter: bet_details->bustPoint IS NOT NULL AND bet_details->game IS NULL
+      // Fetch 500 rows then deduplicate to ONE latest bet per user.
+      // This ensures all players who have ever bet appear — even if one
+      // active user has hundreds of bets that would otherwise push others out.
       const { data, error } = await supabase
         .from('bets')
         .select('id, user_id, bet_amount, win_amount, multiplier, placed_at, status, bet_details, profiles(username, display_name)')
         .not('bet_details->bustPoint', 'is', null)
         .is('bet_details->game', null)
         .order('placed_at', { ascending: false })
-        .limit(50);
+        .limit(500);
 
       if (error) {
         console.error('CrashHistoryTabs fetchBets error:', error.message);
@@ -74,7 +76,17 @@ export default function CrashHistoryTabs() {
         return;
       }
 
-      const rows: RealBet[] = ((data ?? []) as BetRow[]).map((b) => ({
+      // Keep only the latest bet per user (data is already newest-first)
+      const seenUsers = new Set<string>();
+      const deduped: BetRow[] = [];
+      for (const row of ((data ?? []) as BetRow[])) {
+        if (!seenUsers.has(row.user_id)) {
+          seenUsers.add(row.user_id);
+          deduped.push(row);
+        }
+      }
+
+      const rows: RealBet[] = deduped.map((b) => ({
         id: b.id,
         user: b.profiles?.display_name ?? b.profiles?.username ?? (b.user_id.slice(0, 6) + '…'),
         stake: Number(b.bet_amount),
@@ -84,6 +96,7 @@ export default function CrashHistoryTabs() {
         ts: b.placed_at ? new Date(b.placed_at).getTime() : Date.now(),
         status: b.status ?? 'unknown',
       }));
+
       setAllBets(rows);
     } catch (e) {
       console.error('CrashHistoryTabs unexpected error:', e);
@@ -96,9 +109,9 @@ export default function CrashHistoryTabs() {
 
     void fetchBets();
 
-    // Realtime — new crash bets appear instantly
+    // Realtime — refresh on any bet change
     const ch = supabase
-      .channel('crash_bets_live_v2')
+      .channel('crash_bets_live_v3')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'bets' },
@@ -177,7 +190,7 @@ export default function CrashHistoryTabs() {
       {/* Body */}
       <div className="max-h-72 overflow-y-auto scrollbar-thin overflow-x-auto">
 
-        {/* ── ALL BETS — realtime from Supabase ── */}
+        {/* ── ALL BETS — one latest bet per user ── */}
         {tab === 'all' && (
           <table className="w-full text-[11px]">
             <thead className="text-slate-500 uppercase tracking-wider sticky top-0 bg-slatepanel-900">
