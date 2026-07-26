@@ -85,22 +85,16 @@ export function BettingPanel({
   const betClickedAt = useRef<number>(0);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Single-fire guard: set synchronously in doCashOut before any await.
-  // Prevents auto-cashout useEffect from re-triggering on each multiplier tick
-  // before React re-renders with the updated cashedOutAt state.
   const cashoutFiredRef = useRef(false);
 
   useEffect(() => { setAmountInput(String(bet.amount)); }, [bet.amount]);
   useEffect(() => { setAutoCashoutInput(String(bet.autoCashoutValue)); }, [bet.autoCashoutValue]);
 
-  // Reset cashout guard only when a completely new bet is placed (roundId+placed combo).
-  // Using a combined key avoids resetting when placed flips false→true between rounds.
   const prevPlacedRoundRef = useRef<string>('');
   useEffect(() => {
     const key = `${roundId}-${bet.placed}`;
     if (key !== prevPlacedRoundRef.current) {
       prevPlacedRoundRef.current = key;
-      // Only reset guard when bet becomes placed (not when it becomes unplaced)
       if (bet.placed) {
         cashoutFiredRef.current = false;
       }
@@ -109,7 +103,6 @@ export function BettingPanel({
 
   const limits = store.getGameLimits('aviator');
 
-  // Round transition — fire pending/auto bets for next round.
   useEffect(() => {
     if (bet.roundId !== roundId) {
       setBet((b) => {
@@ -137,7 +130,6 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roundId]);
 
-  // Auto cash-out trigger.
   useEffect(() => {
     if (
       bet.placed &&
@@ -151,7 +143,6 @@ export function BettingPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multiplier, phase]);
 
-  // Round crashed without cash-out — bet is lost.
   useEffect(() => {
     if (phase === 'crashed' && bet.placed && bet.cashedOutAt === null) {
       cashoutFiredRef.current = false;
@@ -280,10 +271,6 @@ export function BettingPanel({
 
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
-
-    // Synchronous single-fire guard — set BEFORE any await so subsequent calls
-    // within the same round (auto-cashout re-triggers on each 50ms multiplier tick)
-    // are blocked immediately without waiting for React state to update.
     if (cashoutFiredRef.current) return;
     cashoutFiredRef.current = true;
 
@@ -297,9 +284,6 @@ export function BettingPanel({
     try {
       const res = await aviatorLoop.cashoutBet(snapAmount, snapPlacedAtMs, at, snapBetId);
       if (res.won && res.win > 0) {
-        // Use setBalanceFromServer to update locally without writing back to DB.
-        // The server already wrote the correct balance. Writing again from the client
-        // would be a no-op at best or cause a Realtime feedback loop at worst.
         store.setBalanceFromServer(res.balance_after);
         onCashOut(snapAmount, res.cashout_at ?? at);
         onWin(res.win);
@@ -309,8 +293,7 @@ export function BettingPanel({
         }
       }
     } catch {
-      // Network failure — UI already shows "CASHED OUT". Balance will sync
-      // from the next 300ms server poll. No toast (cashout likely succeeded).
+      // Network failure — UI already shows "CASHED OUT". Balance syncs from next server poll.
     }
   }
 
@@ -397,8 +380,7 @@ export function BettingPanel({
   } else {
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
-        <span className="text-sm font-bold">BET</span>
-        <span className="text-[11px] opacity-75">{formatMoney(bet.amount)}</span>
+        <span className="text-base font-extrabold tracking-widest">BET</span>
       </span>
     );
     buttonClass = canPlace
@@ -417,66 +399,87 @@ export function BettingPanel({
     !(phase === 'waiting' && bet.placed));
 
   return (
-    <div className="flex-1 bg-[#1a1f2e] rounded-xl p-3 flex flex-col gap-2.5 border border-white/5 min-w-0">
+    <div className="flex-1 bg-[#1e2435] rounded-xl p-3 flex flex-col gap-2.5 border border-white/5 min-w-0">
 
-      {/* Top row: Auto bet + Auto W/D */}
-      <div className="flex items-center gap-3 text-xs">
+      {/* ── Row 1: Autobet | Autowithdrawal | x [multiplier] ── */}
+      <div className="flex items-center gap-2 text-xs">
+
+        {/* Autobet checkbox */}
         <label className="flex items-center gap-1.5 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            className="w-3.5 h-3.5 accent-green-500"
-            checked={bet.autoBetEnabled}
-            onChange={(e) => handleAutoBetToggle(e.target.checked)}
-          />
-          <span className="text-white/60 font-medium">Auto</span>
+          <span
+            className={`w-[18px] h-[18px] rounded flex items-center justify-center border flex-shrink-0 transition-colors ${
+              bet.autoBetEnabled
+                ? 'bg-green-500 border-green-500'
+                : 'bg-transparent border-white/30'
+            }`}
+            onClick={() => handleAutoBetToggle(!bet.autoBetEnabled)}
+          >
+            {bet.autoBetEnabled && (
+              <svg viewBox="0 0 12 10" className="w-2.5 h-2.5 fill-white" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 5l3.5 3.5L11 1" stroke="white" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
+          </span>
+          <span className="text-white/70 font-medium">Autobet</span>
         </label>
 
-        <label className="flex items-center gap-1.5 cursor-pointer select-none ml-auto">
-          <span className="text-white/60 font-medium">Auto W/D</span>
-          <button
-            type="button"
-            className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 relative ${
-              bet.autoCashoutEnabled ? 'bg-green-500' : 'bg-white/20'
+        {/* Divider */}
+        <div className="w-px h-4 bg-white/10 mx-0.5" />
+
+        {/* Autowithdrawal checkbox */}
+        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+          <span
+            className={`w-[18px] h-[18px] rounded flex items-center justify-center border flex-shrink-0 transition-colors ${
+              bet.autoCashoutEnabled
+                ? 'bg-green-500 border-green-500'
+                : 'bg-transparent border-white/30'
             }`}
             onClick={() => setBet((b) => ({ ...b, autoCashoutEnabled: !b.autoCashoutEnabled }))}
           >
-            <span
-              className={`absolute top-1 w-3 h-3 rounded-full bg-white shadow transition-all ${
-                bet.autoCashoutEnabled ? 'left-5' : 'left-1'
-              }`}
-            />
-          </button>
+            {bet.autoCashoutEnabled && (
+              <svg viewBox="0 0 12 10" className="w-2.5 h-2.5 fill-white" xmlns="http://www.w3.org/2000/svg">
+                <path d="M1 5l3.5 3.5L11 1" stroke="white" strokeWidth="1.8" fill="none" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
+          </span>
+          <span className="text-white/70 font-medium">Autowithdrawal</span>
         </label>
 
-        {bet.autoCashoutEnabled && (
-          <div className="flex items-center gap-0.5">
-            <input
-              type="number"
-              min="1.1"
-              step="0.1"
-              className="w-14 bg-white/10 rounded-lg px-1.5 py-0.5 text-white text-xs text-right focus:outline-none focus:ring-1 focus:ring-green-500/50"
-              value={autoCashoutInput}
-              onChange={(e) => {
-                setAutoCashoutInput(e.target.value);
-                const v = parseFloat(e.target.value);
-                if (!isNaN(v) && v >= 1.1) setBet((b) => ({ ...b, autoCashoutValue: v }));
-              }}
-            />
-            <span className="text-white/40 text-xs">x</span>
-          </div>
-        )}
+        {/* x [multiplier] — always visible on the right */}
+        <div className="flex items-center gap-1 ml-auto">
+          <span className="text-white/40 text-xs font-medium">x</span>
+          <input
+            type="number"
+            min="1.1"
+            step="0.1"
+            className={`w-14 rounded-lg px-2 py-0.5 text-white text-xs font-bold text-center focus:outline-none border transition-colors ${
+              bet.autoCashoutEnabled
+                ? 'bg-white/15 border-green-500/40 focus:ring-1 focus:ring-green-500/50'
+                : 'bg-white/8 border-white/10 opacity-50'
+            }`}
+            value={autoCashoutInput}
+            disabled={!bet.autoCashoutEnabled}
+            onChange={(e) => {
+              setAutoCashoutInput(e.target.value);
+              const v = parseFloat(e.target.value);
+              if (!isNaN(v) && v >= 1.1) setBet((b) => ({ ...b, autoCashoutValue: v }));
+            }}
+            onBlur={() => setAutoCashoutInput(String(bet.autoCashoutValue))}
+          />
+        </div>
       </div>
 
-      {/* Amount row: [-] input [+] */}
+      {/* ── Row 2: [-] amount [+] ── */}
       <div className="flex items-center gap-2">
         <button
           type="button"
-          className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer border border-white/10"
+          className="w-9 h-9 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer border border-white/10 disabled:opacity-40 disabled:cursor-not-allowed"
           onClick={() => adjustAmount(-50)}
           disabled={bet.placed || bet.pendingNextRound}
         >
-          <Minus className="w-3.5 h-3.5" />
+          <Minus className="w-3.5 h-3.5 text-white" />
         </button>
+
         <div className="flex-1 relative">
           <input
             type="number"
@@ -492,21 +495,19 @@ export function BettingPanel({
             }}
             onBlur={() => setAmountInput(String(bet.amount))}
           />
-          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 text-xs pointer-events-none">
-            {store.currency}
-          </span>
         </div>
+
         <button
           type="button"
-          className="w-8 h-8 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer border border-white/10"
+          className="w-9 h-9 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors flex-shrink-0 cursor-pointer border border-white/10 disabled:opacity-40 disabled:cursor-not-allowed"
           onClick={() => adjustAmount(50)}
           disabled={bet.placed || bet.pendingNextRound}
         >
-          <Plus className="w-3.5 h-3.5" />
+          <Plus className="w-3.5 h-3.5 text-white" />
         </button>
       </div>
 
-      {/* Quick amounts */}
+      {/* ── Row 3: Quick amounts ── */}
       <div className="flex gap-1.5">
         {QUICK_ADDS.map(({ label, value }) => (
           <button
@@ -524,7 +525,7 @@ export function BettingPanel({
         ))}
       </div>
 
-      {/* ── MAIN ACTION BUTTON ── */}
+      {/* ── Row 4: Main action button ── */}
       <button
         type="button"
         disabled={isButtonDisabled}
