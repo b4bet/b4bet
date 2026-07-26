@@ -8,6 +8,7 @@ import { GameService } from './game-service';
 import type { CrashRoundDetail } from './game-service';
 import { auth } from './auth';
 import { sfx, startHum, updateHum, stopHum } from './crashAudio';
+import { supabase } from '@/integrations/supabase/client';
 
 function playStartSound() { try { sfx.start(); startHum(); } catch { /* audio not ready */ } }
 function playTickSound(m: number) { try { updateHum(m); } catch { /* ignore */ } }
@@ -27,6 +28,8 @@ export interface BetSlot {
   cashedOutAt: number | null;
   cashedOut: boolean;
   win: number | null;
+  /** Supabase bet row ID — set after pending insert */
+  dbId: string | null;
 }
 
 export interface CrashState {
@@ -71,6 +74,7 @@ function freshBet(id: 'A' | 'B'): BetSlot {
     cashedOutAt: null,
     cashedOut: false,
     win: null,
+    dbId: null,
   };
 }
 
@@ -92,6 +96,58 @@ async function settleSlotOnServer(slot: BetSlot, roundId: string, bustPoint: num
     if (typeof result.balance_after === 'number') store.setBalance(result.balance_after);
   } catch (err) {
     console.warn('[CrashEngine] crashSettle failed:', (err as Error)?.message ?? err);
+  }
+}
+
+/** Insert a pending crash bet row to Supabase. Returns the new row id. */
+async function insertPendingBet(userId: string, amount: number, roundId: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from('bets')
+      .insert({
+        user_id: userId,
+        bet_amount: amount,
+        win_amount: 0,
+        multiplier: 0,
+        status: 'pending',
+        bet_details: { bustPoint: 0, cashOutAt: null, roundId },
+        placed_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single();
+    if (error) {
+      console.warn('[CrashEngine] insertPendingBet error:', error.message);
+      return null;
+    }
+    return (data as { id: string } | null)?.id ?? null;
+  } catch (e) {
+    console.warn('[CrashEngine] insertPendingBet exception:', e);
+    return null;
+  }
+}
+
+/** Update a pending bet row to settled state. */
+async function settlePendingBet(
+  dbId: string,
+  winAmount: number,
+  multiplier: number,
+  cashOutAt: number | null,
+  bustPoint: number,
+  status: 'won' | 'lost',
+): Promise<void> {
+  try {
+    await supabase
+      .from('bets')
+      .update({
+        win_amount: winAmount,
+        multiplier,
+        status,
+        resolved_at: new Date().toISOString(),
+        bet_details: { bustPoint, cashOutAt },
+      })
+      .eq('id', dbId);
+  } catch (e) {
+    console.warn('[CrashEngine] settlePendingBet exception:', e);
   }
 }
 
@@ -337,6 +393,10 @@ class CrashEngine {
     this.broadcastBets();
     store.addBalance(slot.win);
     store.recordCrashBet({ roundId: this.state.roundSeq, amount: slot.amount, cashOutAt, bustPoint: this.state.bustPoint, win: slot.win ?? 0 });
+    // Update the pending DB row to won
+    if (slot.dbId) {
+      void settlePendingBet(slot.dbId, slot.win ?? 0, cashOutAt, cashOutAt, this.state.bustPoint, 'won');
+    }
     void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
   }
 
@@ -348,6 +408,10 @@ class CrashEngine {
       if (!slot.placed || slot.cashedOutAt !== null) continue;
       slot.win = 0;
       store.recordCrashBet({ roundId: roundSeq, amount: slot.amount, cashOutAt: null, bustPoint, win: 0 });
+      // Update the pending DB row to lost
+      if (slot.dbId) {
+        void settlePendingBet(slot.dbId, 0, bustPoint, null, bustPoint, 'lost');
+      }
       void settleSlotOnServer(slot, roundId, bustPoint);
     }
     this.broadcastBets();
@@ -363,6 +427,15 @@ class CrashEngine {
     slot.placed = true;
     store.debit(amount);
     this.broadcastBets();
+
+    // Insert a pending bet immediately so it appears in the All Bets tab live
+    const session = auth.getSession();
+    if (session?.userId) {
+      void insertPendingBet(session.userId, amount, this.state.roundId).then((dbId) => {
+        if (dbId) slot.dbId = dbId;
+      });
+    }
+
     return { ok: true };
   }
 
@@ -371,6 +444,11 @@ class CrashEngine {
     if (this.state.phase !== 'countdown') return { ok: false, reason: 'Cannot cancel after round starts' };
     if (!slot.placed) return { ok: false, reason: 'No bet to cancel' };
     store.addBalance(slot.amount);
+    // Remove the pending DB row if it was inserted
+    if (slot.dbId) {
+      const dbId = slot.dbId;
+      void supabase.from('bets').delete().eq('id', dbId).catch(() => {});
+    }
     this.state.bets[id] = freshBet(id);
     this.broadcastBets();
     return { ok: true };
