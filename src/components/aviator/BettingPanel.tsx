@@ -83,6 +83,8 @@ export function BettingPanel({
   const [autoCashoutInput, setAutoCashoutInput] = useState<string>(String(bet.autoCashoutValue));
 
   const betClickedAt = useRef<number>(0);
+  // Tracks last quick-stake button clicked — same button again = add cumulatively
+  const lastQuickRef = useRef<number | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const cashoutFiredRef = useRef(false);
 
@@ -158,6 +160,7 @@ export function BettingPanel({
   const canCancelQueue = bet.pendingNextRound && !bet.placed;
 
   function adjustAmount(delta: number) {
+    lastQuickRef.current = null;
     setBet((b) => ({ ...b, amount: Math.max(limits.min, Math.min(limits.max, Math.round((b.amount + delta) * 100) / 100)) }));
   }
 
@@ -399,6 +402,7 @@ export function BettingPanel({
                 value={amountInput}
                 disabled={bet.placed || bet.pendingNextRound}
                 onChange={(e) => {
+                  lastQuickRef.current = null;
                   setAmountInput(e.target.value);
                   const v = parseFloat(e.target.value);
                   if (!isNaN(v)) setAmount(v);
@@ -416,7 +420,7 @@ export function BettingPanel({
             </button>
           </div>
 
-          {/* Quick amounts */}
+          {/* Quick amounts — same button again adds cumulatively (100→200→300) */}
           <div className="flex gap-1">
             {QUICK_ADDS.map(({ label, value }) => (
               <button
@@ -424,7 +428,20 @@ export function BettingPanel({
                 type="button"
                 disabled={bet.placed || bet.pendingNextRound}
                 className="flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer bg-white/8 hover:bg-white/15 text-white/70 disabled:opacity-40 disabled:cursor-not-allowed border border-white/10"
-                onClick={() => { setAmount(value); setAmountInput(String(value)); }}
+                onClick={() => {
+                  if (lastQuickRef.current === value) {
+                    // Same button again — add cumulatively
+                    const cur = parseFloat(amountInput) || 0;
+                    const next = Math.max(limits.min, Math.min(limits.max, Math.round((cur + value) * 100) / 100));
+                    setAmount(next);
+                    setAmountInput(String(next));
+                  } else {
+                    // Different button — set flat value
+                    lastQuickRef.current = value;
+                    setAmount(value);
+                    setAmountInput(String(value));
+                  }
+                }}
               >
                 {label}
               </button>
