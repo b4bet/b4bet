@@ -151,8 +151,13 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCashoutNotice]);
 
-  const handleWin = useCallback((win: number) => {
-    store.credit(win);
+  // handleWin intentionally does NOT call store.credit(win).
+  // BettingPanel.doCashOut already calls store.setBalance(res.balance_after)
+  // which sets the correct server-authoritative balance. Calling credit() here
+  // as well would double-add the win amount.
+  const handleWin = useCallback((_win: number) => {
+    // Balance is already updated via store.setBalance(res.balance_after) in doCashOut.
+    // Nothing to do here — keep the callback for future UI hooks (win animation, etc).
   }, []);
 
   const recordPlayerBet = useCallback(
