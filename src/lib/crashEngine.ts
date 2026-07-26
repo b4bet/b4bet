@@ -26,7 +26,7 @@ export interface BetSlot {
   cashedOutAt: number | null;
   cashedOut: boolean;
   win: number | null;
-  pendingBetId?: string; // id in crash_pending_bets table
+  pendingBetId?: string;
 }
 export interface CrashState {
   phase: CrashPhase;
@@ -81,7 +81,7 @@ async function settleSlotOnServer(slot: BetSlot, roundId: string, bustPoint: num
   }
 }
 
-// Insert bet into crash_pending_bets so ALL users can see it in All Bets tab
+// Insert into crash_pending_bets so all users see this bet in All Bets tab
 async function insertPendingBet(slot: BetSlot, roundId: string): Promise<string | null> {
   const session = auth.getSession();
   if (!session) return null;
@@ -94,6 +94,7 @@ async function insertPendingBet(slot: BetSlot, roundId: string): Promise<string 
         bet_amount: slot.amount,
         round_uuid: roundId,
         status: 'active',
+        win_amount: 0,
       })
       .select('id')
       .single();
@@ -105,7 +106,6 @@ async function insertPendingBet(slot: BetSlot, roundId: string): Promise<string 
   }
 }
 
-// Update pending bet status (won/lost) and cashout multiplier
 async function updatePendingBet(pendingBetId: string, status: 'won' | 'lost', cashOutAt: number | null, winAmount: number): Promise<void> {
   try {
     await supabase
@@ -117,13 +117,9 @@ async function updatePendingBet(pendingBetId: string, status: 'won' | 'lost', ca
   }
 }
 
-// Clear old round's pending bets
 async function clearPendingBetsForRound(roundId: string): Promise<void> {
   try {
-    await supabase
-      .from('crash_pending_bets')
-      .delete()
-      .eq('round_uuid', roundId);
+    await supabase.from('crash_pending_bets').delete().eq('round_uuid', roundId);
   } catch { /* ignore */ }
 }
 
@@ -179,7 +175,6 @@ class CrashEngine {
       const newRound = r.round_uuid && r.round_uuid !== this.lastKnownRoundId;
 
       if (newRound) {
-        // Clear previous round's pending bets before switching
         if (this.lastKnownRoundId) {
           void clearPendingBetsForRound(this.lastKnownRoundId);
         }
@@ -302,7 +297,6 @@ class CrashEngine {
     store.addBalance(slot.win);
     store.recordCrashBet({ roundId: this.state.roundSeq, amount: slot.amount, cashOutAt, bustPoint: this.state.bustPoint, win: slot.win ?? 0 });
     void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
-    // Update pending bet to won
     if (slot.pendingBetId) {
       void updatePendingBet(slot.pendingBetId, 'won', cashOutAt, slot.win ?? 0);
     }
@@ -317,7 +311,6 @@ class CrashEngine {
       slot.win = 0;
       store.recordCrashBet({ roundId: roundSeq, amount: slot.amount, cashOutAt: null, bustPoint, win: 0 });
       void settleSlotOnServer(slot, roundId, bustPoint);
-      // Update pending bet to lost
       if (slot.pendingBetId) {
         void updatePendingBet(slot.pendingBetId, 'lost', null, 0);
       }
@@ -335,7 +328,7 @@ class CrashEngine {
     slot.placed = true;
     store.debit(amount);
     this.broadcastBets();
-    // Insert into crash_pending_bets so other users see it in All Bets tab
+    // Insert into crash_pending_bets so other users see this bet immediately
     void insertPendingBet(slot, this.state.roundId).then((pendingId) => {
       if (pendingId) slot.pendingBetId = pendingId;
     });
@@ -347,7 +340,6 @@ class CrashEngine {
     if (this.state.phase !== 'countdown') return { ok: false, reason: 'Cannot cancel after round starts' };
     if (!slot.placed) return { ok: false, reason: 'No bet to cancel' };
     store.addBalance(slot.amount);
-    // Remove from pending bets
     if (slot.pendingBetId) {
       void supabase.from('crash_pending_bets').delete().eq('id', slot.pendingBetId);
     }
@@ -383,7 +375,7 @@ class CrashEngine {
     };
   }
 
-  getBets() {
+  getBets(): Record<'A' | 'B', BetSlot> {
     return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
   }
 }
