@@ -49,18 +49,48 @@ export interface BetRow {
   multiplier: number; status: string; placed_at: string; resolved_at: string | null;
 }
 
-// Generic row type for any table not explicitly defined
-export type GenericRow = Record<string, Json | undefined>;
+// ---- crash_pending_bets table row types ----
+export interface CrashPendingBetRow {
+  id: string;
+  user_id: string;
+  username: string | null;
+  bet_amount: number;
+  round_uuid: string;
+  cash_out_at: number | null;
+  status: 'active' | 'won' | 'lost';
+  placed_at: string;
+  win_amount: number;
+}
 
 export type Database = {
   __InternalSupabase: { PostgrestVersion: "14.5" }
   public: {
     Tables: {
-      [tableName: string]: {
-        Row: GenericRow
-        Insert: GenericRow
-        Update: GenericRow
-      }
+      crash_pending_bets: {
+        Row: CrashPendingBetRow;
+        Insert: {
+          id?: string;
+          user_id: string;
+          username?: string | null;
+          bet_amount: number;
+          round_uuid: string;
+          cash_out_at?: number | null;
+          status?: 'active' | 'won' | 'lost';
+          placed_at?: string;
+          win_amount?: number;
+        };
+        Update: {
+          id?: string;
+          user_id?: string;
+          username?: string | null;
+          bet_amount?: number;
+          round_uuid?: string;
+          cash_out_at?: number | null;
+          status?: 'active' | 'won' | 'lost';
+          placed_at?: string;
+          win_amount?: number;
+        };
+      };
     }
     Views: { [_ in never]: never }
     Functions: {
@@ -178,23 +208,32 @@ export type Database = {
       }
       get_crash_my_bets: {
         Args: { p_user_id: string; p_limit?: number }
-        Returns: BetRow[]
+        Returns: {
+          id: string;
+          bet_amount: number;
+          win_amount: number;
+          cash_out_at: number | null;
+          status: string;
+          placed_at: string;
+          round_uuid: string;
+        }[]
       }
       get_crash_top_players: {
         Args: { p_since: string; p_limit?: number }
-        Returns: { user_id: string; username: string; earnings: number }[]
+        Returns: {
+          user_id: string;
+          username: string | null;
+          total_won: number;
+          bet_count: number;
+        }[]
       }
       get_crash_live_bets: {
         Args: { p_limit?: number }
-        Returns: BetRow[]
+        Returns: CrashPendingBetRow[]
       }
       get_crash_all_bets: {
         Args: { p_limit?: number }
-        Returns: BetRow[]
-      }
-      [fnName: string]: {
-        Args: Record<string, unknown>
-        Returns: unknown
+        Returns: CrashPendingBetRow[]
       }
     }
     Enums: { [_ in never]: never }
