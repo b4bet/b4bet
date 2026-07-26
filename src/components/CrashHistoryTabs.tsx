@@ -62,13 +62,16 @@ export default function CrashHistoryTabs() {
   const [topRows, setTopRows] = useState<TopRow[]>([]);
   const [topLoading, setTopLoading] = useState(false);
 
-  // Load All Bets via RPC (SECURITY DEFINER — no RLS restriction)
+  // Load All Bets via SECURITY DEFINER RPC — bypasses RLS
   useEffect(() => {
     if (tab !== 'all') return;
     setAllLoading(true);
-    supabase
+    void supabase
       .rpc('get_crash_all_bets', { p_limit: 30 })
       .then(({ data, error }) => {
+        if (error) {
+          console.error('[CrashHistoryTabs] get_crash_all_bets error:', error);
+        }
         if (!error && data) {
           setAllBets(
             (data as AllBetRow[]).map((r) => ({
@@ -86,11 +89,13 @@ export default function CrashHistoryTabs() {
 
   // Load My Bets via RPC
   useEffect(() => {
-    if (tab !== 'mine' || !session?.userId) return;
+    if (tab !== 'mine') return;
+    if (!session?.userId) { setMyLoading(false); return; }
     setMyLoading(true);
-    supabase
+    void supabase
       .rpc('get_crash_my_bets', { p_user_id: session.userId, p_limit: 50 })
       .then(({ data, error }) => {
+        if (error) console.error('[CrashHistoryTabs] get_crash_my_bets error:', error);
         if (!error && data) {
           setMyBets(
             (data as MyBetRow[]).map((r) => ({
@@ -111,9 +116,10 @@ export default function CrashHistoryTabs() {
     if (tab !== 'top') return;
     setTopLoading(true);
     const since = new Date(Date.now() - RANGE_MS[range]).toISOString();
-    supabase
+    void supabase
       .rpc('get_crash_top_players', { p_since: since, p_limit: 10 })
       .then(({ data, error }) => {
+        if (error) console.error('[CrashHistoryTabs] get_crash_top_players error:', error);
         if (!error && data) {
           setTopRows(
             (data as TopRow[]).map((r) => ({
@@ -169,7 +175,7 @@ export default function CrashHistoryTabs() {
       {/* Body */}
       <div className="overflow-auto max-h-56 rounded-xl border border-borderline-900">
 
-        {/* ── ALL BETS ─────────────────────────────────────────── */}
+        {/* ── ALL BETS ─────────────────────────────────────────────────────────── */}
         {tab === 'all' && (
           <table className="w-full text-xs text-left">
             <thead className="sticky top-0 bg-slatepanel-800 text-slate-400">
@@ -207,7 +213,7 @@ export default function CrashHistoryTabs() {
           </table>
         )}
 
-        {/* ── MY BETS ─────────────────────────────────────────── */}
+        {/* ── MY BETS ─────────────────────────────────────────────────────────── */}
         {tab === 'mine' && (
           <table className="w-full text-xs text-left">
             <thead className="sticky top-0 bg-slatepanel-800 text-slate-400">
@@ -257,7 +263,7 @@ export default function CrashHistoryTabs() {
           </table>
         )}
 
-        {/* ── TOP PLAYERS ──────────────────────────────────────── */}
+        {/* ── TOP PLAYERS ──────────────────────────────────────────────────────── */}
         {tab === 'top' && (
           <table className="w-full text-xs text-left">
             <thead className="sticky top-0 bg-slatepanel-800 text-slate-400">
