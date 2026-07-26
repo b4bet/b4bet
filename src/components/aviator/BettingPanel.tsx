@@ -90,8 +90,19 @@ export function BettingPanel({
   const betClickedAt = useRef<number>(0);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Synchronous guard: prevents doCashOut from firing more than once per round.
+  // React state updates (cashedOutAt) are batched and async, so the auto-cashout
+  // useEffect can fire multiple times before cashedOutAt propagates — this ref
+  // blocks re-entry immediately on the first call.
+  const cashoutFiredRef = useRef(false);
+
   useEffect(() => { setAmountInput(String(bet.amount)); }, [bet.amount]);
   useEffect(() => { setAutoCashoutInput(String(bet.autoCashoutValue)); }, [bet.autoCashoutValue]);
+
+  // Reset the cashout guard each time a new round starts or bet is placed
+  useEffect(() => {
+    cashoutFiredRef.current = false;
+  }, [roundId, bet.placed]);
 
   const limits = store.getGameLimits('aviator');
 
@@ -140,6 +151,8 @@ export function BettingPanel({
   // Round crashed without cash-out — bet is lost.
   useEffect(() => {
     if (phase === 'crashed' && bet.placed && bet.cashedOutAt === null) {
+      // Reset cashout guard so it can fire next round
+      cashoutFiredRef.current = false;
       const session = auth.getSession();
       if (session) {
         void import('../../lib/game-service').then(({ GameService }) => {
@@ -265,6 +278,15 @@ export function BettingPanel({
 
   async function doCashOut(atOverride?: number) {
     if (!canCashOut) return;
+
+    // SYNCHRONOUS guard — must be checked and set before any await.
+    // The auto-cashout useEffect fires every 50ms (on each multiplier tick).
+    // React state (cashedOutAt) is async, so bet.cashedOutAt is still null
+    // on subsequent ticks before the state update re-renders.
+    // This ref prevents any second call from proceeding within the same round.
+    if (cashoutFiredRef.current) return;
+    cashoutFiredRef.current = true;
+
     const at = atOverride ?? multiplier;
     // Optimistically mark as cashed out so UI updates immediately
     setBet((b) => ({ ...b, cashedOutAt: at }));
@@ -276,8 +298,8 @@ export function BettingPanel({
 
     // Retry is ONLY safe when we have a betId — the server uses it as an
     // idempotency key to prevent double-crediting.
-    // Without a betId there is NO deduplication on the server, so we must
-    // send exactly ONE request. Balance auto-syncs from the 300ms server poll.
+    // Without a betId there is NO deduplication on the server, so exactly
+    // ONE request is sent. Balance auto-syncs from the 300ms server poll.
     const maxAttempts = snapBetId ? 2 : 1;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
