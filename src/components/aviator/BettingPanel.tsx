@@ -112,7 +112,6 @@ export function BettingPanel({
             void onPlaceBet(b.amount).then((res) => {
               if (!res.ok) {
                 setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
-                // NOTE: AviatorGame.handlePlaceBet already credits back — no store.credit here
                 if (res.reason === 'insufficient') onInsufficientBalance?.();
               }
             });
@@ -165,7 +164,6 @@ export function BettingPanel({
 
   const canPlace = phase === 'waiting' && !bet.placed && bet.amount <= balance && countdown > 0;
   const canCashOut = phase === 'flying' && bet.placed && bet.cashedOutAt === null;
-  // CANCEL only shows during waiting phase when bet is placed AND no recent BET click
   const canCancel = phase === 'waiting' && bet.placed && bet.cashedOutAt === null &&
     (Date.now() - betClickedAt.current) > BET_DEBOUNCE_MS;
   const isInsufficientBalance = phase === 'waiting' && !bet.placed && bet.amount > balance && countdown > 0;
@@ -209,18 +207,15 @@ export function BettingPanel({
   function handleBetClick() {
     if (!auth.getSession()) { bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login'); return; }
 
-    // Prevent any action while processing
     if (isProcessing) return;
 
     if (canCashOut) { void doCashOut(); return; }
 
-    // Cancel queue (flying, pending next round)
     if (canCancelQueue) {
       setBet((b) => ({ ...b, pendingNextRound: false }));
       return;
     }
 
-    // Cancel placed bet (waiting phase only, with debounce guard)
     if (canCancel) { doCancel(); return; }
 
     if (isInsufficientBalance) { onInsufficientBalance?.(); return; }
@@ -232,7 +227,6 @@ export function BettingPanel({
       }
       if (countdown <= 0.01) { onTimeout?.(); return; }
 
-      // Record click time — debounce guard prevents immediate cancel on double-tap
       betClickedAt.current = Date.now();
       setIsProcessing(true);
 
@@ -242,21 +236,15 @@ export function BettingPanel({
       void onPlaceBet(bet.amount).then((res) => {
         setIsProcessing(false);
         if (!res.ok) {
-          // Rollback optimistic state
-          // NOTE: AviatorGame.handlePlaceBet already credited back — do NOT call store.credit here
           setBet((b) => ({ ...b, placed: false, betId: null }));
-
           if (res.reason === 'insufficient') {
             onInsufficientBalance?.();
           }
-          // server_rejected / error: silent rollback — no toast, no auto-queue
-          // User can manually press BET again or wait for next round
         }
       });
       return;
     }
 
-    // Flying phase — queue for next round
     if (canQueueNextRound) {
       if (bet.amount < limits.min || bet.amount > limits.max) {
         cms.toast({ title: 'Bet out of range', body: `Aviator bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
@@ -281,21 +269,20 @@ export function BettingPanel({
     // Optimistically mark as cashed out so UI updates immediately
     setBet((b) => ({ ...b, cashedOutAt: at }));
 
-    // Snapshot betId now — state may change during async calls
-    const betId = bet.betId;
-    const betAmount = bet.amount;
-    const placedAtMs = bet.placedAtMs;
+    // Snapshot values now — state may change during async calls
+    const snapBetId = bet.betId;
+    const snapAmount = bet.amount;
+    const snapPlacedAtMs = bet.placedAtMs;
 
     // Retry up to 2 times on network failure.
-    // The server uses betId for idempotency, so retrying is safe — it will
-    // never double-credit a win even if the first request already succeeded.
+    // The server uses betId for idempotency — retrying never double-credits.
     const MAX_ATTEMPTS = 2;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
-        const res = await aviatorLoop.cashoutBet(betAmount, placedAtMs, at, betId);
+        const res = await aviatorLoop.cashoutBet(snapAmount, snapPlacedAtMs, at, snapBetId);
         if (res.won && res.win > 0) {
           store.setBalance(res.balance_after);
-          onCashOut(betAmount, res.cashout_at ?? at);
+          onCashOut(snapAmount, res.cashout_at ?? at);
           onWin(res.win);
         } else {
           // Server says not won (crashed before cashout confirmed)
@@ -303,23 +290,22 @@ export function BettingPanel({
             aviatorLoop.reportServerCrash(res.crash_point);
           }
         }
-        return; // Done — stop retrying
+        return; // success — stop retrying
       } catch {
         if (attempt < MAX_ATTEMPTS - 1) {
-          // Brief pause before retry (handles transient network blip)
+          // Brief pause before retry — handles transient network blip on mobile
           await delay(1200);
           continue;
         }
-        // All attempts failed — this is a network issue on slow/mobile connections.
-        // The cashout UI is already showing "CASHED OUT" (cashedOutAt was set above).
-        // The server may have processed the win already — balance will sync on the
-        // next aviator server poll (every 300ms). Do NOT show an error toast here
-        // because it confuses users when their cashout actually went through.
+        // All attempts failed — cashout UI already shows "CASHED OUT".
+        // The server likely processed the win already; balance will sync
+        // automatically from the next 300ms server poll.
+        // NO toast shown — a false error toast is worse than silence.
       }
     }
   }
 
-  // ── Button appearance (Spribe-style) ───────────────────────────────────────
+  // ── Button appearance ─────────────────────────────────────────────────────
   let betLabel: React.ReactNode;
   let buttonClass = '';
 
@@ -331,7 +317,7 @@ export function BettingPanel({
     );
     buttonClass = 'bg-[#22c55e]/50 cursor-wait';
   } else if (canCashOut) {
-    const livePayout = betAmount * multiplier;
+    const livePayout = bet.amount * multiplier;
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-sm font-bold tracking-wide">CASH OUT</span>
@@ -356,7 +342,6 @@ export function BettingPanel({
     );
     buttonClass = 'bg-[#ef4444] hover:bg-[#f87171] shadow-[0_4px_15px_rgba(239,68,68,0.4)]';
   } else if (phase === 'waiting' && bet.placed) {
-    // Still within debounce — show "waiting" to prevent accidental cancel
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-sm font-bold">BET PLACED</span>
@@ -411,8 +396,6 @@ export function BettingPanel({
       ? 'bg-[#22c55e] hover:bg-[#4ade80] shadow-[0_4px_20px_rgba(34,197,94,0.5)] active:scale-95'
       : 'bg-[#22c55e]/30 cursor-not-allowed';
   }
-
-  const betAmount = bet.amount;
 
   const isButtonDisabled =
     isProcessing ||
@@ -532,7 +515,7 @@ export function BettingPanel({
         ))}
       </div>
 
-      {/* ── MAIN ACTION BUTTON (full-width, Spribe-style) ── */}
+      {/* ── MAIN ACTION BUTTON ── */}
       <button
         type="button"
         disabled={isButtonDisabled}
