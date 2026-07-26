@@ -12,6 +12,23 @@ const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
 
 export interface CrashBustResult { bust_point: number; }
 export interface CrashSettleResult { success: boolean; win: number; verified_bust: number | null; balance_after: number; }
+export interface CrashCurrentRoundResult {
+  phase: 'waiting' | 'flying' | 'crashed';
+  elapsed_ms: number;
+  round_uuid: string | null;
+  crash_point: number | null;
+  last_crash_point: number | null;
+  server_seed_hash?: string | null;
+}
+export interface CrashHistoryResult { history: number[]; }
+export interface CrashRoundDetail {
+  bust_point: number;
+  round_uuid: string;
+  server_seed_hash: string;
+  server_seed: string | null;
+  created_at: string;
+}
+export interface CrashHistoryDetailResult { history: CrashRoundDetail[]; }
 export interface MinesStartResult { success: boolean; session_id: string; balance_after: number; grid_size: number; mine_count: number; }
 export interface MinesRevealResult { success: boolean; is_mine: boolean; gems_found: number; current_multiplier: number; next_multiplier: number; mine_positions?: number[]; }
 export interface MinesCashoutResult { success: boolean; payout: number; multiplier: number; balance_after: number; mine_positions: number[]; }
@@ -93,8 +110,6 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
 
 /**
  * Soft post — only throws on HTTP 5xx server failures.
- * Soft rejections like { success: false, error: "Round already ended" } on HTTP 200
- * are returned as-is so the caller can inspect result.success.
  */
 async function postSoft<T>(body: Record<string, unknown>): Promise<T> {
   const res = await fetch(EDGE_FN, {
@@ -114,6 +129,22 @@ async function postSoft<T>(body: Record<string, unknown>): Promise<T> {
 
 export const GameService = {
   // ── Crash ──────────────────────────────────────────────────────────────────
+
+  /** Fetch current crash round state (phase, elapsed_ms, round_uuid, crash_point). */
+  crashGetCurrentRound(): Promise<CrashCurrentRoundResult> {
+    return get<CrashCurrentRoundResult>({ action: "crash_current_round" });
+  },
+
+  /** Fetch recent crash history (bust points only). */
+  crashGetHistory(): Promise<CrashHistoryResult> {
+    return get<CrashHistoryResult>({ action: "crash_history" });
+  },
+
+  /** Fetch detailed crash history with provably-fair fields. */
+  crashGetHistoryDetail(): Promise<CrashHistoryDetailResult> {
+    return get<CrashHistoryDetailResult>({ action: "crash_history_detail" });
+  },
+
   crashGetBustPoint(roundId: number): Promise<CrashBustResult> {
     return get<CrashBustResult>({ action: "crash_get_bust", round_id: String(roundId) });
   },
@@ -177,34 +208,18 @@ export const GameService = {
 
   // ── Aviator ────────────────────────────────────────────────────────────────
 
-  /**
-   * Fetch the current Aviator round state from the server.
-   * Called by AviatorLoop.syncFromServer() every AV_POLL_INTERVAL_MS.
-   */
   aviatorGetCurrentRound(): Promise<AviatorCurrentRoundResult> {
     return get<AviatorCurrentRoundResult>({ action: "aviator_current_round" });
   },
 
-  /**
-   * Fetch the recent Aviator round history (crash points only).
-   */
   aviatorGetHistory(): Promise<AviatorHistoryResult> {
     return get<AviatorHistoryResult>({ action: "aviator_history" });
   },
 
-  /**
-   * Fetch detailed Aviator round history (with provably-fair fields).
-   * Falls back gracefully to aviatorGetHistory() if not supported.
-   */
   aviatorGetHistoryDetail(): Promise<AviatorHistoryDetailResult> {
     return get<AviatorHistoryDetailResult>({ action: "aviator_history_detail" });
   },
 
-  /**
-   * Place a bet for the current Aviator round.
-   * Uses postSoft so server soft-rejections (round ended, window closed)
-   * come back as { success: false } instead of thrown exceptions.
-   */
   aviatorPlaceBet(userId: string, betAmount: number, roundUuid: string | null, placedAtMs?: number): Promise<AviatorPlaceBetResult> {
     return postSoft<AviatorPlaceBetResult>({
       action: "aviator_place_bet",
@@ -215,10 +230,6 @@ export const GameService = {
     });
   },
 
-  /**
-   * Cancel a pending bet before/during early flying phase.
-   * Server refunds the bet amount back to the user's balance.
-   */
   aviatorCancelBet(userId: string, betAmount: number, betId: string | null): Promise<AviatorCancelBetResult> {
     return postSoft<AviatorCancelBetResult>({
       action: "aviator_cancel_bet",
@@ -228,9 +239,6 @@ export const GameService = {
     });
   },
 
-  /**
-   * Called at the START of each Aviator round.
-   */
   aviatorRoundStart(userId: string, roundId: number): Promise<AviatorRoundStartResult> {
     return post<AviatorRoundStartResult>({
       game_type: "aviator_round_start",
@@ -239,9 +247,6 @@ export const GameService = {
     });
   },
 
-  /**
-   * Called when a player clicks Cash Out during flying phase.
-   */
   aviatorCashout(
     userId: string,
     roundUuid: string | null,
@@ -261,9 +266,6 @@ export const GameService = {
     });
   },
 
-  /**
-   * Called after a round ends for bets that did NOT cash out (always a loss).
-   */
   aviatorSettle(userId: string, roundUuid: string | null, _legacyRoundId: number, betAmount: number): Promise<AviatorSettleResult> {
     return post<AviatorSettleResult>({
       action: "aviator_settle",
@@ -273,9 +275,6 @@ export const GameService = {
     });
   },
 
-  /**
-   * Polled every ~300ms during flying phase to detect server crash.
-   */
   aviatorRoundStatus(roundId: number): Promise<AviatorRoundStatusResult> {
     return get<AviatorRoundStatusResult>({ action: "aviator_round_status", round_id: String(roundId) });
   },
