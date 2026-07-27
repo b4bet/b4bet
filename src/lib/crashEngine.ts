@@ -1,6 +1,7 @@
 // crashEngine.ts — SERVER-SYNCED shared crash round.
-// Client polls crash_get_current_round every 300ms.
+// Client polls crash_current_round every 300ms.
 // On startup, loads last 20 rounds from server for history bar.
+// IMPORTANT: getState() and getBets() MUST exist — hooks.ts calls them as initial values.
 
 import { bus, Topics } from './bus';
 import { store } from './store';
@@ -9,14 +10,19 @@ import { auth } from './auth';
 import { sfx, startHum, updateHum, stopHum } from './crashAudio';
 import { supabase } from '@/integrations/supabase/client';
 
-function playStartSound() { try { sfx.start(); startHum(); } catch { /* audio not ready */ } }
+function playStartSound() { try { sfx.start(); startHum(); } catch { /* ignore */ } }
 function playTickSound(m: number) { try { updateHum(m); } catch { /* ignore */ } }
 function playCrashSound() { try { stopHum(); sfx.crash(); } catch { /* ignore */ } }
 function playCashoutSound() { try { sfx.cashout(); } catch { /* ignore */ } }
 
 export type CrashPhase = 'countdown' | 'flying' | 'busted';
 
-export interface CashoutEvent { id: string; amount: number; multiplier: number; ts: number; }
+export interface CashoutEvent {
+  id: string;
+  amount: number;
+  multiplier: number;
+  ts: number;
+}
 
 export interface BetSlot {
   id: 'A' | 'B';
@@ -27,7 +33,7 @@ export interface BetSlot {
   cashedOutAt: number | null;
   cashedOut: boolean;
   win: number | null;
-  /** Supabase bet row ID set after pending insert */
+  /** Supabase bets row id — set after pending insert */
   dbId: string | null;
 }
 
@@ -80,7 +86,11 @@ function multiplierFromElapsed(elapsedMs: number): number {
   return Math.pow(Math.E, 0.12 * (elapsedMs / 1000));
 }
 
-async function settleSlotOnServer(slot: BetSlot, roundId: string, bustPoint: number): Promise<void> {
+async function settleSlotOnServer(
+  slot: BetSlot,
+  roundId: string,
+  bustPoint: number,
+): Promise<void> {
   const session = auth.getSession();
   if (!session) return;
   try {
@@ -97,8 +107,12 @@ async function settleSlotOnServer(slot: BetSlot, roundId: string, bustPoint: num
   }
 }
 
-/** Insert a pending crash bet row so it appears in All Bets immediately. */
-async function insertPendingBet(userId: string, amount: number, roundId: string): Promise<string | null> {
+/** Insert a pending bet row to bets table so All Bets tab shows it immediately. */
+async function insertPendingBet(
+  userId: string,
+  amount: number,
+  roundId: string,
+): Promise<string | null> {
   try {
     const { data, error } = await supabase
       .from('bets')
@@ -124,7 +138,7 @@ async function insertPendingBet(userId: string, amount: number, roundId: string)
   }
 }
 
-/** Update pending bet row to won/lost on settlement. */
+/** Update a pending bet row to won or lost when the round settles. */
 async function settlePendingBet(
   dbId: string,
   winAmount: number,
@@ -146,6 +160,15 @@ async function settlePendingBet(
       .eq('id', dbId);
   } catch (e) {
     console.warn('[CrashEngine] settlePendingBet exception:', e);
+  }
+}
+
+/** Delete a pending bet row when the user cancels before round starts. */
+async function deletePendingBet(dbId: string): Promise<void> {
+  try {
+    await supabase.from('bets').delete().eq('id', dbId);
+  } catch (e) {
+    console.warn('[CrashEngine] deletePendingBet exception:', e);
   }
 }
 
@@ -228,7 +251,6 @@ class CrashEngine {
         this.state.phase = 'countdown';
         this.state.countdown = remaining;
         this.state.multiplier = 1.0;
-
         if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
           if (this.state.history[0] !== bp) {
@@ -297,18 +319,31 @@ class CrashEngine {
   private checkAutoCashouts() {
     const m = this.state.multiplier;
     for (const slot of Object.values(this.state.bets)) {
-      if (slot.placed && !slot.cashedOut && slot.autoEnabled && slot.autoCashAt !== null && m >= slot.autoCashAt) {
+      if (
+        slot.placed &&
+        !slot.cashedOut &&
+        slot.autoEnabled &&
+        slot.autoCashAt !== null &&
+        m >= slot.autoCashAt
+      ) {
         this.performCashOut(slot.id, slot.autoCashAt);
       }
     }
   }
 
-  private publish() { bus.emit(Topics.CrashState, this.getState()); }
+  private publish() {
+    bus.emit(Topics.CrashState, this.getState());
+  }
 
-  private publishHistory() { bus.emit(Topics.CrashHistory, [...this.state.history]); }
+  private publishHistory() {
+    bus.emit(Topics.CrashHistory, [...this.state.history]);
+  }
 
   private broadcastBets() {
-    const bets = { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
+    const bets: Record<'A' | 'B', BetSlot> = {
+      A: { ...this.state.bets.A },
+      B: { ...this.state.bets.B },
+    };
     bus.emit(Topics.CrashBets, bets);
     bus.emit(Topics.CrashTick, bets);
   }
@@ -320,10 +355,19 @@ class CrashEngine {
     slot.cashedOut = true;
     slot.win = Math.floor(slot.amount * cashOutAt);
     playCashoutSound();
-    bus.emit(Topics.CrashCashout, { id, amount: slot.win, multiplier: cashOutAt, ts: Date.now() } satisfies CashoutEvent);
+    bus.emit(
+      Topics.CrashCashout,
+      { id, amount: slot.win, multiplier: cashOutAt, ts: Date.now() } satisfies CashoutEvent,
+    );
     this.broadcastBets();
     store.addBalance(slot.win);
-    store.recordCrashBet({ roundId: this.state.roundSeq, amount: slot.amount, cashOutAt, bustPoint: this.state.bustPoint, win: slot.win ?? 0 });
+    store.recordCrashBet({
+      roundId: this.state.roundSeq,
+      amount: slot.amount,
+      cashOutAt,
+      bustPoint: this.state.bustPoint,
+      win: slot.win ?? 0,
+    });
     if (slot.dbId) {
       void settlePendingBet(slot.dbId, slot.win ?? 0, cashOutAt, cashOutAt, this.state.bustPoint, 'won');
     }
@@ -337,7 +381,13 @@ class CrashEngine {
     for (const slot of Object.values(this.state.bets)) {
       if (!slot.placed || slot.cashedOutAt !== null) continue;
       slot.win = 0;
-      store.recordCrashBet({ roundId: roundSeq, amount: slot.amount, cashOutAt: null, bustPoint, win: 0 });
+      store.recordCrashBet({
+        roundId: roundSeq,
+        amount: slot.amount,
+        cashOutAt: null,
+        bustPoint,
+        win: 0,
+      });
       if (slot.dbId) {
         void settlePendingBet(slot.dbId, 0, bustPoint, null, bustPoint, 'lost');
       }
@@ -346,7 +396,9 @@ class CrashEngine {
     this.broadcastBets();
   }
 
-  /** Returns a snapshot of the current game state. Used by useCrashState hook. */
+  // ─── Public API ────────────────────────────────────────────────────────────
+
+  /** Returns a snapshot of the current game state. Called by useCrashState() in hooks.ts. */
   getState(): CrashState {
     return {
       phase: this.state.phase,
@@ -361,11 +413,12 @@ class CrashEngine {
     };
   }
 
-  /** Returns current bets. Used by useCrashBets hook. */
+  /** Returns current bets for both slots. Called by useCrashBets() in hooks.ts. */
   getBets(): Record<'A' | 'B', BetSlot> {
     return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
   }
 
+  /** Place a bet in the current countdown window. */
   placeBet(id: 'A' | 'B', amount: number): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (this.state.phase !== 'countdown') return { ok: false, reason: 'Round not in betting phase' };
@@ -377,7 +430,7 @@ class CrashEngine {
     store.debit(amount);
     this.broadcastBets();
 
-    // Insert pending row to Supabase so All Bets tab shows this bet live
+    // Insert pending row to Supabase → appears in All Bets tab immediately
     const session = auth.getSession();
     if (session?.userId) {
       void insertPendingBet(session.userId, amount, this.state.roundId).then((dbId) => {
@@ -388,6 +441,7 @@ class CrashEngine {
     return { ok: true };
   }
 
+  /** Cancel a bet during the countdown window. */
   cancelBet(id: 'A' | 'B'): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (this.state.phase !== 'countdown') return { ok: false, reason: 'Cannot cancel after round starts' };
@@ -395,25 +449,28 @@ class CrashEngine {
     store.addBalance(slot.amount);
     // Delete the pending DB row if it was already inserted
     if (slot.dbId) {
-      const dbId = slot.dbId;
-      void supabase.from('bets').delete().eq('id', dbId);
+      void deletePendingBet(slot.dbId);
     }
     this.state.bets[id] = freshBet(id);
     this.broadcastBets();
     return { ok: true };
   }
 
-  /** Set auto cash-out target multiplier for a slot. */
+  /** Set the raw auto cash-out target multiplier for a slot (used internally). */
   setAutoCashAt(id: 'A' | 'B', at: number | null) {
     this.state.bets[id].autoCashAt = at;
   }
 
-  /** Enable/disable auto cashout and set the target. Called by DualBetPanel. */
+  /**
+   * Enable/disable auto cash-out and set the target multiplier.
+   * Called by DualBetPanel: crashEngine.setAuto(id, enabled, target)
+   */
   setAuto(id: 'A' | 'B', enabled: boolean, target: number) {
     this.state.bets[id].autoEnabled = enabled;
     this.state.bets[id].autoCashAt = enabled ? target : null;
   }
 
+  /** Cash out a slot at the current multiplier. */
   cashOut(id: 'A' | 'B'): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (this.state.phase !== 'flying') return { ok: false, reason: 'Not in flight' };
