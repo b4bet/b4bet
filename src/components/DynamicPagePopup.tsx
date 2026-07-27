@@ -18,13 +18,9 @@ export default function DynamicPagePopup({ page, open, onClose }: Props) {
   useEffect(() => {
     if (!open) return;
     window.history.pushState({ dynamicPage: true }, '');
-    const handlePopstate = () => {
-      onClose();
-    };
+    const handlePopstate = () => { onClose(); };
     window.addEventListener('popstate', handlePopstate);
-    return () => {
-      window.removeEventListener('popstate', handlePopstate);
-    };
+    return () => { window.removeEventListener('popstate', handlePopstate); };
   }, [open, onClose]);
 
   if (!open || !page) return null;
@@ -38,13 +34,13 @@ export default function DynamicPagePopup({ page, open, onClose }: Props) {
       <div className="fixed inset-0 z-[251] flex items-center justify-center p-4 pointer-events-none">
         <div className="pointer-events-auto w-full max-w-2xl max-h-[90vh] bg-slatepanel-900 border border-borderline-900 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
 
-          {/* Header — 72px tall, logo left, title centred, close right */}
+          {/* Header — 72px tall, logo slightly indented from left, title centred, close button on right */}
           <div
             className="relative flex items-center px-4 border-b border-borderline-900 flex-shrink-0"
             style={{ height: '72px' }}
           >
-            {/* Left: site logo */}
-            <div className="flex items-center gap-2 z-10">
+            {/* Left: site logo — pl-2 gives a little breathing room from edge */}
+            <div className="flex items-center gap-2 z-10 pl-2">
               {logo ? (
                 <img
                   src={logo}
