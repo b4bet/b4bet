@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import { X, ArrowDownLeft, ArrowUpRight, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useAuth } from '../lib/hooks';
@@ -33,6 +33,14 @@ export default function HistoryView({ onNavigate }: { onNavigate: (r: Route) => 
   const { deposits, withdrawals } = useFinance();
   const user = session?.username ?? 'guest';
 
+  // Mobile back button support
+  useEffect(() => {
+    window.history.pushState({ historyView: true }, '');
+    const handlePopstate = () => { onNavigate('home'); };
+    window.addEventListener('popstate', handlePopstate);
+    return () => { window.removeEventListener('popstate', handlePopstate); };
+  }, [onNavigate]);
+
   const items = useMemo(() => {
     const d = deposits
       .filter((t) => t.user === user)
@@ -45,7 +53,7 @@ export default function HistoryView({ onNavigate }: { onNavigate: (r: Route) => 
 
   return (
     <div className="space-y-4 animate-fade-in">
-      {/* Header row — no subtitle, heading shifted right with pl-3 */}
+      {/* Header row */}
       <div className="flex items-center justify-between gap-2 pl-3">
         <h1 className="font-display font-extrabold text-xl text-white">History</h1>
         <button onClick={() => onNavigate('home')} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
