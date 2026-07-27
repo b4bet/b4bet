@@ -65,13 +65,6 @@ function BetButton({
     <button
       type="button"
       onClick={() => { if (!disabled) onSelect(choice); }}
-      onTouchEnd={(e) => {
-        // Ensure taps register reliably on mobile — prevent ghost click delay
-        if (!disabled) {
-          e.preventDefault();
-          onSelect(choice);
-        }
-      }}
       className={[
         'flex flex-col items-center justify-center gap-1 rounded-2xl border-2 transition-all duration-200 py-3 px-2 flex-1 select-none',
         'active:scale-95',
