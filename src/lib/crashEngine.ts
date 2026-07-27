@@ -64,9 +64,13 @@ interface EngineState {
   connectTime: number;
   /** Server-known crash point used to cap animation overshoot */
   serverCrashPoint: number | null;
+  /** Last server-reported elapsed_ms during flying — used to prevent overshoot */
+  lastServerElapsedMs: number;
 }
 
 const POLL_MS = 300;
+/** Maximum ms the local animation is allowed to run ahead of the last server-reported elapsed */
+const MAX_AHEAD_MS = 400;
 const SESSION_ROUND_KEY = 'b4bet.crash.lastRoundId';
 const SESSION_PHASE_KEY = 'b4bet.crash.lastPhase';
 
@@ -189,6 +193,7 @@ class CrashEngine {
     serverElapsedAtConnect: 0,
     connectTime: Date.now(),
     serverCrashPoint: null,
+    lastServerElapsedMs: 0,
   };
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -239,7 +244,10 @@ class CrashEngine {
         this.state.win = null;
         this.state.roundId = r.round_uuid ?? '';
         this.state.roundSeq += 1;
-        this.state.serverCrashPoint = null;
+        // NOTE: Don't clear serverCrashPoint here — it will be set when the
+        // first flying poll arrives. Clearing it creates a brief window where
+        // the animation is uncapped, causing the multiplier to overshoot.
+        this.state.lastServerElapsedMs = 0;
         this.didPlayStart = false;
         this.didPlayCrash = false;
         this.broadcastBets();
@@ -255,7 +263,10 @@ class CrashEngine {
         this.state.phase = 'countdown';
         this.state.countdown = remaining;
         this.state.multiplier = 1.0;
+        // Reset server crash point during waiting so a stale value from the
+        // previous round doesn't incorrectly cap the next round's animation.
         this.state.serverCrashPoint = null;
+        this.state.lastServerElapsedMs = 0;
         if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
           if (this.state.history[0] !== bp) {
@@ -272,6 +283,7 @@ class CrashEngine {
           this.state.connectTime = Date.now();
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.bustPoint = 0;
+          this.state.lastServerElapsedMs = r.elapsed_ms;
           if (!this.didPlayStart && !this.lastKnownRoundId) {
             playStartSound();
             this.didPlayStart = true;
@@ -279,10 +291,12 @@ class CrashEngine {
         } else {
           // Resync timing on every poll to prevent client clock drift/overshoot
           this.state.startedAt = Date.now() - r.elapsed_ms;
+          this.state.lastServerElapsedMs = r.elapsed_ms;
         }
         // Store server crash point if provided (used to cap animation)
-        if (r.crash_point != null && r.crash_point > 0) {
-          this.state.serverCrashPoint = r.crash_point;
+        // Accept any positive value (crash points are always >= 1.0)
+        if (r.crash_point != null && Number(r.crash_point) >= 1.0) {
+          this.state.serverCrashPoint = Number(r.crash_point);
         }
         this.state.phase = 'flying';
         this.state.countdown = 0;
@@ -291,10 +305,15 @@ class CrashEngine {
 
       if (r.phase === 'crashed') {
         if (prevPhase !== 'crashed') {
+          const serverBust = r.crash_point != null ? Number(r.crash_point) : null;
           this.state.phase = 'busted';
-          this.state.bustPoint = r.crash_point ?? this.state.multiplier;
+          this.state.bustPoint = serverBust ?? this.state.multiplier;
+          // CRITICAL FIX: Always set multiplier to bustPoint so the displayed
+          // value never exceeds the actual crash point. This prevents the visual
+          // where the animation was briefly showing a higher value.
           this.state.multiplier = this.state.bustPoint;
           this.state.serverCrashPoint = null;
+          this.state.lastServerElapsedMs = 0;
           if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
           const bp = this.state.bustPoint;
           if (this.state.history[0] !== bp) {
@@ -320,11 +339,22 @@ class CrashEngine {
   private animate() {
     if (this.state.phase === 'flying') {
       const elapsed = Date.now() - this.state.startedAt;
-      let m = multiplierFromElapsed(elapsed);
-      // Cap multiplier at server crash point to prevent visual overshoot
+
+      // PRIMARY CAP: Never let local elapsed exceed the last server-reported
+      // elapsed + one poll interval. This prevents the animation from running
+      // ahead of the server and overshooting the crash point.
+      const maxElapsed = this.state.lastServerElapsedMs > 0
+        ? this.state.lastServerElapsedMs + MAX_AHEAD_MS
+        : elapsed; // fallback: no cap if we haven't received a server elapsed yet
+      const cappedElapsed = Math.min(elapsed, maxElapsed);
+
+      let m = multiplierFromElapsed(cappedElapsed);
+
+      // SECONDARY CAP: Cap at known server crash point
       if (this.state.serverCrashPoint != null && m >= this.state.serverCrashPoint) {
         m = this.state.serverCrashPoint;
       }
+
       playTickSound(m);
       this.state.multiplier = m;
       this.checkAutoCashouts();
