@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { supabase } from '../integrations/supabase/client';
 import { auth } from '../lib/auth';
 import { useAuth } from '../lib/hooks';
 import { store } from '../lib/store';
@@ -19,9 +20,16 @@ export default function ProfileView({
 }) {
   const session = useAuth();
   const accountId = session ? session.accountId : getOrCreateAccountId();
-  const userMobile = session
-    ? auth.getUsers().find((u) => u.id === session.userId)?.mobile ?? '—'
-    : '—';
+
+  // Fetch mobile from Supabase auth user_metadata (works on mobile browsers too)
+  const [userMobile, setUserMobile] = useState('—');
+  useEffect(() => {
+    if (!session) { setUserMobile('—'); return; }
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      const mobile = (user?.user_metadata?.['mobile'] as string | undefined) ?? '';
+      setUserMobile(mobile || '—');
+    }).catch(() => { /* ignore */ });
+  }, [session?.userId]);
 
   // ── Logged-out state ──────────────────────────────────────────────────────
   if (!session) {
