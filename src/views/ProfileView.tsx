@@ -21,6 +21,14 @@ export default function ProfileView({
   const session = useAuth();
   const accountId = session ? session.accountId : getOrCreateAccountId();
 
+  // Mobile back button — push a history entry so Android/iOS back navigates home
+  useEffect(() => {
+    window.history.pushState({ profileView: true }, '');
+    const handlePopstate = () => { onNavigate('home'); };
+    window.addEventListener('popstate', handlePopstate);
+    return () => { window.removeEventListener('popstate', handlePopstate); };
+  }, [onNavigate]);
+
   // Fetch mobile from Supabase auth user_metadata (works on mobile browsers too)
   const [userMobile, setUserMobile] = useState('—');
   useEffect(() => {
@@ -144,7 +152,6 @@ export function RedeemCodeSection() {
     const trimmed = code.trim();
     if (!trimmed) return;
 
-    // Use real Supabase userId if logged in, else fallback to anonymous accountId
     const userId = session?.userId ?? getOrCreateAccountId();
 
     setSubmitting(true);
