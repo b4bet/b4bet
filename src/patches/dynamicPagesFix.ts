@@ -1,6 +1,6 @@
 // Patch: Override cms.persistDynamicPagesToSupabase to use the robust version
-import { cms } from './cms';
-import { persistDynamicPages } from './dynamicPagesPersist';
+import { cms } from '../lib/cms';
+import { persistDynamicPages } from '../lib/dynamicPagesPersist';
 
 // Override the private method with a working version
 (cms as any).persistDynamicPagesToSupabase = function() {
