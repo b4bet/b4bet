@@ -65,8 +65,15 @@ function BetButton({
     <button
       type="button"
       onClick={() => { if (!disabled) onSelect(choice); }}
+      onTouchEnd={(e) => {
+        // Ensure taps register reliably on mobile — prevent ghost click delay
+        if (!disabled) {
+          e.preventDefault();
+          onSelect(choice);
+        }
+      }}
       className={[
-        'flex flex-col items-center justify-center gap-1 rounded-2xl border-2 transition-all duration-200 py-3 px-2 flex-1',
+        'flex flex-col items-center justify-center gap-1 rounded-2xl border-2 transition-all duration-200 py-3 px-2 flex-1 select-none',
         'active:scale-95',
         disabled ? 'opacity-40 cursor-not-allowed pointer-events-none' : 'cursor-pointer',
         selected ? 'scale-[1.04]' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.07]',
@@ -75,10 +82,13 @@ function BetButton({
         borderColor:     selected ? glowColor : undefined,
         backgroundColor: selected ? `${glowColor}22` : undefined,
         boxShadow:       selected ? `0 0 18px 4px ${glowColor}55` : undefined,
+        // Prevent double-tap zoom delay on mobile
+        touchAction: 'manipulation',
       }}
     >
-      <img src={imageSrc} alt={choice} className="w-14 h-14 object-contain drop-shadow-lg" />
-      <span className="text-[10px] text-slate-400 font-semibold">{payout}</span>
+      {/* pointer-events-none on children ensures taps always reach the button */}
+      <img src={imageSrc} alt={choice} className="w-14 h-14 object-contain drop-shadow-lg pointer-events-none" />
+      <span className="text-[10px] text-slate-400 font-semibold pointer-events-none">{payout}</span>
     </button>
   );
 }
