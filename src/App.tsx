@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Header from './components/Header';
 import BottomNav, { type Route } from './components/BottomNav';
 import HomeView from './views/HomeView';
@@ -78,18 +78,25 @@ function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdm
   return true;
 }
 
+// ── Back Button (History) Management ─────────────────────────────────────────
+// We push a history entry every time the user navigates forward in the app.
+// On popstate (back button), we navigate to the previous route instead of
+// leaving the site. If already on 'home', we let the browser go back normally.
+
+function getInitialRoute(): Route {
+  if (typeof window !== 'undefined') {
+    const p = window.location.pathname;
+    const h = window.location.hash;
+    if (p === '/aryan' || p.startsWith('/aryan/') || h === '#aryan' || h === '#/aryan') return 'admin';
+    if (p === '/affiliate' || h === '#affiliate') return 'affiliate';
+    if (p === '/landing') return 'landing';
+  }
+  return 'home';
+}
+
 export default function App() {
   const staffSession = useStaffSession();
-  const [route, setRoute] = useState<Route>(() => {
-    if (typeof window !== 'undefined') {
-      const p = window.location.pathname;
-      const h = window.location.hash;
-      if (p === '/aryan' || p.startsWith('/aryan/') || h === '#aryan' || h === '#/aryan') return 'admin';
-      if (p === '/affiliate' || h === '#affiliate') return 'affiliate';
-      if (p === '/landing') return 'landing';
-    }
-    return 'home';
-  });
+  const [route, setRouteRaw] = useState<Route>(getInitialRoute);
   const [notifOpen, setNotifOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
   const [supportChatOpen, setSupportChatOpen] = useState(false);
@@ -98,6 +105,54 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Navigation stack for back button support ──────────────────────────────
+  const routeStackRef = useRef<Route[]>([getInitialRoute()]);
+  // Flag to distinguish user-initiated navigation from popstate-triggered
+  const isPopstateRef = useRef(false);
+
+  // Wrapped setRoute that pushes browser history
+  const navigate = useCallback((r: Route) => {
+    if (r === route) return; // no-op if same route
+    setRouteRaw(r);
+    routeStackRef.current.push(r);
+    // Push a new history entry so the back button can pop it
+    if (!isPopstateRef.current) {
+      window.history.pushState({ route: r }, '', null);
+    }
+  }, [route]);
+
+  // Listen for popstate (back/forward button)
+  useEffect(() => {
+    const handlePopstate = () => {
+      const stack = routeStackRef.current;
+      if (stack.length > 1) {
+        // Pop current route
+        stack.pop();
+        const prevRoute = stack[stack.length - 1];
+        isPopstateRef.current = true;
+        setRouteRaw(prevRoute);
+        isPopstateRef.current = false;
+      } else {
+        // Already at root (home) — push state again to prevent leaving the app.
+        // The user sees they're already home. If they truly want to leave, they
+        // can use the "X" or swipe-close gesture.
+        window.history.pushState({ route: 'home' }, '', null);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopstate);
+
+    // Push initial state so we have something to pop
+    window.history.replaceState({ route: getInitialRoute() }, '', null);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopstate);
+    };
+  }, []);
+
+  // Keep setRoute as alias for internal callers (doesn't need navigate dep tracking)
+  const setRoute = navigate;
 
   // Clear the reload flag when maintenance is turned OFF so future ON triggers reload again
   useEffect(() => {
@@ -188,7 +243,6 @@ export default function App() {
   }, []);
 
   const openAuthModal = (mode: AuthModalMode) => { setAuthModalMode(mode); setAuthModalOpen(true); };
-  const navigate = (r: Route) => setRoute(r);
 
   useEffect(() => {
     const off = bus.on('ui:open_support_chat', () => setSupportChatOpen(true));
