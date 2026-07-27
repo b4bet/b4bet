@@ -25,7 +25,7 @@ export default function TicketChatWindow({ ticketId, staffId, onClose }: Props) 
     if (cms.postTicketReply(ticketId, staffId, body.trim())) setBody('');
   };
   const endTicket = () => {
-    if (confirm('End and delete this ticket permanently?')) {
+    if (confirm('End and delete this chat? All messages will be cleared.')) {
       cms.closeTicket(ticketId);
       onClose();
     }
@@ -63,13 +63,16 @@ export default function TicketChatWindow({ ticketId, staffId, onClose }: Props) 
           <button onClick={onClose} title="Exit (keep session)" className="w-7 h-7 grid place-items-center rounded hover:bg-slatepanel-800 text-slate-400">
             <X className="w-4 h-4" />
           </button>
-          <button onClick={endTicket} title="Close & End Ticket" className="w-7 h-7 grid place-items-center rounded hover:bg-coral-500/20 text-coral-400">
+          <button onClick={endTicket} title="Close & Clear Chat" className="w-7 h-7 grid place-items-center rounded hover:bg-coral-500/20 text-coral-400">
             <Trash2 className="w-4 h-4" />
           </button>
         </div>
       </div>
 
       <div className="flex-1 h-80 overflow-auto p-3 space-y-2 scrollbar-thin">
+        {ticket.messages.length === 0 && (
+          <p className="text-center text-xs text-slate-500 py-10">No messages yet. User will see your replies here.</p>
+        )}
         {ticket.messages.map((m) => (
           <div key={m.id} className={`flex ${m.role === 'agent' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[80%] rounded-2xl px-3 py-2 ${m.role === 'agent' ? 'bg-neon-500/20 text-white' : 'bg-slatepanel-800 text-slate-200'}`}>
