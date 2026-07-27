@@ -32,8 +32,30 @@ export const useReferralConfig = () => useBusValue<ReferralConfig>(Topics.Referr
 export const useReferrals = () => useBusValue<Referral[]>(Topics.Referrals, () => cms.referrals);
 export const useAffiliates = () => useBusValue<AffiliateApplication[]>(Topics.Affiliates, () => cms.affiliates);
 export const useAutoGateways = () => useBusValue<AutoGateway[]>(Topics.AutoGateways, () => cms.autoGateways);
-export const useDynamicPages = () => useBusValue<DynamicPage[]>(Topics.DynamicPages, () => cms.dynamicPages);
 export const useTickets = () => useBusValue<SupportTicket[]>(Topics.Tickets, () => cms.tickets);
+
+/**
+ * useDynamicPages — subscribes to dynamic pages from Supabase via cms.
+ * On mount, always triggers a fresh settings fetch so the menu shows latest pages.
+ * Realtime subscription handles live updates from admin panel.
+ */
+export function useDynamicPages(): DynamicPage[] {
+  const [pages, setPages] = useState<DynamicPage[]>(() => cms.dynamicPages);
+
+  useEffect(() => {
+    // Sync with latest in-memory value immediately
+    setPages(cms.dynamicPages);
+
+    // Always trigger a fresh Supabase fetch on mount.
+    // This ensures pages appear even if realtime was missed or CMS synced before mount.
+    void (cms as unknown as { syncSettingsFromSupabase: () => Promise<void> }).syncSettingsFromSupabase();
+
+    // Listen for future updates (realtime or admin changes)
+    return bus.on(Topics.DynamicPages, (p) => setPages(p as DynamicPage[]));
+  }, []);
+
+  return pages;
+}
 
 /**
  * useManualMethods — subscribes to payment methods from Supabase via cms.
