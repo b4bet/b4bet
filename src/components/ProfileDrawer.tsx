@@ -109,6 +109,9 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
     go('referral');
   };
 
+  // Shared menu item class — px-4 ensures left/right breathing room so items don't touch screen edges
+  const menuItem = 'w-full flex items-center gap-3 px-4 py-4 hover:bg-slatepanel-700 transition-colors';
+
   return (
     <>
       {open && <div className="fixed inset-0 bg-black/60 z-40" onClick={onClose} />}
@@ -178,31 +181,31 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
 
             {session && (
               <>
-                <button onClick={() => go('profile')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
-                  <div className="w-8 h-8 rounded-xl bg-neon-500/20 grid place-items-center"><User className="w-4 h-4 text-neon-400" /></div>
-                  <span className="text-white text-sm font-medium">My Profile</span>
-                  <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
+                <button onClick={() => go('profile')} className={menuItem}>
+                  <div className="w-8 h-8 rounded-xl bg-neon-500/20 grid place-items-center shrink-0"><User className="w-4 h-4 text-neon-400" /></div>
+                  <span className="text-white text-sm font-medium flex-1 text-left">My Profile</span>
+                  <ChevronRight className="w-4 h-4 text-slate-500" />
                 </button>
                 <div className="border-t border-borderline-900" />
 
-                <button onClick={() => go('history')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
-                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><History className="w-4 h-4 text-slate-400" /></div>
-                  <span className="text-white text-sm font-medium">History</span>
-                  <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
+                <button onClick={() => go('history')} className={menuItem}>
+                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center shrink-0"><History className="w-4 h-4 text-slate-400" /></div>
+                  <span className="text-white text-sm font-medium flex-1 text-left">History</span>
+                  <ChevronRight className="w-4 h-4 text-slate-500" />
                 </button>
                 <div className="border-t border-borderline-900" />
 
-                <button onClick={() => { setWithdrawalOpen(true); }} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
-                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><Wallet className="w-4 h-4 text-slate-400" /></div>
-                  <span className="text-white text-sm font-medium">Withdrawal</span>
-                  <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
+                <button onClick={() => { setWithdrawalOpen(true); }} className={menuItem}>
+                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center shrink-0"><Wallet className="w-4 h-4 text-slate-400" /></div>
+                  <span className="text-white text-sm font-medium flex-1 text-left">Withdrawal</span>
+                  <ChevronRight className="w-4 h-4 text-slate-500" />
                 </button>
                 <div className="border-t border-borderline-900" />
 
-                <button onClick={() => setRedeemOpen(s => !s)} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
-                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><TicketPercent className="w-4 h-4 text-slate-400" /></div>
-                  <span className="text-white text-sm font-medium">Redeem Code</span>
-                  <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
+                <button onClick={() => setRedeemOpen(s => !s)} className={menuItem}>
+                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center shrink-0"><TicketPercent className="w-4 h-4 text-slate-400" /></div>
+                  <span className="text-white text-sm font-medium flex-1 text-left">Redeem Code</span>
+                  <ChevronRight className="w-4 h-4 text-slate-500" />
                 </button>
                 {redeemOpen && (
                   <div className="px-4 pb-3">
@@ -211,33 +214,33 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
                 )}
                 <div className="border-t border-borderline-900" />
 
-                <button onClick={() => handleReferral('refer')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
-                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><Users className="w-4 h-4 text-slate-400" /></div>
-                  <span className="text-white text-sm font-medium">Refer &amp; Earn</span>
-                  <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
+                <button onClick={() => handleReferral('refer')} className={menuItem}>
+                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center shrink-0"><Users className="w-4 h-4 text-slate-400" /></div>
+                  <span className="text-white text-sm font-medium flex-1 text-left">Refer &amp; Earn</span>
+                  <ChevronRight className="w-4 h-4 text-slate-500" />
                 </button>
                 <div className="border-t border-borderline-900" />
               </>
             )}
 
-            {/* Affiliate — always visible (guest + logged in) */}
-            <button onClick={() => handleReferral('affiliate')} className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors">
-              <div className="w-8 h-8 rounded-xl bg-purple-500/20 grid place-items-center"><TrendingUp className="w-4 h-4 text-purple-400" /></div>
-              <span className="text-white text-sm font-medium">Affiliate</span>
-              <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
+            {/* Affiliate — always visible */}
+            <button onClick={() => handleReferral('affiliate')} className={menuItem}>
+              <div className="w-8 h-8 rounded-xl bg-purple-500/20 grid place-items-center shrink-0"><TrendingUp className="w-4 h-4 text-purple-400" /></div>
+              <span className="text-white text-sm font-medium flex-1 text-left">Affiliate</span>
+              <ChevronRight className="w-4 h-4 text-slate-500" />
             </button>
 
-            {/* Dynamic Pages — immediately below Affiliate */}
+            {/* Dynamic Pages */}
             {dynamicPages.map((page) => (
               <div key={page.id}>
                 <div className="border-t border-borderline-900" />
                 <button
                   onClick={() => { setSelectedPage(page); setPagePopupOpen(true); }}
-                  className="w-full flex items-center gap-3 p-4 hover:bg-slatepanel-700 transition-colors"
+                  className={menuItem}
                 >
-                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center"><FileText className="w-4 h-4 text-slate-400" /></div>
-                  <span className="text-white text-sm font-medium">{page.title}</span>
-                  <ChevronRight className="w-4 h-4 text-slate-500 ml-auto" />
+                  <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center shrink-0"><FileText className="w-4 h-4 text-slate-400" /></div>
+                  <span className="text-white text-sm font-medium flex-1 text-left">{page.title}</span>
+                  <ChevronRight className="w-4 h-4 text-slate-500" />
                 </button>
               </div>
             ))}
