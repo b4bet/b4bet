@@ -45,11 +45,9 @@ export default function HistoryView({ onNavigate }: { onNavigate: (r: Route) => 
 
   return (
     <div className="space-y-4 animate-fade-in">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h1 className="font-display font-extrabold text-xl text-white">History</h1>
-          <p className="text-xs text-slate-500">Deposits & withdrawals</p>
-        </div>
+      {/* Header row — no subtitle, heading shifted right with pl-3 */}
+      <div className="flex items-center justify-between gap-2 pl-3">
+        <h1 className="font-display font-extrabold text-xl text-white">History</h1>
         <button onClick={() => onNavigate('home')} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
           <X className="w-5 h-5 text-slate-300" />
         </button>
