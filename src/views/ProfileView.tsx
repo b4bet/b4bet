@@ -34,7 +34,7 @@ export default function ProfileView({
   // ── Logged-out state ──────────────────────────────────────────────────────
   if (!session) {
     return (
-      <div className="space-y-4 animate-fade-in">
+      <div className="space-y-4 animate-fade-in px-4">
         <div className="flex items-center justify-between gap-2">
           <div>
             <h1 className="font-display font-extrabold text-xl text-white">Account</h1>
@@ -74,7 +74,7 @@ export default function ProfileView({
 
   // ── Logged-in state ───────────────────────────────────────────────────────
   return (
-    <div className="space-y-4 animate-fade-in">
+    <div className="space-y-4 animate-fade-in px-4">
       <div className="flex items-center justify-between gap-2">
         <div>
           <h1 className="font-display font-extrabold text-xl text-white">Profile</h1>
