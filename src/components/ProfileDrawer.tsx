@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, User, ChevronRight, ShieldCheck, Headphones, Hash, LogIn, UserPlus, FileText, Wallet, Users, TrendingUp, TicketPercent, History, LogOut, ArrowUpCircle } from 'lucide-react';
+import { X, User, ChevronRight, ShieldCheck, Headphones, LogIn, UserPlus, FileText, Wallet, Users, TrendingUp, TicketPercent, History, LogOut } from 'lucide-react';
 import { useAuth, useBalance } from '../lib/hooks';
 import { useDynamicPages, useHasUnreadAgentMessage, useSocialLinks } from '../lib/cmsHooks';
 import { store } from '../lib/store';
@@ -109,7 +109,7 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
     go('referral');
   };
 
-  // Shared menu item class — px-4 ensures left/right breathing room so items don't touch screen edges
+  // Shared menu item class — px-4 ensures left/right breathing room
   const menuItem = 'w-full flex items-center gap-3 px-4 py-4 hover:bg-slatepanel-700 transition-colors';
 
   return (
@@ -141,8 +141,9 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
                       <ShieldCheck className="w-2.5 h-2.5" /> Verified
                     </span>
                   </div>
+                  {/* ID and balance on one single line, no # icon */}
                   <div className="flex items-center gap-2 mt-1">
-                    <span className="text-slate-500 text-xs"><Hash className="w-3 h-3 inline" /> {accountId}</span>
+                    <span className="text-slate-500 text-xs whitespace-nowrap">ID {accountId}</span>
                     <span className="text-emeraldwin-400 text-xs font-bold">{store.currency}{balance.toFixed(2)}</span>
                   </div>
                 </div>
