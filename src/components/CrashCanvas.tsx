@@ -77,7 +77,9 @@ export default function CrashCanvas({ state }: Props) {
       ctx.stroke();
 
       if (settingsRef.current.animation && (s.phase === 'flying' || s.phase === 'busted')) {
-        const m = s.multiplier;
+        // FIX: When busted, always use bustPoint for the curve endpoint.
+        // During flying, use the current multiplier (already capped by engine).
+        const m = s.phase === 'busted' ? s.bustPoint : s.multiplier;
         // Map multiplier to curve. Use log scale capped.
         const maxM = Math.max(2, m * 1.25);
         const xRatio = Math.min(1, (Math.log(m)) / Math.log(maxM));
@@ -135,19 +137,25 @@ export default function CrashCanvas({ state }: Props) {
       // Center multiplier text — responsive sizing for large multipliers
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const m = s.multiplier;
-      let label = m.toFixed(2) + 'x';
-      let labelColor = '#b15eff';
-      let labelSize = Math.max(18, 38 - Math.log(m) * 3); // Shrink for very large multipliers
+      let label: string;
+      let labelColor: string;
+      let labelSize: number;
       if (s.phase === 'countdown') {
         label = Math.ceil(s.countdown).toString();
         labelColor = '#ffcc4d';
         labelSize = 38;
       } else if (s.phase === 'busted') {
-        // Compact, smaller bust label.
+        // FIX: Always show bustPoint (server-authoritative crash value)
+        // Previously this could show a stale s.multiplier that was lower than actual
         label = 'FLEW AWAY ' + s.bustPoint.toFixed(2) + 'x';
         labelColor = '#ff3366';
         labelSize = Math.max(14, 18 - Math.log(s.bustPoint) * 1.5);
+      } else {
+        // Flying phase — show live multiplier (already capped by engine)
+        const m = s.multiplier;
+        label = m.toFixed(2) + 'x';
+        labelColor = '#b15eff';
+        labelSize = Math.max(18, 38 - Math.log(m) * 3);
       }
       ctx.font = `700 ${labelSize}px Sora, sans-serif`;
       ctx.fillStyle = labelColor;
