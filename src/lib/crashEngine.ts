@@ -62,6 +62,8 @@ interface EngineState {
   win: number | null;
   serverElapsedAtConnect: number;
   connectTime: number;
+  /** Server-known crash point used to cap animation overshoot */
+  serverCrashPoint: number | null;
 }
 
 const POLL_MS = 300;
@@ -186,6 +188,7 @@ class CrashEngine {
     win: null,
     serverElapsedAtConnect: 0,
     connectTime: Date.now(),
+    serverCrashPoint: null,
   };
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -236,6 +239,7 @@ class CrashEngine {
         this.state.win = null;
         this.state.roundId = r.round_uuid ?? '';
         this.state.roundSeq += 1;
+        this.state.serverCrashPoint = null;
         this.didPlayStart = false;
         this.didPlayCrash = false;
         this.broadcastBets();
@@ -251,6 +255,7 @@ class CrashEngine {
         this.state.phase = 'countdown';
         this.state.countdown = remaining;
         this.state.multiplier = 1.0;
+        this.state.serverCrashPoint = null;
         if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
           if (this.state.history[0] !== bp) {
@@ -271,6 +276,13 @@ class CrashEngine {
             playStartSound();
             this.didPlayStart = true;
           }
+        } else {
+          // Resync timing on every poll to prevent client clock drift/overshoot
+          this.state.startedAt = Date.now() - r.elapsed_ms;
+        }
+        // Store server crash point if provided (used to cap animation)
+        if (r.crash_point != null && r.crash_point > 0) {
+          this.state.serverCrashPoint = r.crash_point;
         }
         this.state.phase = 'flying';
         this.state.countdown = 0;
@@ -282,6 +294,7 @@ class CrashEngine {
           this.state.phase = 'busted';
           this.state.bustPoint = r.crash_point ?? this.state.multiplier;
           this.state.multiplier = this.state.bustPoint;
+          this.state.serverCrashPoint = null;
           if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
           const bp = this.state.bustPoint;
           if (this.state.history[0] !== bp) {
@@ -307,7 +320,11 @@ class CrashEngine {
   private animate() {
     if (this.state.phase === 'flying') {
       const elapsed = Date.now() - this.state.startedAt;
-      const m = multiplierFromElapsed(elapsed);
+      let m = multiplierFromElapsed(elapsed);
+      // Cap multiplier at server crash point to prevent visual overshoot
+      if (this.state.serverCrashPoint != null && m >= this.state.serverCrashPoint) {
+        m = this.state.serverCrashPoint;
+      }
       playTickSound(m);
       this.state.multiplier = m;
       this.checkAutoCashouts();
