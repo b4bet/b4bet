@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
 import './index.css';
+import './patches/dynamicPagesFix';
 
 // Wait for maintenance guard to give the green light before mounting React.
 // The guard in index.html sets window.__b4betReady = true when maintenance is OFF.
