@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { X, Copy, Check, Users, TrendingUp, Clock, UserPlus } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { cms } from '../lib/cms';
@@ -16,6 +16,14 @@ export default function ReferralView({ onNavigate, onOpenMenu }: { onNavigate: (
 
   const initialTab = getReferralTab() || 'refer';
   const isAffiliate = initialTab === 'affiliate';
+
+  // Mobile back button support
+  useEffect(() => {
+    window.history.pushState({ referralView: true }, '');
+    const handlePopstate = () => { onNavigate('home'); };
+    window.addEventListener('popstate', handlePopstate);
+    return () => { window.removeEventListener('popstate', handlePopstate); };
+  }, [onNavigate]);
 
   return (
     <div className="space-y-4 animate-fade-in px-4">
@@ -89,7 +97,6 @@ function ReferAndEarn({ userId, cfg }: { userId: string | undefined; cfg: { rewa
         </div>
       </div>
 
-      {/* Referral History */}
       <div className="panel p-4 space-y-3">
         <h3 className="font-display font-bold text-white flex items-center gap-2"><Users className="w-4 h-4 text-neon-300" /> Referral History</h3>
         {referrals.length === 0 ? (
@@ -102,7 +109,6 @@ function ReferAndEarn({ userId, cfg }: { userId: string | undefined; cfg: { rewa
           </div>
         )}
       </div>
-
     </div>
   );
 }
