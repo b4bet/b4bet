@@ -116,7 +116,7 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
 
       {/* Game canvas with overlay popup container */}
       <div className="relative flex-shrink-0">
-        <CrashCanvas />
+        <CrashCanvas state={state} />
         <CashoutPopupOverlay />
       </div>
 
