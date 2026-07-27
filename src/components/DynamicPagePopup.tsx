@@ -34,23 +34,23 @@ export default function DynamicPagePopup({ page, open, onClose }: Props) {
       <div className="fixed inset-0 z-[251] flex items-center justify-center p-4 pointer-events-none">
         <div className="pointer-events-auto w-full max-w-2xl max-h-[90vh] bg-slatepanel-900 border border-borderline-900 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
 
-          {/* Header — 72px tall, logo slightly indented from left, title centred, close button on right */}
+          {/* ── Header: 3-column grid: [logo] [title] [close] ── */}
           <div
-            className="relative flex items-center px-4 border-b border-borderline-900 flex-shrink-0"
-            style={{ height: '72px' }}
+            className="grid border-b border-borderline-900 flex-shrink-0"
+            style={{ height: '72px', gridTemplateColumns: '1fr auto 1fr' }}
           >
-            {/* Left: site logo — pl-2 gives a little breathing room from edge */}
-            <div className="flex items-center gap-2 z-10 pl-2">
+            {/* Col 1 — Logo (left-aligned) */}
+            <div className="flex items-center pl-4 gap-2">
               {logo ? (
                 <img
                   src={logo}
                   alt="logo"
-                  style={{ height: '50px', width: 'auto', maxWidth: '54px', objectFit: 'contain' }}
+                  style={{ height: '48px', width: 'auto', maxWidth: '52px', objectFit: 'contain' }}
                 />
               ) : (
                 <div
                   className="rounded-lg bg-gradient-to-br from-neon-400 to-neon-600 grid place-items-center shrink-0"
-                  style={{ width: '42px', height: '42px' }}
+                  style={{ width: '40px', height: '40px' }}
                 >
                   <span className="text-white font-black text-sm">M</span>
                 </div>
@@ -60,18 +60,22 @@ export default function DynamicPagePopup({ page, open, onClose }: Props) {
               )}
             </div>
 
-            {/* Centre: page title (absolutely positioned so logo/close don't push it) */}
-            <h3 className="absolute inset-x-0 text-center font-display font-bold text-lg text-white pointer-events-none px-20 truncate">
-              {page.title}
-            </h3>
+            {/* Col 2 — Title (centred) */}
+            <div className="flex items-center justify-center px-2 min-w-0">
+              <h3 className="font-display font-bold text-lg text-white truncate text-center">
+                {page.title}
+              </h3>
+            </div>
 
-            {/* Right: close button */}
-            <button
-              onClick={onClose}
-              className="ml-auto w-9 h-9 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors z-10"
-            >
-              <X className="w-4 h-4 text-slate-300" />
-            </button>
+            {/* Col 3 — Close button (right-aligned) */}
+            <div className="flex items-center justify-end pr-4">
+              <button
+                onClick={onClose}
+                className="w-9 h-9 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors"
+              >
+                <X className="w-4 h-4 text-slate-300" />
+              </button>
+            </div>
           </div>
 
           {/* Content */}
