@@ -39,8 +39,8 @@ export default function DynamicPagePopup({ page, open, onClose }: Props) {
             className="grid border-b border-borderline-900 flex-shrink-0"
             style={{ height: '72px', gridTemplateColumns: '1fr auto 1fr' }}
           >
-            {/* Col 1 — Logo (left-aligned) */}
-            <div className="flex items-center pl-4 gap-2">
+            {/* Col 1 — Logo, indented from left edge */}
+            <div className="flex items-center pl-5 gap-2">
               {logo ? (
                 <img
                   src={logo}
@@ -67,8 +67,8 @@ export default function DynamicPagePopup({ page, open, onClose }: Props) {
               </h3>
             </div>
 
-            {/* Col 3 — Close button (right-aligned) */}
-            <div className="flex items-center justify-end pr-4">
+            {/* Col 3 — Close button, indented from right edge */}
+            <div className="flex items-center justify-end pr-5">
               <button
                 onClick={onClose}
                 className="w-9 h-9 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors"
