@@ -18,7 +18,7 @@ export default function ReferralView({ onNavigate, onOpenMenu }: { onNavigate: (
   const isAffiliate = initialTab === 'affiliate';
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <div className="space-y-4 animate-fade-in px-4">
       <div className="flex items-center justify-between gap-2">
         <div>
           <h1 className="font-display font-extrabold text-xl text-white">{isAffiliate ? 'Affiliate' : 'Refer & Earn'}</h1>
