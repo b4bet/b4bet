@@ -15,11 +15,12 @@ export default function HomeView({ onNavigate }: Props) {
   }, []);
 
   return (
+    // top:62 = fixed header height, bottom:60 = bottom nav height
     <div
       className="fixed left-0 right-0 flex flex-col gap-3 overflow-hidden bg-midnight-950"
       style={{ top: 62, bottom: 60 }}
     >
-      {/* Banner */}
+      {/* Banner — pt-3 gap from header, px-3 side margins */}
       <div className="px-3 pt-3 flex-shrink-0">
         <SliderBanner onSlideClick={(i) => {
           if (i === 1) onNavigate('crash');
@@ -28,7 +29,7 @@ export default function HomeView({ onNavigate }: Props) {
         }} />
       </div>
 
-      {/* Games grid */}
+      {/* Games — px-3 so cards don’t touch the edge */}
       <div className="px-3 flex-shrink-0">
         <GameGrid onPlay={onNavigate} />
       </div>
