@@ -1,5 +1,5 @@
-// PATCH NOTE: forgotPassword uses supabase.auth.signInWithOtp (email OTP)
-// This sends a 6-digit code to the user's email
-// resetPassword verifies the OTP token then updates the password
-// This matches the AuthModal ForgotForm UI which asks for a 6-digit code
+// Recovery handler — add this inside App component's useEffect
+// bus.on('auth:recovery', () => openAuthModal('change'));
+// This is handled inside AuthModal.tsx via onAuthStateChange + bus emit
+// App.tsx needs to listen and open the modal
 export {};
