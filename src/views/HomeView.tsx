@@ -15,11 +15,13 @@ export default function HomeView({ onNavigate }: Props) {
   }, []);
 
   return (
+    // Fixed: header=62px top, bottomnav=60px bottom, left=0, right=0
+    // No scroll, all content within screen bounds, margins px-3 so nothing clips
     <div
-      style={{ height: 'calc(100vh - 62px - 60px)' }}
-      className="flex flex-col overflow-hidden"
+      className="fixed left-0 right-0 flex flex-col overflow-hidden bg-midnight-950"
+      style={{ top: 62, bottom: 60 }}
     >
-      {/* Banner — side margins + small top gap */}
+      {/* Banner */}
       <div className="px-3 pt-3 flex-shrink-0">
         <SliderBanner onSlideClick={(i) => {
           if (i === 1) onNavigate('crash');
@@ -33,10 +35,10 @@ export default function HomeView({ onNavigate }: Props) {
         <GameGrid onPlay={onNavigate} />
       </div>
 
-      {/* Spacer — pushes strips to bottom */}
+      {/* Flexible spacer */}
       <div className="flex-1" />
 
-      {/* Live stats strip */}
+      {/* Live stats */}
       <div className="mx-3 mb-2 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
         <div className="flex flex-col items-center py-2.5 gap-0.5">
           <span className="text-[10px] text-slate-500 font-medium">Online</span>
@@ -53,7 +55,7 @@ export default function HomeView({ onNavigate }: Props) {
       </div>
 
       {/* Trust strip */}
-      <div className="mx-3 mb-2 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
+      <div className="mx-3 mb-3 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
         <div className="flex flex-col items-center py-2.5 gap-1">
           <ShieldCheck className="w-4 h-4 text-emeraldwin-400" />
           <span className="text-[10px] text-slate-400 font-medium">Provably Fair</span>
