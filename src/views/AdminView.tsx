@@ -239,7 +239,7 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
 }
 
 export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r: Route) => void; onOpenWallet: () => void }) {
-  const staffSession = useStaffSession();
+  const staffSessionId = useStaffSession();
   const staff = useStaff();
   const finance = useFinance();
   const support = useSupport();
@@ -256,6 +256,9 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
   const [floatToasts, setFloatToasts] = useState<FloatToast[]>([]);
   const prevPending = useRef({ deposits: 0, withdrawals: 0, support: 0 });
   const toastIdRef = useRef(0);
+
+  // Resolve the full StaffAccount object for the current session
+  const currentStaff = staffSessionId ? staff.find(s => s.id === staffSessionId) ?? null : null;
 
   // Float toast on new notifications
   useEffect(() => {
@@ -288,14 +291,17 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
     setFloatToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  if (!staffSession) {
+  if (!staffSessionId) {
     return <AdminLoginPage />;
   }
 
   const canAccess = (tab: Tab): boolean => {
-    if (staffSession.role === 'owner') return true;
+    // Owner / super_admin can access everything
+    if (currentStaff?.isOwner) return true;
+    // If staff not loaded yet, allow all tabs to avoid blank panel during loading
+    if (!currentStaff) return true;
     const permKey = (TAB_PERM_MAP[tab] ?? tab) as PermissionKey;
-    return !!staffSession.permissions?.[permKey];
+    return !!currentStaff.permissions?.[permKey];
   };
 
   const visibleTabs = TABS.filter(t => canAccess(t.key));
@@ -350,8 +356,6 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
     }
   };
 
-  const currentStaff = staff.find(s => s.id === staffSession.staffId);
-
   return (
     <div className="min-h-screen bg-slate-950 text-white flex">
       <FloatingToasts toasts={floatToasts} onDismiss={dismissToast} />
@@ -392,11 +396,11 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
           {!changingPassword && (
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 rounded-full bg-violet-600/30 border border-violet-500/40 grid place-items-center flex-shrink-0">
-                <span className="text-[10px] font-bold text-violet-300">{staffSession.username?.[0]?.toUpperCase() ?? 'A'}</span>
+                <span className="text-[10px] font-bold text-violet-300">{currentStaff?.name?.[0]?.toUpperCase() ?? 'A'}</span>
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-[11px] font-semibold text-white truncate">{staffSession.username}</p>
-                <p className="text-[10px] text-slate-500 capitalize">{staffSession.role}</p>
+                <p className="text-[11px] font-semibold text-white truncate">{currentStaff?.name ?? staffSessionId}</p>
+                <p className="text-[10px] text-slate-500 capitalize">{currentStaff?.isOwner ? 'owner' : (currentStaff?.role ?? 'staff')}</p>
               </div>
               <button onClick={() => setChangingPassword(true)} title="Change Password"
                 className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white">
@@ -406,7 +410,7 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
           )}
           {changingPassword && (
             <div className="space-y-2">
-              <PasswordChangeForm staffId={staffSession.staffId} onDone={() => setChangingPassword(false)} />
+              <PasswordChangeForm staffId={staffSessionId} onDone={() => setChangingPassword(false)} />
               <button onClick={() => setChangingPassword(false)} className="text-[10px] text-slate-500 hover:text-slate-300">Cancel</button>
             </div>
           )}
@@ -445,7 +449,7 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
         </main>
       </div>
 
-      {staffSession && <AdminSupportNotification />}
+      {staffSessionId && <AdminSupportNotification />}
     </div>
   );
 }
