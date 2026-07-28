@@ -14,6 +14,9 @@ import ReferralView from './views/ReferralView';
 import AdminView from './views/AdminView';
 import HistoryView from './views/HistoryView';
 import LudoView from './views/LudoView';
+import WingoView from './views/WingoView';
+import K3View from './views/K3View';
+import FiveDView from './views/FiveDView';
 import SunVsMoonView from './views/SunVsMoonView';
 import TradingGameView from './views/TradingGameView';
 import AffiliatePortalView from './views/AffiliatePortalView';
@@ -53,7 +56,7 @@ async function fetchMaintenanceConfig(): Promise<MaintenanceConfig | null> {
       return val as MaintenanceConfig;
     }
   } catch {
-    // settings table may not have this key yet — ignore
+    // settings table may not have this key yet
   }
   return null;
 }
@@ -191,15 +194,15 @@ export default function App() {
   if (showMaintenance) {
     return (
       <MaintenancePage
-        title={maintenance!.title}
-        message={maintenance!.message}
-        estimatedTime={maintenance!.estimated_time}
+        title={maintenance?.title}
+        message={maintenance?.message}
+        estimatedTime={maintenance?.estimated_time}
       />
     );
   }
 
   return (
-    <div className="min-h-screen bg-midnight-900 text-white">
+    <div className="min-h-screen bg-midnight-950 text-white">
       <ToastHost />
       <GeoBlockOverlay />
 
@@ -213,31 +216,35 @@ export default function App() {
         />
       )}
 
-      <main className="pb-20">
+      {/* pt-[62px] = fixed header height | pb-[60px] = bottom nav height */}
+      <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[60px]' : ''}`}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
         {route === 'deposit' && <DepositView />}
-        {route === 'wallet' && <WalletView onNavigate={navigate} />}
-        {route === 'withdraw' && <WithdrawView onNavigate={navigate} />}
+        {route === 'wallet' && <WalletView />}
+        {route === 'withdraw' && <WithdrawView />}
         {route === 'profile' && (
           <ProfileView
             onNavigate={navigate}
-            onOpenSupportChat={() => setSupportChatOpen(true)}
+            onOpenSupport={() => setSupportChatOpen(true)}
             onOpenAuthModal={openAuthModal}
             onOpenMenu={() => setWalletOpen(true)}
           />
         )}
-        {route === 'referral' && <ReferralView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
+        {route === 'referral' && <ReferralView onOpenWallet={() => setWalletOpen(true)} />}
         {route === 'admin' && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
-        {route === 'history' && <HistoryView onNavigate={navigate} />}
-        {route === 'ludo' && <LudoView onClose={() => navigate('home')} />}
+        {route === 'history' && <HistoryView />}
+        {route === 'ludo' && <LudoView onExit={() => navigate('home')} />}
         {route === 'crash' && <CrashView />}
-        {route === 'aviator' && <AviatorView onClose={() => navigate('home')} />}
-        {route === 'sunvsmoon' && <SunVsMoonView onNavigate={navigate} />}
-        {route === 'trading' && <TradingGameView onNavigate={navigate} />}
-        {route === 'affiliate' && <AffiliatePortalView onClose={() => navigate('home')} />}
-        {route === 'landing' && <LandingPage onNavigate={navigate} />}
+        {route === 'aviator' && <AviatorView onExit={() => navigate('home')} />}
+        {route === 'wingo' && <WingoView />}
+        {route === 'k3' && <K3View />}
+        {route === 'fived' && <FiveDView />}
+        {route === 'sunvsmoon' && <SunVsMoonView />}
+        {route === 'trading' && <TradingGameView />}
+        {route === 'affiliate' && <AffiliatePortalView onExit={() => navigate('home')} />}
+        {route === 'landing' && <LandingPage />}
       </main>
 
       {showBottomNav && <BottomNav route={route} onNavigate={navigate} />}
@@ -251,7 +258,7 @@ export default function App() {
         onOpenAuthModal={openAuthModal}
       />
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
-      <AuthModal open={authModalOpen} mode={authModalMode} onClose={() => setAuthModalOpen(false)} />
+      <AuthModal mode={authModalMode} open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
 
       {isLoggedIn && <BanPopup />}
