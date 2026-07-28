@@ -4,6 +4,7 @@ import { bus, Topics } from './bus';
 import { store } from './store';
 import { cms } from './cms';
 import { logUserIp } from './supabaseIntegration';
+import { emailService } from './emailService';
 
 export interface AuthUser {
   id: string; accountId: string; username: string; email: string; mobile: string;
@@ -16,7 +17,7 @@ export interface AuthSession {
 }
 
 export interface BanRecord {
-  id?: string; // Supabase ban row id
+  id?: string;
   userId: string; username: string; email: string; ip: string;
   banDate: number; banReason: string; bannedBy: 'system' | 'admin';
   unbanDate?: number; unbanReason?: string;
@@ -26,51 +27,21 @@ function generateAccountId(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
 
-/** Fetch the real client IP with 4 fallback services. Never caches a failed result. */
 async function getClientIp(): Promise<string> {
-  // Return session-cached IP if available (cleared on page reload)
   const sessionIp = sessionStorage.getItem('b4bet.clientIp');
   if (sessionIp) return sessionIp;
-
-  // Four independent services — try each with a 4-second timeout
   const services: Array<() => Promise<string>> = [
-    async () => {
-      const r = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(4000) });
-      const j = await r.json() as { ip: string };
-      return j.ip;
-    },
-    async () => {
-      const r = await fetch('https://api64.ipify.org?format=json', { signal: AbortSignal.timeout(4000) });
-      const j = await r.json() as { ip: string };
-      return j.ip;
-    },
-    async () => {
-      const r = await fetch('https://api.my-ip.io/v1/ip.json', { signal: AbortSignal.timeout(4000) });
-      const j = await r.json() as { ip: string };
-      return j.ip;
-    },
-    async () => {
-      const r = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(4000) });
-      const j = await r.json() as { ip: string };
-      return j.ip;
-    },
+    async () => { const r = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(4000) }); const j = await r.json() as { ip: string }; return j.ip; },
+    async () => { const r = await fetch('https://api64.ipify.org?format=json', { signal: AbortSignal.timeout(4000) }); const j = await r.json() as { ip: string }; return j.ip; },
+    async () => { const r = await fetch('https://api.my-ip.io/v1/ip.json', { signal: AbortSignal.timeout(4000) }); const j = await r.json() as { ip: string }; return j.ip; },
+    async () => { const r = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(4000) }); const j = await r.json() as { ip: string }; return j.ip; },
   ];
-
   for (const fn of services) {
-    try {
-      const ip = await fn();
-      if (ip && ip.length > 3) {
-        sessionStorage.setItem('b4bet.clientIp', ip);
-        return ip;
-      }
-    } catch { /* try next */ }
+    try { const ip = await fn(); if (ip && ip.length > 3) { sessionStorage.setItem('b4bet.clientIp', ip); return ip; } } catch { /* try next */ }
   }
   return '';
 }
 
-// Calls the `record-ip` Edge Function, which reads the caller's REAL IP from
-// request headers (server-side) and logs it to `ip_logs`. Returns that IP so
-// the caller can also use it for the same-request signup-bonus check.
 async function recordSignupIp(accessToken: string, action: 'signup' | 'login' = 'signup'): Promise<string> {
   try {
     const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/record-ip`, {
@@ -84,65 +55,25 @@ async function recordSignupIp(accessToken: string, action: 'signup' | 'login' = 
   } catch { return ''; }
 }
 
-/** Log user IP — tries Edge Function first, then multiple client-side fallbacks */
 async function logIpWithFallback(userId: string, accessToken: string | undefined, action: 'signup' | 'login'): Promise<string> {
-  // 1. Try server-side Edge Function (gets real IP from headers, bypasses CGNAT)
   if (accessToken) {
     const serverIp = await recordSignupIp(accessToken, action);
-    if (serverIp) {
-      void logUserIp(userId, serverIp, action);
-      sessionStorage.setItem('b4bet.clientIp', serverIp);
-      return serverIp;
-    }
+    if (serverIp) { void logUserIp(userId, serverIp, action); sessionStorage.setItem('b4bet.clientIp', serverIp); return serverIp; }
   }
-  // 2. Fall back to client-side IP detection with multiple services
   const clientIp = await getClientIp();
-  if (clientIp) {
-    void logUserIp(userId, clientIp, action);
-    return clientIp;
-  }
+  if (clientIp) { void logUserIp(userId, clientIp, action); return clientIp; }
   return '';
-}
-
-/** Look up a user's email by their mobile/phone number from profiles table */
-async function getEmailByMobile(mobile: string): Promise<string | null> {
-  try {
-    const cleaned = mobile.replace(/\D/g, '');
-    if (!cleaned || cleaned.length < 7) return null;
-    const { data } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('phone', cleaned)
-      .single();
-    if (!data?.id) return null;
-    // Get email from auth.users via admin or via supabase user metadata
-    // We use a workaround: fetch the user's auth record via session if available
-    // Best approach: fetch profile then use the known email from profiles or metadata
-    const { data: profileFull } = await supabase
-      .from('profiles')
-      .select('id, username')
-      .eq('phone', cleaned)
-      .single();
-    if (!profileFull) return null;
-    // We can't directly get email from auth.users on client side,
-    // so return a sentinel to indicate mobile match was found
-    return `__mobile__:${profileFull.id}:${profileFull.username}`;
-  } catch {
-    return null;
-  }
 }
 
 class AuthManager {
   private session: AuthSession | null = null;
   private usersCache: AuthUser[] = [];
-  // In-memory cache of bans; source of truth is Supabase `bans` table
   private bannedUsers: BanRecord[] = [];
   private bansLoaded = false;
 
   constructor() {
     this.loadSession();
     this.applyPendingReferralRewards();
-    // Load bans from Supabase on startup
     void this.loadBansFromSupabase();
     bus.on(Topics.ReferralDepositApproved, (payload) => {
       const { username, amount } = payload as { username: string; amount: number };
@@ -151,50 +82,23 @@ class AuthManager {
     });
   }
 
-  // ---- Supabase bans sync ----
   async loadBansFromSupabase() {
     try {
       const { data, error } = await supabase.rpc('admin_get_bans');
       if (error) throw error;
-      const rows = (data ?? []) as {
-        id: string; user_id: string; username: string; email: string;
-        ip: string; ban_reason: string; banned_by: string;
-        ban_date: string; unban_date: string | null; unban_reason: string | null;
-      }[];
-      this.bannedUsers = rows.map(r => ({
-        id: r.id,
-        userId: r.user_id,
-        username: r.username,
-        email: r.email,
-        ip: r.ip,
-        banReason: r.ban_reason,
-        bannedBy: (r.banned_by === 'system' ? 'system' : 'admin') as 'system' | 'admin',
-        banDate: new Date(r.ban_date).getTime(),
-        unbanDate: r.unban_date ? new Date(r.unban_date).getTime() : undefined,
-        unbanReason: r.unban_reason ?? undefined,
-      }));
+      const rows = (data ?? []) as { id: string; user_id: string; username: string; email: string; ip: string; ban_reason: string; banned_by: string; ban_date: string; unban_date: string | null; unban_reason: string | null; }[];
+      this.bannedUsers = rows.map(r => ({ id: r.id, userId: r.user_id, username: r.username, email: r.email, ip: r.ip, banReason: r.ban_reason, bannedBy: (r.banned_by === 'system' ? 'system' : 'admin') as 'system' | 'admin', banDate: new Date(r.ban_date).getTime(), unbanDate: r.unban_date ? new Date(r.unban_date).getTime() : undefined, unbanReason: r.unban_reason ?? undefined }));
       this.bansLoaded = true;
       bus.emit('auth:bans', this.bannedUsers);
-    } catch (e) {
-      console.error('[auth] loadBansFromSupabase error:', e);
-    }
+    } catch (e) { console.error('[auth] loadBansFromSupabase error:', e); }
   }
 
   private async loadSession() {
-    try {
-      const raw = localStorage.getItem('b4bet.session');
-      if (raw) this.session = JSON.parse(raw) as AuthSession;
-    } catch { /* ignore */ }
+    try { const raw = localStorage.getItem('b4bet.session'); if (raw) this.session = JSON.parse(raw) as AuthSession; } catch { /* ignore */ }
     if (this.session) {
       const { data: { session: s } } = await supabase.auth.getSession();
       if (s) {
-        this.session = {
-          userId: s.user.id,
-          accountId: (s.user.user_metadata['accountId'] as string) || '',
-          username: (s.user.user_metadata['username'] as string) || s.user.email || '',
-          email: s.user.email || '',
-          loggedInAt: Date.now(),
-        };
+        this.session = { userId: s.user.id, accountId: (s.user.user_metadata['accountId'] as string) || '', username: (s.user.user_metadata['username'] as string) || s.user.email || '', email: s.user.email || '', loggedInAt: Date.now() };
         this.persistSession();
       } else { this.session = null; this.persistSession(); }
     }
@@ -202,10 +106,7 @@ class AuthManager {
   }
 
   private persistSession() {
-    try {
-      if (this.session) localStorage.setItem('b4bet.session', JSON.stringify(this.session));
-      else localStorage.removeItem('b4bet.session');
-    } catch { /* ignore */ }
+    try { if (this.session) localStorage.setItem('b4bet.session', JSON.stringify(this.session)); else localStorage.removeItem('b4bet.session'); } catch { /* ignore */ }
   }
 
   private emitState() { bus.emit(Topics.AuthState, this.session); }
@@ -234,10 +135,7 @@ class AuthManager {
     }
     if (!data.user) return { ok: false, error: 'Registration failed. Please try again.' };
 
-    // Log the real IP using Edge Function + multiple client fallbacks
     const realIp = await logIpWithFallback(data.user.id, data.session?.access_token, 'signup');
-
-    // Save profile WITH account_id, is_active, and registration_ip
     const { error: profileErr } = await supabase.from('profiles').upsert({
       id: data.user.id, username: uname, display_name: uname, phone: umobile,
       balance: 0, total_deposit: 0, total_withdrawal: 0, vip_level: 0, is_admin: false,
@@ -246,9 +144,14 @@ class AuthManager {
     });
     if (profileErr) console.error('[auth] profile upsert error:', profileErr);
     try { store.grantSignupBonus(data.user.id, uname, realIp); } catch { /* ignore */ }
+
     this.session = { userId: data.user.id, accountId, username: uname, email: umail, loggedInAt: Date.now() };
     this.persistSession();
     this.emitState();
+
+    // Send welcome email
+    emailService.sendWelcome(umail, uname);
+
     if (uref) {
       const { data: profiles } = await supabase.from('profiles').select('id').eq('username', uref);
       if (profiles && profiles.length > 0) {
@@ -266,62 +169,28 @@ class AuthManager {
     const id = identifier.trim();
     const idLower = id.toLowerCase();
 
-    // Check if identifier looks like a mobile number (digits only, 7-15 chars)
-    const isMobile = /^\d{7,15}$/.test(id.replace(/[\s+\-()]/g, ''));
+    const isMobile = /^[\d\s+\-()]{7,15}$/.test(id.replace(/[\s+\-()]/g, ''));
 
     if (isMobile) {
-      // Look up the user's profile by phone number to get their email
       const mobileClean = id.replace(/\D/g, '');
       try {
-        const { data: profileData } = await supabase
-          .from('profiles')
-          .select('id, username')
-          .eq('phone', mobileClean)
-          .maybeSingle();
+        const { data: profileData } = await supabase.from('profiles').select('id, username').eq('phone', mobileClean).maybeSingle();
         if (profileData) {
-          // Try common email patterns: username@b4bet.local and username@placeholder.local
           const username = profileData.username as string;
           for (const suffix of ['@b4bet.local', '@placeholder.local']) {
-            const { data: d, error: e } = await supabase.auth.signInWithPassword({
-              email: `${username}${suffix}`, password,
-            });
+            const { data: d, error: e } = await supabase.auth.signInWithPassword({ email: `${username}${suffix}`, password });
             if (!e && d.user) {
               const accountId = (d.user.user_metadata['accountId'] as string) || '';
-              this.session = {
-                userId: d.user.id, accountId,
-                username: (d.user.user_metadata['username'] as string) || username,
-                email: d.user.email || '', loggedInAt: Date.now(),
-              };
+              this.session = { userId: d.user.id, accountId, username: (d.user.user_metadata['username'] as string) || username, email: d.user.email || '', loggedInAt: Date.now() };
               this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
-              if (accountId) {
-                void supabase.from('profiles').update({ account_id: accountId }).eq('id', d.user.id).then(() => {}).catch(() => {});
-              }
+              if (accountId) void supabase.from('profiles').update({ account_id: accountId }).eq('id', d.user.id).then(() => {}).catch(() => {});
               void logIpWithFallback(d.user.id, d.session?.access_token, 'login');
               cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
               return { ok: true };
             }
           }
-          // Also try signing in with the actual email if stored in auth
-          const { data: authUser } = await supabase.auth.admin?.getUserById?.(profileData.id) ?? { data: null };
-          if (authUser?.user?.email) {
-            const { data: d2, error: e2 } = await supabase.auth.signInWithPassword({
-              email: authUser.user.email, password,
-            });
-            if (!e2 && d2.user) {
-              const accountId = (d2.user.user_metadata['accountId'] as string) || '';
-              this.session = {
-                userId: d2.user.id, accountId,
-                username: (d2.user.user_metadata['username'] as string) || username,
-                email: d2.user.email || '', loggedInAt: Date.now(),
-              };
-              this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
-              void logIpWithFallback(d2.user.id, d2.session?.access_token, 'login');
-              cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
-              return { ok: true };
-            }
-          }
         }
-      } catch { /* fall through to normal login */ }
+      } catch { /* fall through */ }
       return { ok: false, error: 'Invalid mobile number or password.' };
     }
 
@@ -334,38 +203,24 @@ class AuthManager {
         const { data: d2, error: e2 } = await supabase.auth.signInWithPassword({
           email: idLower.includes('@') ? idLower : `${idLower}@placeholder.local`, password,
         });
-        if (e2) return { ok: false, error: 'Invalid email/username or password.' };
+        if (e2) return { ok: false, error: 'Invalid email or password.' };
         if (d2.user) {
           const accountId = (d2.user.user_metadata['accountId'] as string) || '';
-          this.session = {
-            userId: d2.user.id, accountId,
-            username: (d2.user.user_metadata['username'] as string) || idLower,
-            email: d2.user.email || '', loggedInAt: Date.now(),
-          };
+          this.session = { userId: d2.user.id, accountId, username: (d2.user.user_metadata['username'] as string) || idLower, email: d2.user.email || '', loggedInAt: Date.now() };
           this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
-          if (accountId) {
-            void supabase.from('profiles').update({ account_id: accountId }).eq('id', d2.user.id).then(() => {}).catch(() => {});
-          }
-          // Log IP with fallbacks
+          if (accountId) void supabase.from('profiles').update({ account_id: accountId }).eq('id', d2.user.id).then(() => {}).catch(() => {});
           void logIpWithFallback(d2.user.id, d2.session?.access_token, 'login');
           cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
           return { ok: true };
         }
       }
-      return { ok: false, error: 'Invalid email/username or password.' };
+      return { ok: false, error: 'Invalid email or password.' };
     }
     if (!data.user) return { ok: false, error: 'Login failed.' };
     const accountId = (data.user.user_metadata['accountId'] as string) || '';
-    this.session = {
-      userId: data.user.id, accountId,
-      username: (data.user.user_metadata['username'] as string) || idLower,
-      email: data.user.email || '', loggedInAt: Date.now(),
-    };
+    this.session = { userId: data.user.id, accountId, username: (data.user.user_metadata['username'] as string) || idLower, email: data.user.email || '', loggedInAt: Date.now() };
     this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
-    if (accountId) {
-      void supabase.from('profiles').update({ account_id: accountId }).eq('id', data.user.id).then(() => {}).catch(() => {});
-    }
-    // Log IP with fallbacks
+    if (accountId) void supabase.from('profiles').update({ account_id: accountId }).eq('id', data.user.id).then(() => {}).catch(() => {});
     void logIpWithFallback(data.user.id, data.session?.access_token, 'login');
     cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
     return { ok: true };
@@ -380,9 +235,7 @@ class AuthManager {
       await supabase.auth.signOut();
       this.session = null; this.persistSession(); this.emitState();
       cms.pushFromTemplate('nt_logout', 'Logged Out', 'Your session has ended. See you next time!', 'info');
-    } finally {
-      this.isLoggingOut = false;
-    }
+    } finally { this.isLoggingOut = false; }
   }
 
   async forgotPassword(email: string): Promise<{ ok: boolean; error?: string }> {
@@ -414,9 +267,7 @@ class AuthManager {
   }
 
   getUsers(): AuthUser[] { return [...this.usersCache]; }
-  getUserByUsername(username: string): AuthUser | undefined {
-    return this.usersCache.find(u => u.username.toLowerCase() === username.toLowerCase());
-  }
+  getUserByUsername(username: string): AuthUser | undefined { return this.usersCache.find(u => u.username.toLowerCase() === username.toLowerCase()); }
   getUserById(id: string): AuthUser | undefined { return this.usersCache.find(x => x.id === id); }
   getUserByAccountId(accountId: string): AuthUser | undefined { return this.usersCache.find(u => u.accountId === accountId); }
 
@@ -429,43 +280,29 @@ class AuthManager {
     return true;
   }
 
-  // Ban user — persists to Supabase `bans` table
   banUser(id: string, reason: string, bannedBy: 'system' | 'admin' = 'admin'): boolean {
     const user = this.usersCache.find(u => u.id === id);
     const username = user?.username ?? id;
     const email = user?.email ?? '';
     const ip = user?.registrationIp ?? sessionStorage.getItem('b4bet.clientIp') ?? '';
-    void supabase.rpc('admin_ban_user', {
-      p_user_id: id, p_username: username, p_email: email,
-      p_ip: ip, p_reason: reason, p_banned_by: bannedBy,
-    }).then(({ data }) => {
-      void this.loadBansFromSupabase();
-      if (data && typeof data === 'string') {
-        // data is the new ban row id
-      }
-    }).catch(e => console.error('[auth] banUser error:', e));
+    void supabase.rpc('admin_ban_user', { p_user_id: id, p_username: username, p_email: email, p_ip: ip, p_reason: reason, p_banned_by: bannedBy })
+      .then(() => { void this.loadBansFromSupabase(); }).catch(e => console.error('[auth] banUser error:', e));
     if (user) user.isActive = false;
-    this.bannedUsers.push({
-      userId: id, username, email, ip,
-      banDate: Date.now(), banReason: reason, bannedBy,
-    });
+    this.bannedUsers.push({ userId: id, username, email, ip, banDate: Date.now(), banReason: reason, bannedBy });
     bus.emit('auth:bans', this.bannedUsers);
     if (this.session?.userId === id) void this.logout();
     return true;
   }
 
-  // Unban user by ban row id — persists to Supabase
   unbanUser(userId: string, reason: string): boolean {
     const banRecord = this.bannedUsers.find(b => b.userId === userId && !b.unbanDate);
     if (!banRecord) return false;
     const banId = banRecord.id;
     if (banId) {
       void supabase.rpc('admin_unban_user', { p_ban_id: banId, p_reason: reason })
-        .then(() => void this.loadBansFromSupabase())
-        .catch(e => console.error('[auth] unbanUser error:', e));
+        .then(() => void this.loadBansFromSupabase()).catch(e => console.error('[auth] unbanUser error:', e));
     }
-    banRecord.unbanDate = Date.now();
-    banRecord.unbanReason = reason;
+    banRecord.unbanDate = Date.now(); banRecord.unbanReason = reason;
     const user = this.usersCache.find(u => u.id === userId);
     if (user) user.isActive = true;
     bus.emit('auth:bans', this.bannedUsers);
@@ -481,9 +318,7 @@ class AuthManager {
     let reward = 0;
     if (cfg.model === 'CPA') reward = cfg.cpaAmount ?? 0;
     else if (cfg.model === 'RevShare') reward = Math.round(amount * ((cfg.revSharePercent ?? 0) / 100) * 100) / 100;
-    else if (cfg.model === 'Hybrid') {
-      reward = (cfg.cpaAmount ?? 0) + Math.round(amount * ((cfg.revSharePercent ?? 0) / 100) * 100) / 100;
-    }
+    else if (cfg.model === 'Hybrid') { reward = (cfg.cpaAmount ?? 0) + Math.round(amount * ((cfg.revSharePercent ?? 0) / 100) * 100) / 100; }
     if (reward > 0) {
       store.creditUser(user.referralCode, reward);
       store.pushNotification({ title: 'Referral Reward', body: `You earned ${store.currency}${reward.toFixed(2)} from a referral deposit.`, kind: 'success' });
