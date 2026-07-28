@@ -1,6 +1,4 @@
-// Supabase Edge Function — send a real SMTP test email
-// Uses nodemailer via npm: specifier (Deno supports npm:)
-import { createClient } from 'npm:@supabase/supabase-js@2';
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import nodemailer from 'npm:nodemailer@6';
 
 const corsHeaders = {
@@ -8,59 +6,49 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-Deno.serve(async (req: Request) => {
+serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
 
   try {
-    const { to, smtpConfig } = await req.json() as {
+    const body = await req.json() as {
       to: string;
-      smtpConfig: { host: string; port: string; user: string; pass: string; tls: boolean };
+      smtp?: { host: string; port: number; user: string; pass: string; secure: boolean };
     };
 
-    if (!to || !smtpConfig?.host || !smtpConfig?.user || !smtpConfig?.pass) {
-      return new Response(
-        JSON.stringify({ ok: false, error: 'Missing required fields (to, host, user, pass)' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-      );
+    const { to, smtp } = body;
+
+    if (!to || !smtp?.host || !smtp?.user || !smtp?.pass) {
+      return new Response(JSON.stringify({ ok: false, error: 'Missing required fields: to, smtp.host, smtp.user, smtp.pass' }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      });
     }
 
     const transporter = nodemailer.createTransport({
-      host: smtpConfig.host,
-      port: parseInt(smtpConfig.port || '587', 10),
-      secure: smtpConfig.tls && smtpConfig.port === '465',
-      requireTLS: smtpConfig.tls,
-      auth: { user: smtpConfig.user, pass: smtpConfig.pass },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 10000,
+      host: smtp.host,
+      port: Number(smtp.port) || 587,
+      secure: smtp.secure && Number(smtp.port) === 465,
+      requireTLS: smtp.secure && Number(smtp.port) !== 465,
+      auth: { user: smtp.user, pass: smtp.pass },
     });
-
-    await transporter.verify();
 
     await transporter.sendMail({
-      from: `"B4BeT Admin" <${smtpConfig.user}>`,
+      from: `"B4BeT" <${smtp.user}>`,
       to,
       subject: 'B4BeT SMTP Test ✓',
-      html: `
-        <div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:32px;border-radius:12px;max-width:480px">
-          <h2 style="color:#00ff88;margin:0 0 16px">✅ SMTP Test Successful</h2>
-          <p style="margin:0 0 8px;color:#a0aec0">Your B4BeT mail server is configured correctly.</p>
-          <p style="margin:0;font-size:12px;color:#4a5568">Sent at: ${new Date().toISOString()}</p>
-        </div>
-      `,
+      html: '<div style="font-family:sans-serif;padding:20px;background:#0a0f1c;color:#fff;border-radius:12px"><h2 style="color:#00ff88">SMTP Test Successful!</h2><p>Your email settings are configured correctly.</p><p style="color:#a0aec0;font-size:12px">This is an automated test from B4BeT Admin Panel.</p></div>',
     });
 
-    return new Response(
-      JSON.stringify({ ok: true, message: `Test email sent to ${to}` }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    );
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return new Response(
-      JSON.stringify({ ok: false, error: message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
-    );
+    console.error('[send-smtp-test] error:', err);
+    return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 500,
+    });
   }
 });
