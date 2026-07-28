@@ -104,6 +104,34 @@ async function logIpWithFallback(userId: string, accessToken: string | undefined
   return '';
 }
 
+/** Look up a user's email by their mobile/phone number from profiles table */
+async function getEmailByMobile(mobile: string): Promise<string | null> {
+  try {
+    const cleaned = mobile.replace(/\D/g, '');
+    if (!cleaned || cleaned.length < 7) return null;
+    const { data } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('phone', cleaned)
+      .single();
+    if (!data?.id) return null;
+    // Get email from auth.users via admin or via supabase user metadata
+    // We use a workaround: fetch the user's auth record via session if available
+    // Best approach: fetch profile then use the known email from profiles or metadata
+    const { data: profileFull } = await supabase
+      .from('profiles')
+      .select('id, username')
+      .eq('phone', cleaned)
+      .single();
+    if (!profileFull) return null;
+    // We can't directly get email from auth.users on client side,
+    // so return a sentinel to indicate mobile match was found
+    return `__mobile__:${profileFull.id}:${profileFull.username}`;
+  } catch {
+    return null;
+  }
+}
+
 class AuthManager {
   private session: AuthSession | null = null;
   private usersCache: AuthUser[] = [];
@@ -235,22 +263,83 @@ class AuthManager {
   }
 
   async login(identifier: string, password: string): Promise<{ ok: boolean; error?: string }> {
-    const id = identifier.trim().toLowerCase();
+    const id = identifier.trim();
+    const idLower = id.toLowerCase();
+
+    // Check if identifier looks like a mobile number (digits only, 7-15 chars)
+    const isMobile = /^\d{7,15}$/.test(id.replace(/[\s+\-()]/g, ''));
+
+    if (isMobile) {
+      // Look up the user's profile by phone number to get their email
+      const mobileClean = id.replace(/\D/g, '');
+      try {
+        const { data: profileData } = await supabase
+          .from('profiles')
+          .select('id, username')
+          .eq('phone', mobileClean)
+          .maybeSingle();
+        if (profileData) {
+          // Try common email patterns: username@b4bet.local and username@placeholder.local
+          const username = profileData.username as string;
+          for (const suffix of ['@b4bet.local', '@placeholder.local']) {
+            const { data: d, error: e } = await supabase.auth.signInWithPassword({
+              email: `${username}${suffix}`, password,
+            });
+            if (!e && d.user) {
+              const accountId = (d.user.user_metadata['accountId'] as string) || '';
+              this.session = {
+                userId: d.user.id, accountId,
+                username: (d.user.user_metadata['username'] as string) || username,
+                email: d.user.email || '', loggedInAt: Date.now(),
+              };
+              this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
+              if (accountId) {
+                void supabase.from('profiles').update({ account_id: accountId }).eq('id', d.user.id).then(() => {}).catch(() => {});
+              }
+              void logIpWithFallback(d.user.id, d.session?.access_token, 'login');
+              cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
+              return { ok: true };
+            }
+          }
+          // Also try signing in with the actual email if stored in auth
+          const { data: authUser } = await supabase.auth.admin?.getUserById?.(profileData.id) ?? { data: null };
+          if (authUser?.user?.email) {
+            const { data: d2, error: e2 } = await supabase.auth.signInWithPassword({
+              email: authUser.user.email, password,
+            });
+            if (!e2 && d2.user) {
+              const accountId = (d2.user.user_metadata['accountId'] as string) || '';
+              this.session = {
+                userId: d2.user.id, accountId,
+                username: (d2.user.user_metadata['username'] as string) || username,
+                email: d2.user.email || '', loggedInAt: Date.now(),
+              };
+              this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
+              void logIpWithFallback(d2.user.id, d2.session?.access_token, 'login');
+              cms.pushFromTemplate('nt_login', 'Logged In', `Welcome back, ${this.session.username}!`, 'success');
+              return { ok: true };
+            }
+          }
+        }
+      } catch { /* fall through to normal login */ }
+      return { ok: false, error: 'Invalid mobile number or password.' };
+    }
+
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: id.includes('@') ? id : `${id}@b4bet.local`, password,
+      email: idLower.includes('@') ? idLower : `${idLower}@b4bet.local`, password,
     });
     if (error) {
-      const { data: profileData } = await supabase.from('profiles').select('id').eq('username', id).single();
+      const { data: profileData } = await supabase.from('profiles').select('id').eq('username', idLower).single();
       if (profileData) {
         const { data: d2, error: e2 } = await supabase.auth.signInWithPassword({
-          email: id.includes('@') ? id : `${id}@placeholder.local`, password,
+          email: idLower.includes('@') ? idLower : `${idLower}@placeholder.local`, password,
         });
         if (e2) return { ok: false, error: 'Invalid email/username or password.' };
         if (d2.user) {
           const accountId = (d2.user.user_metadata['accountId'] as string) || '';
           this.session = {
             userId: d2.user.id, accountId,
-            username: (d2.user.user_metadata['username'] as string) || id,
+            username: (d2.user.user_metadata['username'] as string) || idLower,
             email: d2.user.email || '', loggedInAt: Date.now(),
           };
           this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
@@ -269,7 +358,7 @@ class AuthManager {
     const accountId = (data.user.user_metadata['accountId'] as string) || '';
     this.session = {
       userId: data.user.id, accountId,
-      username: (data.user.user_metadata['username'] as string) || id,
+      username: (data.user.user_metadata['username'] as string) || idLower,
       email: data.user.email || '', loggedInAt: Date.now(),
     };
     this.persistSession(); this.emitState(); this.applyPendingReferralRewards();

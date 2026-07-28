@@ -4,7 +4,7 @@
 // Connects to the Admin's SMTP settings via lib/auth for forgot-password emails.
 
 import { useState, useEffect } from 'react';
-import { X, Mail, User, KeyRound, Tag, ArrowLeft, Loader2 } from 'lucide-react';
+import { X, Mail, Phone, User, KeyRound, Tag, ArrowLeft, Loader2 } from 'lucide-react';
 import PasswordInput from './PasswordInput';
 import { auth } from '../lib/auth';
 import { bus, Topics } from '../lib/bus';
@@ -20,7 +20,7 @@ interface Props {
 export default function AuthModal({ open, initialMode = 'login', onClose }: Props) {
   const [mode, setMode] = useState<AuthModalMode>(initialMode);
 
-  // Reset mode whenever the modal opens
+  // Reset mode whenever the modal opens or initialMode changes
   useEffect(() => {
     if (open) setMode(initialMode);
   }, [open, initialMode]);
@@ -130,16 +130,16 @@ function LoginForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-3">
-        {/* Email / Username */}
+        {/* Email / Username / Mobile */}
         <div>
           <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold flex items-center gap-1 mb-1">
-            <Mail className="w-3 h-3" /> Email or Username
+            <Phone className="w-3 h-3" /> Email, Username or Mobile
           </label>
           <input
             type="text"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
-            placeholder="you@example.com"
+            placeholder="Email, username or mobile number"
             autoComplete="username"
             className="input w-full"
             required
@@ -282,7 +282,7 @@ function SignupForm({
         {/* Mobile Number */}
         <div>
           <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold flex items-center gap-1 mb-1">
-            <User className="w-3 h-3" /> Mobile Number
+            <Phone className="w-3 h-3" /> Mobile Number
           </label>
           <input
             type="tel"

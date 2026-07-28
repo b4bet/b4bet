@@ -255,7 +255,8 @@ export default function App() {
         onOpenAuthModal={openAuthModal}
       />
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
-      <AuthModal mode={authModalMode} open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
+      {/* FIX: use initialMode (not mode) so the correct tab (login/signup) is shown */}
+      <AuthModal initialMode={authModalMode} open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
       {isLoggedIn && <BanPopup />}
     </div>
