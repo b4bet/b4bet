@@ -56,7 +56,7 @@ async function fetchMaintenanceConfig(): Promise<MaintenanceConfig | null> {
       return val as MaintenanceConfig;
     }
   } catch {
-    // settings table may not have this key yet
+    // ignore
   }
   return null;
 }
@@ -70,6 +70,9 @@ function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdm
   window.location.reload();
   return true;
 }
+
+// Routes where the main header should be hidden (games have their own header)
+const GAME_ROUTES: Route[] = ['crash', 'mines', 'aviator', 'sunvsmoon', 'trading', 'wingo', 'k3', 'fived', 'ludo'];
 
 export default function App() {
   const staffSession = useStaffSession();
@@ -184,7 +187,8 @@ export default function App() {
     startAllPersistentGameEngines();
   }, []);
 
-  const showHeader = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
+  const isGameRoute = GAME_ROUTES.includes(route);
+  const showHeader = !isGameRoute && route !== 'admin' && route !== 'affiliate' && route !== 'landing';
   const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
 
   const isAdminRoute = route === 'admin';
@@ -216,7 +220,8 @@ export default function App() {
         />
       )}
 
-      {/* pt-[62px] = fixed header height | pb-[60px] = bottom nav height */}
+      {/* Game routes have no top offset (their own header handles it) */}
+      {/* Non-game routes offset by header + bottom nav heights */}
       <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[60px]' : ''}`}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
@@ -236,7 +241,7 @@ export default function App() {
         {route === 'admin' && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
         {route === 'history' && <HistoryView />}
         {route === 'ludo' && <LudoView onExit={() => navigate('home')} />}
-        {route === 'crash' && <CrashView />}
+        {route === 'crash' && <CrashView onBack={() => navigate('home')} />}
         {route === 'aviator' && <AviatorView onExit={() => navigate('home')} />}
         {route === 'wingo' && <WingoView />}
         {route === 'k3' && <K3View />}
