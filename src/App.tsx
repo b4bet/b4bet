@@ -13,10 +13,6 @@ import ProfileView from './views/ProfileView';
 import ReferralView from './views/ReferralView';
 import AdminView from './views/AdminView';
 import HistoryView from './views/HistoryView';
-import LudoView from './views/LudoView';
-import WingoView from './views/WingoView';
-import K3View from './views/K3View';
-import FiveDView from './views/FiveDView';
 import SunVsMoonView from './views/SunVsMoonView';
 import TradingGameView from './views/TradingGameView';
 import AffiliatePortalView from './views/AffiliatePortalView';
@@ -71,8 +67,8 @@ function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdm
   return true;
 }
 
-// Routes where the main header should be hidden (games have their own in-game header)
-const GAME_ROUTES: Route[] = ['crash', 'mines', 'aviator', 'sunvsmoon', 'trading', 'wingo', 'k3', 'fived', 'ludo'];
+// Game routes — main header is hidden, game uses its own header
+const GAME_ROUTES: Route[] = ['crash', 'mines', 'aviator', 'sunvsmoon', 'trading'];
 
 export default function App() {
   const staffSession = useStaffSession();
@@ -108,25 +104,20 @@ export default function App() {
       setIsLoggedIn(!!session);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT') {
-        auth.logout();
-        setIsLoggedIn(false);
-      } else if (session) {
-        setIsLoggedIn(true);
-      }
+      if (event === 'SIGNED_OUT') { auth.logout(); setIsLoggedIn(false); }
+      else if (session) { setIsLoggedIn(true); }
     });
     return () => subscription.unsubscribe();
   }, []);
 
-  // Push a history entry whenever we enter a game route so Android back works
+  // Push history entry on game open so Android back button works
   useEffect(() => {
     if (GAME_ROUTES.includes(route)) {
-      // Push a dummy state so pressing back triggers popstate
       window.history.pushState({ route }, '', window.location.href);
     }
   }, [route]);
 
-  // Handle mobile/browser back button — go home from any game route
+  // Mobile back button — go home from any game route
   useEffect(() => {
     const onPopState = () => {
       if (GAME_ROUTES.includes(routeRef.current)) {
@@ -140,45 +131,31 @@ export default function App() {
   useEffect(() => {
     const isAdminRoute = window.location.pathname === '/aryan' ||
       window.location.hash === '#aryan' || window.location.hash === '#/aryan';
-
     const handleConfig = (cfg: MaintenanceConfig | null) => {
       if (cfg !== null) {
         setMaintenance(cfg);
         applyMaintenance(cfg, !!staffSession, isAdminRoute);
       }
     };
-
     void fetchMaintenanceConfig().then(handleConfig);
-
     const channel = supabase
       .channel('maintenance_mode_watch')
-      .on(
-        'postgres_changes',
+      .on('postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'settings', filter: 'key=eq.maintenance_mode' },
         (payload) => {
           if (payload.new?.value) {
-            const val = typeof payload.new.value === 'string'
-              ? JSON.parse(payload.new.value as string)
-              : payload.new.value;
+            const val = typeof payload.new.value === 'string' ? JSON.parse(payload.new.value as string) : payload.new.value;
             const cfg = val as MaintenanceConfig;
             setMaintenance(cfg);
             applyMaintenance(cfg, !!staffSession, isAdminRoute);
           }
-        },
-      )
+        })
       .subscribe();
-
-    pollTimerRef.current = setInterval(() => {
-      void fetchMaintenanceConfig().then(handleConfig);
-    }, 10_000);
-
+    pollTimerRef.current = setInterval(() => { void fetchMaintenanceConfig().then(handleConfig); }, 10_000);
     const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        void fetchMaintenanceConfig().then(handleConfig);
-      }
+      if (document.visibilityState === 'visible') void fetchMaintenanceConfig().then(handleConfig);
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
-
     return () => {
       void supabase.removeChannel(channel);
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -242,13 +219,13 @@ export default function App() {
       )}
 
       <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[60px]' : ''}`}>
-        {route === 'home' && <HomeView onNavigate={navigate} />}
-        {route === 'mines' && <MinesView />}
-        {route === 'games' && <GamesView onNavigate={navigate} />}
-        {route === 'deposit' && <DepositView />}
-        {route === 'wallet' && <WalletView />}
-        {route === 'withdraw' && <WithdrawView />}
-        {route === 'profile' && (
+        {route === 'home'      && <HomeView onNavigate={navigate} />}
+        {route === 'mines'     && <MinesView />}
+        {route === 'games'     && <GamesView onNavigate={navigate} />}
+        {route === 'deposit'   && <DepositView />}
+        {route === 'wallet'    && <WalletView />}
+        {route === 'withdraw'  && <WithdrawView />}
+        {route === 'profile'   && (
           <ProfileView
             onNavigate={navigate}
             onOpenSupport={() => setSupportChatOpen(true)}
@@ -256,19 +233,15 @@ export default function App() {
             onOpenMenu={() => setWalletOpen(true)}
           />
         )}
-        {route === 'referral' && <ReferralView onOpenWallet={() => setWalletOpen(true)} />}
-        {route === 'admin' && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
-        {route === 'history' && <HistoryView />}
-        {route === 'ludo' && <LudoView onExit={() => navigate('home')} />}
-        {route === 'crash' && <CrashView />}
-        {route === 'aviator' && <AviatorView onExit={() => navigate('home')} />}
-        {route === 'wingo' && <WingoView />}
-        {route === 'k3' && <K3View />}
-        {route === 'fived' && <FiveDView />}
+        {route === 'referral'  && <ReferralView onOpenWallet={() => setWalletOpen(true)} />}
+        {route === 'admin'     && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
+        {route === 'history'   && <HistoryView />}
+        {route === 'crash'     && <CrashView />}
+        {route === 'aviator'   && <AviatorView onExit={() => navigate('home')} />}
         {route === 'sunvsmoon' && <SunVsMoonView />}
-        {route === 'trading' && <TradingGameView />}
+        {route === 'trading'   && <TradingGameView />}
         {route === 'affiliate' && <AffiliatePortalView onExit={() => navigate('home')} />}
-        {route === 'landing' && <LandingPage />}
+        {route === 'landing'   && <LandingPage />}
       </main>
 
       {showBottomNav && <BottomNav route={route} onNavigate={navigate} />}
