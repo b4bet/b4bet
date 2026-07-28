@@ -113,7 +113,8 @@ export default function AdminLoginPage() {
         cms.staff = cms.staff.map((s) => s.id === staffRow!.id ? { ...s, ...staffAccount } : s);
       }
 
-      cms.setStaffSession(staffRow.id);
+      // Use loginStaff() — this is the correct method name in cms.ts
+      cms.loginStaff(staffRow.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Login error: ${msg}`);
