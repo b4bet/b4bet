@@ -13,7 +13,6 @@ interface GameCardDef {
   ring: string;
 }
 
-// Only 5 featured games on home grid
 const games: GameCardDef[] = [
   { key: 'crash',     title: 'Crash',      tag: 'Real-time', icon: Rocket,    gradient: 'from-neon-500/30 to-neon-700/5',            ring: 'group-hover:border-neon-400' },
   { key: 'mines',     title: 'Mines',      tag: 'Strategy',  icon: Bomb,      gradient: 'from-coral-500/30 to-coral-700/5',           ring: 'group-hover:border-coral-400' },
@@ -33,7 +32,6 @@ export default function GameGrid({ onPlay }: { onPlay: (r: Route) => void }) {
           View all <ArrowRight className="w-3 h-3" />
         </button>
       </div>
-      {/* 5-column grid */}
       <div className="grid grid-cols-5 gap-2">
         {games.map((g) => {
           const Icon = g.icon;
@@ -46,14 +44,15 @@ export default function GameGrid({ onPlay }: { onPlay: (r: Route) => void }) {
                 onPlay(g.key);
               }}
               aria-label={g.title}
-              className={`group relative aspect-square rounded-xl border border-borderline-900 bg-slatepanel-900 overflow-hidden transition-all duration-200 ${g.ring} hover:shadow-neon-glow active:scale-[0.97]`}
+              className={`group relative rounded-xl border border-borderline-900 bg-slatepanel-900 overflow-hidden transition-all duration-200 ${g.ring} hover:shadow-neon-glow active:scale-[0.97]`}
+              style={{ height: '72px' }}
             >
               {logo ? (
                 <img src={logo} alt={g.title} className="absolute inset-0 w-full h-full object-cover" />
               ) : (
                 <>
                   <div className={`absolute inset-0 bg-gradient-to-br ${g.gradient}`} />
-                  <div className="relative flex flex-col items-center justify-center h-full gap-1">
+                  <div className="relative flex flex-col items-center justify-center h-full gap-1 p-1">
                     <Icon className="w-8 h-8 text-white/90" />
                     <span className="text-[9px] font-bold text-white/90 text-center leading-tight">{g.title}</span>
                   </div>

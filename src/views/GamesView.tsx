@@ -1,5 +1,5 @@
 import type { Route } from '../components/BottomNav';
-import { Rocket, Bomb, Plane, Dices, Hash, Grid3X3, Sun, TrendingUp } from 'lucide-react';
+import { Rocket, Bomb, Plane, Sun, TrendingUp } from 'lucide-react';
 import { useGameLogos } from '../lib/hooks';
 import type { GameKey } from '../lib/gameLogos';
 import { startAviatorBackgroundMusic } from '../components/aviator/game/useGameAudio';
@@ -11,9 +11,6 @@ const ALL_GAMES = [
   { route: 'crash'     as Route, label: 'Crash',      tag: 'Real-time', icon: Rocket,    color: '#b15eff', gameKey: 'crash'     as GameKey },
   { route: 'mines'     as Route, label: 'Mines',      tag: 'Strategy',  icon: Bomb,      color: '#ff4d70', gameKey: 'mines'     as GameKey },
   { route: 'aviator'   as Route, label: 'Aviator',    tag: 'Crash',     icon: Plane,     color: '#38bdf8', gameKey: 'aviator'   as GameKey },
-  { route: 'wingo'     as Route, label: 'Win Go',     tag: '1 Min',     icon: Hash,      color: '#FB4E4E', gameKey: 'wingo'     as GameKey },
-  { route: 'k3'        as Route, label: 'K3',         tag: '2 Min',     icon: Dices,     color: '#9831E9', gameKey: 'k3'        as GameKey },
-  { route: 'fived'     as Route, label: '5D',         tag: '1 Min',     icon: Grid3X3,   color: '#5CBA47', gameKey: 'fived'     as GameKey },
   { route: 'sunvsmoon' as Route, label: 'Sun & Moon', tag: 'Live',      icon: Sun,       color: '#FFB627', gameKey: 'sunvsmoon' as GameKey },
   { route: 'trading'   as Route, label: 'Trading',    tag: 'Binary',    icon: TrendingUp,color: '#22c55e', gameKey: 'trading'   as GameKey },
 ];
@@ -46,7 +43,7 @@ export default function GamesView({ onNavigate }: Props) {
                 <>
                   <div className="absolute inset-0" style={{ background: `radial-gradient(circle at 30% 30%, ${g.color}30, transparent 70%)` }} />
                   <div className="relative flex flex-col items-center justify-center h-full gap-1">
-                    <Icon className="w-8 h-8" style={{ color: g.color }} />
+                    <Icon className="w-10 h-10" style={{ color: g.color }} />
                     <span className="text-xs font-bold text-white">{g.label}</span>
                     <span className="text-[10px] text-white/50">{g.tag}</span>
                   </div>
