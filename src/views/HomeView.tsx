@@ -15,9 +15,11 @@ export default function HomeView({ onNavigate }: Props) {
   }, []);
 
   return (
-    <div className="pt-[62px] pb-20 flex flex-col h-screen overflow-hidden">
-
-      {/* Banner — side padding + gap below header */}
+    <div
+      style={{ height: 'calc(100vh - 62px - 60px)' }}
+      className="flex flex-col overflow-hidden"
+    >
+      {/* Banner — side margins + small top gap */}
       <div className="px-3 pt-3 flex-shrink-0">
         <SliderBanner onSlideClick={(i) => {
           if (i === 1) onNavigate('crash');
@@ -26,12 +28,12 @@ export default function HomeView({ onNavigate }: Props) {
         }} />
       </div>
 
-      {/* Games grid — side padding so logos don't clip */}
-      <div className="px-3 mt-4 flex-shrink-0">
+      {/* Games grid */}
+      <div className="px-3 mt-3 flex-shrink-0">
         <GameGrid onPlay={onNavigate} />
       </div>
 
-      {/* Flexible spacer pushes strips to bottom */}
+      {/* Spacer — pushes strips to bottom */}
       <div className="flex-1" />
 
       {/* Live stats strip */}
@@ -65,7 +67,6 @@ export default function HomeView({ onNavigate }: Props) {
           <span className="text-[10px] text-slate-400 font-medium">Secure Wallet</span>
         </div>
       </div>
-
     </div>
   );
 }
