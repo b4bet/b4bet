@@ -17,6 +17,7 @@ export default function SupportChat({ open, onClose }: Props) {
 
   const [text, setText] = useState('');
   const [pending, setPending] = useState<TicketAttachment[]>([]);
+  const [sending, setSending] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -28,7 +29,9 @@ export default function SupportChat({ open, onClose }: Props) {
   useEffect(() => {
     if (open) {
       markChatAsRead();
-      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      setTimeout(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }, 50);
     }
   }, [open, messages.length]);
 
@@ -45,11 +48,27 @@ export default function SupportChat({ open, onClose }: Props) {
     if (fileRef.current) fileRef.current.value = '';
   };
 
-  const send = () => {
-    if (!text.trim() && pending.length === 0) return;
-    cms.postTicketMessage(accountId, text.trim(), pending.length ? pending : undefined);
-    setText('');
-    setPending([]);
+  const send = async () => {
+    const body = text.trim();
+    if (!body && pending.length === 0) return;
+    setSending(true);
+    try {
+      if (!ticket) {
+        // First message — create the ticket
+        const newTicket = cms.createTicket(accountId, 'Support', body);
+        // If there are attachments add them as a follow-up message
+        if (pending.length > 0 && newTicket) {
+          cms.addTicketMessage(newTicket.id, '', 'user', undefined);
+        }
+      } else {
+        // Existing ticket — append message
+        cms.addTicketMessage(ticket.id, body, 'user', undefined);
+      }
+      setText('');
+      setPending([]);
+    } finally {
+      setSending(false);
+    }
   };
 
   if (!open) return null;
@@ -78,6 +97,9 @@ export default function SupportChat({ open, onClose }: Props) {
         {messages.map((m) => (
           <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[80%] rounded-2xl px-3 py-2 ${m.role === 'user' ? 'bg-gradient-to-br from-neon-500 to-neon-600 text-white' : 'bg-slatepanel-800 border border-borderline-900 text-slate-100'}`}>
+              {m.role === 'agent' && (
+                <p className="text-[9px] font-bold text-neon-300 mb-1 uppercase tracking-wider">Support Agent</p>
+              )}
               {m.body && <p className="text-sm whitespace-pre-wrap break-words">{m.body}</p>}
               {m.attachments && (
                 <div className="mt-2 space-y-1.5">
@@ -117,7 +139,7 @@ export default function SupportChat({ open, onClose }: Props) {
           accept="image/jpeg,image/png,application/pdf"
           multiple
           className="hidden"
-          onChange={(e) => onFiles(e.target.files)}
+          onChange={(e) => { void onFiles(e.target.files); }}
         />
         <button onClick={() => fileRef.current?.click()} className="w-10 h-10 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center flex-shrink-0">
           <Paperclip className="w-4 h-4 text-slate-300" />
@@ -126,11 +148,16 @@ export default function SupportChat({ open, onClose }: Props) {
           rows={1}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
           placeholder="Type your message…"
           className="input resize-none max-h-32 py-2.5"
+          disabled={sending}
         />
-        <button onClick={send} className="btn-primary h-10 px-4 flex-shrink-0">
+        <button
+          onClick={() => { void send(); }}
+          disabled={sending || (!text.trim() && pending.length === 0)}
+          className="btn-primary h-10 px-4 flex-shrink-0 disabled:opacity-50"
+        >
           <Send className="w-4 h-4" />
         </button>
       </footer>
