@@ -15,7 +15,7 @@ export default function HomeView({ onNavigate }: Props) {
   }, []);
 
   return (
-    <div className="flex flex-col gap-3 h-full overflow-hidden">
+    <div className="flex flex-col h-full overflow-hidden">
       {/* Banner */}
       <div className="px-3 pt-3 flex-shrink-0">
         <SliderBanner onSlideClick={(i) => {
@@ -26,11 +26,14 @@ export default function HomeView({ onNavigate }: Props) {
       </div>
 
       {/* Games grid */}
-      <div className="px-3 flex-shrink-0">
+      <div className="px-3 pt-3 flex-shrink-0">
         <GameGrid onPlay={onNavigate} />
       </div>
 
-      {/* Live stats */}
+      {/* Spacer pushes strips to bottom */}
+      <div className="flex-1" />
+
+      {/* Live stats strip */}
       <div className="mx-3 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
         <div className="flex flex-col items-center py-2.5 gap-0.5">
           <span className="text-[10px] text-slate-500 font-medium">Online</span>
@@ -47,7 +50,7 @@ export default function HomeView({ onNavigate }: Props) {
       </div>
 
       {/* Trust strip */}
-      <div className="mx-3 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
+      <div className="mx-3 mt-2 mb-3 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
         <div className="flex flex-col items-center py-2.5 gap-1">
           <ShieldCheck className="w-4 h-4 text-emeraldwin-400" />
           <span className="text-[10px] text-slate-400 font-medium">Provably Fair</span>
