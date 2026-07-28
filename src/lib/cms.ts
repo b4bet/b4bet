@@ -142,20 +142,34 @@ function mapTxToWithdrawal(row: Record<string, unknown>): WithdrawalRequest {
   };
 }
 
+// Maps a support_tickets row — the RPC now returns messages[] as jsonb
 function mapTicket(row: Record<string, unknown>): SupportTicket {
+  // Parse messages from the jsonb array returned by admin_get_support_tickets
+  const rawMsgs = row.messages as Array<Record<string, unknown>> | null;
+  const messages: TicketMessage[] = rawMsgs && rawMsgs.length > 0
+    ? rawMsgs.map(m => ({
+        id: (m.id as string) || Math.random().toString(36).slice(2),
+        role: (m.sender_type as string) === 'staff' ? 'agent' : 'user',
+        agentId: m.sender_type === 'staff' ? (m.sender_id as string | undefined) : undefined,
+        body: (m.message as string) || '',
+        ts: m.created_at ? new Date(m.created_at as string).getTime() : Date.now(),
+      }))
+    : [{
+        id: (row.id as string) + '_0',
+        role: 'user' as const,
+        body: (row.message as string) || '',
+        ts: new Date(row.created_at as string).getTime(),
+      }];
+
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
   return {
     id: row.id as string,
-    accountId: (row.user_id as string) || '',
-    status: (row.status as string) === 'closed' ? 'closed' : (row.status as string) === 'open' ? 'assigned' : 'unassigned',
-    assignedStaffId: null,
-    messages: [{
-      id: (row.id as string) + '_0',
-      role: 'user',
-      body: row.message as string,
-      ts: new Date(row.created_at as string).getTime(),
-    }],
+    accountId: (row.account_id as string) || (row.user_id as string) || '',
+    status: (row.status as string) === 'closed' ? 'closed' : (row.assigned_staff_id ? 'assigned' : 'unassigned'),
+    assignedStaffId: (row.assigned_staff_id as string | null) ?? null,
+    messages,
     createdTs: new Date(row.created_at as string).getTime(),
-    lastUserMsgTs: new Date(row.created_at as string).getTime(),
+    lastUserMsgTs: lastUserMsg ? lastUserMsg.ts : new Date(row.created_at as string).getTime(),
     acknowledged: (row.status as string) !== 'open',
   };
 }
@@ -263,9 +277,18 @@ class Cms {
       })
       .subscribe();
 
+    // Reload tickets whenever a ticket row changes
     supabase
       .channel('cms_tickets')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets' }, () => {
+        void this.syncTicketsFromSupabase();
+      })
+      .subscribe();
+
+    // Reload tickets whenever a new chat message arrives (user or staff)
+    supabase
+      .channel('cms_ticket_messages')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ticket_messages' }, () => {
         void this.syncTicketsFromSupabase();
       })
       .subscribe();
@@ -284,7 +307,6 @@ class Cms {
       })
       .subscribe();
 
-    // Banners — client slider updates instantly when admin adds/edits/deletes banners
     supabase
       .channel('cms_banners')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'banners' }, () => {
@@ -292,7 +314,6 @@ class Cms {
       })
       .subscribe();
 
-    // Settings — logo, smtp, referral config, dynamic pages all reload instantly
     supabase
       .channel('cms_settings')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => {
@@ -326,7 +347,6 @@ class Cms {
     } catch { /* use defaults */ }
   }
 
-  // Loads ALL settings from the `settings` table.
   private async syncSettingsFromSupabase() {
     try {
       const { data } = await supabase.rpc('admin_get_settings');
@@ -334,18 +354,15 @@ class Cms {
       const rows = data as Array<{ key: string; value: unknown }>;
       const find = (k: string) => rows.find(r => r.key === k)?.value;
 
-      // Referral config (legacy single-value key)
       const refBonus = find('referral_bonus');
       if (refBonus !== undefined && refBonus !== null) this.referralConfig.rewardAmount = refBonus as number;
 
-      // Full referral config object (new)
       const refConfig = find('referral_config');
       if (refConfig !== undefined && refConfig !== null && typeof refConfig === 'object') {
         this.referralConfig = { ...this.referralConfig, ...(refConfig as Partial<ReferralConfig>) };
       }
       bus.emit(Topics.ReferralConfig, this.referralConfig);
 
-      // Logos/favicon
       const logo = find('site_logo_data_url') as string | null;
       const textLogo = find('site_text_logo_data_url') as string | null;
       const favicon = find('site_favicon_data_url') as string | null;
@@ -353,7 +370,6 @@ class Cms {
       if (textLogo !== undefined) { this.textLogoDataUrl = textLogo; bus.emit(Topics.TextLogo, this.textLogoDataUrl); }
       if (favicon !== undefined) { this.faviconDataUrl = favicon; bus.emit(Topics.Favicon, this.faviconDataUrl); }
 
-      // SMTP config
       const smtpHost = find('smtp_host') as string | undefined;
       const smtpPort = find('smtp_port') as string | undefined;
       const smtpUser = find('smtp_user') as string | undefined;
@@ -367,21 +383,18 @@ class Cms {
       if (smtpTls !== undefined && smtpTls !== null) this.smtpConfig.tls = smtpTls as boolean;
       if (smtpActive !== undefined && smtpActive !== null) this.smtpConfig.active = smtpActive as boolean;
 
-      // Dynamic pages
       const dynPages = find('dynamic_pages');
       if (dynPages !== undefined && dynPages !== null && Array.isArray(dynPages)) {
         this.dynamicPages = dynPages as DynamicPage[];
         this.emitDynamicPages();
       }
 
-      // Email templates
       const emailTpls = find('email_templates');
       if (emailTpls !== undefined && emailTpls !== null && typeof emailTpls === 'object') {
         this.emailTemplates = { ...defaultEmails, ...(emailTpls as Partial<EmailTemplates>) };
         this.emitEmails();
       }
 
-      // Notification templates — custom ones only; built-ins are hardcoded in memory
       const notifTpls = find('notification_templates');
       if (notifTpls !== undefined && notifTpls !== null && Array.isArray(notifTpls)) {
         const custom = notifTpls as NotificationTemplate[];
@@ -506,14 +519,12 @@ class Cms {
     } catch { /* ignore */ }
   }
 
-  /** Persist custom (non-auto-generated) templates to Supabase settings table. */
   private persistNotificationTemplatesToSupabase() {
     const custom = this._notificationTemplates.filter(t => !t.isAutoGenerated);
     void supabase.rpc('admin_update_setting', {
       p_key: 'notification_templates',
       p_value: custom as unknown as string,
     }).catch(() => {});
-    // Also keep localStorage as local fallback
     try { localStorage.setItem(Cms.NOTIF_TEMPLATES_KEY, JSON.stringify(this._notificationTemplates)); } catch { /* ignore */ }
   }
 
@@ -585,7 +596,6 @@ class Cms {
   setEmailTemplate(key: keyof EmailTemplates, html: string) {
     this.emailTemplates = { ...this.emailTemplates, [key]: html };
     this.emitEmails();
-    // Persist to Supabase settings
     void supabase.rpc('admin_update_setting', {
       p_key: 'email_templates',
       p_value: this.emailTemplates as unknown as string,
@@ -594,12 +604,11 @@ class Cms {
 
   setSmtpConfig(patch: Partial<SmtpConfig>) { this.smtpConfig = { ...this.smtpConfig, ...patch }; }
 
-  // ---- Dynamic Pages (Supabase-persisted via settings) ----
+  // ---- Dynamic Pages ----
   addDynamicPage(title: string, html: string) {
     const page: DynamicPage = { id: 'dp_' + Math.random().toString(36).slice(2), title, html, ts: Date.now() };
     this.dynamicPages = [...this.dynamicPages, page];
     this.emitDynamicPages();
-    // Persist to Supabase so pages survive page reloads
     this.persistDynamicPagesToSupabase();
   }
   updateDynamicPage(id: string, patch: Partial<Pick<DynamicPage, 'title' | 'html'>>) {
@@ -619,7 +628,7 @@ class Cms {
     }).catch(() => {});
   }
 
-  // ---- Finance (Supabase-backed) ----
+  // ---- Finance ----
   submitDeposit(user: string, amount: number, method: string, utr?: string, details?: string, userId?: string) {
     const meta = { username: user, method, ...(utr ? { utr } : {}), ...(details ? { details } : {}) };
     supabase.from('transactions').insert({
@@ -701,7 +710,7 @@ class Cms {
     await supabase.rpc('admin_update_user', { p_id: userId, p_balance: bal }).catch(() => {});
   }
 
-  // ---- Support ----
+  // ---- Support (legacy) ----
   submitSupport(from: string, body: string) {
     const rec: SupportMessage = { id: Math.random().toString(36).slice(2), from, body, ts: Date.now(), read: false };
     this.support = [rec, ...this.support]; this.emitSupport();
@@ -718,30 +727,69 @@ class Cms {
   createTicket(accountId: string, subject: string, message: string): SupportTicket {
     const ticket: SupportTicket = {
       id: Math.random().toString(36).slice(2), accountId, status: 'unassigned',
-      assignedStaffId: null, messages: [{ id: Math.random().toString(36).slice(2), role: 'user', body: message, ts: Date.now() }],
+      assignedStaffId: null,
+      messages: [{ id: Math.random().toString(36).slice(2), role: 'user', body: message, ts: Date.now() }],
       createdTs: Date.now(), lastUserMsgTs: Date.now(), acknowledged: false,
     };
     this.tickets = [ticket, ...this.tickets]; this.emitTickets();
-    supabase.from('support_tickets').insert({ user_id: accountId, subject, message, status: 'open', priority: 'normal' })
-      .then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {});
+    // Persist to Supabase — user_post_ticket_message creates the ticket + first message
+    supabase.rpc('user_post_ticket_message', { p_account_id: accountId, p_body: message })
+      .then(() => { void this.syncTicketsFromSupabase(); })
+      .catch(() => {
+        // Fallback: plain insert
+        supabase.from('support_tickets').insert({ user_id: accountId, subject, message, status: 'open', priority: 'normal' })
+          .then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {});
+      });
     return ticket;
   }
+
   getTicket(id: string): SupportTicket | undefined { return this.tickets.find(t => t.id === id); }
+
+  // Claim a ticket for a staff member — calls admin_claim_ticket RPC
   assignTicket(id: string, staffId: string) {
     this.tickets = this.tickets.map(t => t.id === id ? { ...t, status: 'assigned' as TicketStatus, assignedStaffId: staffId } : t);
     this.emitTickets();
-    supabase.from('support_tickets').update({ status: 'open' }).eq('id', id).then(() => {}).catch(() => {});
+    supabase.rpc('admin_claim_ticket', { p_ticket_id: id, p_staff_id: staffId })
+      .then(() => { void this.syncTicketsFromSupabase(); })
+      .catch(() => {
+        // Fallback: direct update
+        supabase.from('support_tickets').update({ assigned_staff_id: staffId, status: 'open' }).eq('id', id).then(() => {}).catch(() => {});
+      });
   }
+
   closeTicket(id: string) {
     this.tickets = this.tickets.map(t => t.id === id ? { ...t, status: 'closed' as TicketStatus } : t);
     this.emitTickets();
     supabase.rpc('admin_update_ticket_status', { p_ticket_id: id, p_status: 'closed' }).then(() => {}).catch(() => {});
   }
+
+  // Add a message to a ticket — persists to Supabase ticket_messages table
   addTicketMessage(ticketId: string, body: string, role: 'user' | 'agent', agentId?: string) {
     const msg: TicketMessage = { id: Math.random().toString(36).slice(2), role, agentId, body, ts: Date.now() };
-    this.tickets = this.tickets.map(t => t.id === ticketId ? { ...t, messages: [...t.messages, msg], lastUserMsgTs: role === 'user' ? Date.now() : t.lastUserMsgTs } : t);
+    this.tickets = this.tickets.map(t => t.id === ticketId
+      ? { ...t, messages: [...t.messages, msg], lastUserMsgTs: role === 'user' ? Date.now() : t.lastUserMsgTs }
+      : t);
     this.emitTickets();
+    // Persist to Supabase
+    if (role === 'agent' && agentId) {
+      supabase.rpc('admin_reply_ticket', { p_ticket_id: ticketId, p_staff_id: agentId, p_message: body })
+        .then(() => { void this.syncTicketsFromSupabase(); })
+        .catch(() => {
+          supabase.from('ticket_messages').insert({ ticket_id: ticketId, sender_type: 'staff', sender_id: agentId, message: body }).then(() => {}).catch(() => {});
+        });
+    } else {
+      // User message — use user_post_ticket_message (looks up ticket by account_id)
+      const ticket = this.tickets.find(t => t.id === ticketId);
+      if (ticket) {
+        supabase.rpc('user_post_ticket_message', { p_account_id: ticket.accountId, p_body: body })
+          .then(() => { void this.syncTicketsFromSupabase(); })
+          .catch(() => {
+            supabase.from('ticket_messages').insert({ ticket_id: ticketId, sender_type: 'user', message: body }).then(() => {}).catch(() => {});
+          });
+      }
+    }
   }
+
   ackTicket(id: string) { this.tickets = this.tickets.map(t => t.id === id ? { ...t, acknowledged: true } : t); this.emitTickets(); }
 
   // ---- Staff ----
@@ -904,53 +952,75 @@ class Cms {
   /** Returns true if the detected country is inactive (geo-blocked). */
   isGeoBlocked(): boolean {
     const c = this.countries.find(x => x.id === this.detectedCountryId);
-    if (!c) return false;
-    return !c.isActive;
-  }
-
-  /** Returns the detected country object, or undefined if not found. */
-  detectedCountry(): Country | undefined {
-    return this.countries.find(x => x.id === this.detectedCountryId);
+    return c ? !c.isActive : false;
   }
 
   // ---- Referrals ----
-  recordReferralSignup(referred: AuthUser, referrerId: string) {
-    const rec: Referral = {
-      id: Math.random().toString(36).slice(2),
-      referrerId,
-      referredUserId: referred.id,
-      referredUsername: referred.username,
-      depositAmount: 0,
-      firstDepositApproved: false,
-      rewardPaid: false,
-      rewardCredited: false,
-      rewardAmount: 0,
-      createdAt: Date.now(),
-      ts: Date.now(),
-    };
-    this.referrals = [rec, ...this.referrals];
+  addReferral(r: Omit<Referral, 'id' | 'ts'>) {
+    const rec: Referral = { ...r, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.referrals = [...this.referrals, rec]; this.emitReferrals();
+    supabase.from('referrals').insert({
+      referrer_id: r.referrerId, referred_user_id: r.referredUserId,
+      referred_username: r.referredUsername, deposit_amount: r.depositAmount,
+      first_deposit_approved: r.firstDepositApproved, reward_paid: r.rewardPaid,
+      reward_credited: r.rewardCredited, reward_amount: r.rewardAmount,
+    }).then(() => {}).catch(() => {});
+  }
+  updateReferralReward(referrerId: string, referredUserId: string, patch: Partial<Referral>) {
+    this.referrals = this.referrals.map(r =>
+      r.referrerId === referrerId && r.referredUserId === referredUserId ? { ...r, ...patch } : r
+    );
     this.emitReferrals();
   }
 
-  getAffiliates(): AffiliateApplication[] { return this.affiliates; }
-  submitAffiliateApplication(app: Omit<AffiliateApplication, 'id' | 'ts' | 'status' | 'revSharePct' | 'stats'>) {
+  // ---- Auto Gateways ----
+  addAutoGateway(g: Omit<AutoGateway, 'id'>) {
+    const rec: AutoGateway = { ...g, id: Math.random().toString(36).slice(2) };
+    this.autoGateways = [...this.autoGateways, rec]; this.emitGateways();
+  }
+  updateAutoGateway(id: string, patch: Partial<AutoGateway>) {
+    this.autoGateways = this.autoGateways.map(g => g.id === id ? { ...g, ...patch } : g); this.emitGateways();
+  }
+  removeAutoGateway(id: string) {
+    this.autoGateways = this.autoGateways.filter(g => g.id !== id); this.emitGateways();
+  }
+
+  // ---- Manual Methods ----
+  addManualMethod(m: Omit<ManualMethod, 'id'>) {
+    const rec: ManualMethod = { ...m, id: Math.random().toString(36).slice(2) };
+    this.manualMethods = [...this.manualMethods, rec]; this.emitManual();
+    const details = { ...rec };
+    supabase.from('payment_methods').insert({ method_type: m.kind, account_details: details, is_active: m.active }).then(() => {}).catch(() => {});
+  }
+  updateManualMethod(id: string, patch: Partial<ManualMethod>) {
+    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
+    const updated = this.manualMethods.find(m => m.id === id);
+    if (updated) supabase.from('payment_methods').update({ account_details: { ...updated }, is_active: updated.active }).eq('id', id).then(() => {}).catch(() => {});
+  }
+  removeManualMethod(id: string) {
+    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
+    supabase.from('payment_methods').update({ is_active: false }).eq('id', id).then(() => {}).catch(() => {});
+  }
+
+  // ---- Affiliates ----
+  submitAffiliateApplication(app: Omit<AffiliateApplication, 'id' | 'ts' | 'status' | 'stats' | 'revSharePct'>) {
     const rec: AffiliateApplication = {
       ...app, id: Math.random().toString(36).slice(2), ts: Date.now(),
       status: 'pending', revSharePct: 0,
       stats: { clicks: 0, registered: 0, deposits: 0, revenueShare: 0 },
     };
-    this.affiliates = [rec, ...this.affiliates];
+    this.affiliates = [...this.affiliates, rec];
     bus.emit(Topics.Affiliates, this.affiliates);
+    supabase.from('affiliates').insert({
+      user_id: app.userId, username: app.username, email: app.email,
+      telegram: app.telegram, traffic_source: app.trafficSource,
+      estimated_traffic: app.estimatedTraffic, status: 'pending',
+    }).then(() => {}).catch(() => {});
   }
-  approveAffiliate(id: string, revSharePct: number) {
-    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status: 'approved' as const, revSharePct } : a);
-    bus.emit(Topics.Affiliates, this.affiliates);
-  }
-  rejectAffiliate(id: string) {
-    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status: 'rejected' as const } : a);
+  updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
     bus.emit(Topics.Affiliates, this.affiliates);
   }
 }
 
 export const cms = new Cms();
-export type { AuthUser };
