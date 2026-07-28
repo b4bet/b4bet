@@ -51,39 +51,41 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
 
   return (
     <div className="flex flex-col h-[100dvh] overflow-hidden bg-midnight-950">
+
       {/* ── Game Header ── */}
-      <div className="flex items-center justify-between px-3 py-2 bg-slatepanel-900 border-b border-borderline-900 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 h-[52px] bg-slatepanel-900 border-b border-borderline-900 flex-shrink-0">
         {/* Left: back + logo + name */}
         <div className="flex items-center gap-2">
           {onBack && (
-            <button onClick={onBack} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors flex-shrink-0">
+            <button
+              onClick={onBack}
+              className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors flex-shrink-0"
+            >
               <ChevronLeft className="w-4 h-4 text-white/70" />
             </button>
           )}
-          <div className="w-8 h-8 rounded-lg overflow-hidden flex-shrink-0 bg-slatepanel-800 border border-borderline-900 grid place-items-center">
+          <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-slatepanel-800 border border-borderline-900 grid place-items-center">
             {logos.crash ? (
               <img src={logos.crash} alt="Crash" className="w-full h-full object-cover" />
             ) : (
               <Rocket className="w-4 h-4 text-neon-400" />
             )}
           </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-bold text-white leading-tight">Crash</span>
-          </div>
+          <span className="text-sm font-bold text-white">Crash</span>
         </div>
 
         {/* Right: balance + settings + feed */}
         <div className="flex items-center gap-2">
-          {/* Balance chip */}
-          <div className="flex items-center gap-1.5 bg-slatepanel-800 border border-borderline-900 rounded-xl px-3 py-1.5">
-            <Wallet className="w-3.5 h-3.5 text-emeraldwin-400" />
+          <div className="flex items-center gap-1.5 bg-slatepanel-800 border border-borderline-900 rounded-xl px-2.5 py-1">
+            <Wallet className="w-3 h-3 text-emeraldwin-400" />
             {balance < 0 ? (
               <span className="text-xs font-bold text-white/40">...</span>
             ) : (
-              <span className="text-xs font-bold text-emeraldwin-400">{store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+              <span className="text-xs font-bold text-emeraldwin-400">
+                {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
             )}
           </div>
-
           <button
             ref={settingsButtonRef}
             onClick={() => setSettingsOpen(true)}
@@ -92,20 +94,13 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
           >
             <Settings className="w-4 h-4 text-white/60" />
           </button>
-
           <button
             ref={feedButtonRef}
             onClick={() => setFeedOpen(!feedOpen)}
             className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors flex-shrink-0"
             aria-label={feedOpen ? 'Close crash feed' : 'Open crash feed'}
           >
-            {feedOpen ? (
-              <div className="relative">
-                <History className="w-4 h-4 text-neon-400" />
-              </div>
-            ) : (
-              <History className="w-4 h-4 text-white/60" />
-            )}
+            <History className={`w-4 h-4 ${feedOpen ? 'text-neon-400' : 'text-white/60'}`} />
           </button>
         </div>
       </div>
@@ -113,31 +108,30 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
       <CrashSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} buttonRef={settingsButtonRef} />
       <CrashFeedPopup open={feedOpen} onClose={() => setFeedOpen(false)} history={history} buttonRef={feedButtonRef} />
 
-      {/* Recent history bar */}
+      {/* ── Recent History Bar ── */}
       <div className="flex gap-1.5 px-3 py-2 overflow-x-auto scrollbar-none flex-shrink-0 bg-slatepanel-900/50">
-        {recentHistory.length === 0 ? (
-          Array.from({ length: 10 }).map((_, i) => (
-            <div key={i} className="h-5 w-12 rounded-md bg-slatepanel-800 animate-pulse flex-shrink-0" />
-          ))
-        ) : (
-          recentHistory.map((bp, i) => (
-            <span key={i} className={`text-[11px] font-bold px-2 py-0.5 rounded-md border flex-shrink-0 ${multiplierColor(bp)}`}>
-              {bp.toFixed(2)}×
-            </span>
-          ))
-        )}
+        {recentHistory.length === 0
+          ? Array.from({ length: 10 }).map((_, i) => (
+              <div key={i} className="h-5 w-12 rounded-md bg-slatepanel-800 animate-pulse flex-shrink-0" />
+            ))
+          : recentHistory.map((bp, i) => (
+              <span key={i} className={`text-[11px] font-bold px-2 py-0.5 rounded-md border flex-shrink-0 ${multiplierColor(bp)}`}>
+                {bp.toFixed(2)}×
+              </span>
+            ))
+        }
       </div>
 
-      {/* Canvas */}
+      {/* ── Canvas ── */}
       <div className="relative flex-1 min-h-0">
-        <CrashCanvas />
+        <CrashCanvas state={state} />
         <CashoutPopupOverlay />
       </div>
 
-      {/* Bet panels */}
+      {/* ── Bet panels ── */}
       <DualBetPanel />
 
-      {/* History tabs */}
+      {/* ── History tabs ── */}
       <div className="flex-shrink-0">
         <CrashHistoryTabs />
       </div>
