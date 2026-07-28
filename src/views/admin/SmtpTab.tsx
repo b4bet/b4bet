@@ -4,33 +4,51 @@ import { supabase } from '@/integrations/supabase/client';
 import { Mail, Server, Send, Loader2, CheckCircle2, Save, XCircle } from 'lucide-react';
 import PasswordInput from '../../components/PasswordInput';
 
-async function loadSmtpFromSupabase() {
+interface SmtpSettings {
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+  secure: boolean;
+  from: string;
+  fromName: string;
+  enabled: boolean;
+}
+
+const DEFAULT_SMTP: SmtpSettings = {
+  host: '',
+  port: 587,
+  user: '',
+  pass: '',
+  secure: false,
+  from: '',
+  fromName: 'B4BeT',
+  enabled: false,
+};
+
+async function loadSmtpFromSupabase(): Promise<SmtpSettings | null> {
   const { data } = await supabase.rpc('admin_get_settings');
   if (!data) return null;
   const rows = data as Array<{ key: string; value: unknown }>;
-  const find = (k: string) => rows.find(r => r.key === k)?.value;
+  const row = rows.find(r => r.key === 'smtp_settings');
+  if (!row?.value) return null;
+  const v = row.value as Partial<SmtpSettings>;
   return {
-    host: (find('smtp_host') as string) || '',
-    port: (find('smtp_port') as string) || '587',
-    user: (find('smtp_user') as string) || '',
-    pass: (find('smtp_pass') as string) || '',
-    tls: find('smtp_tls') !== false,
-    active: find('smtp_active') === true,
+    host: v.host ?? '',
+    port: typeof v.port === 'number' ? v.port : 587,
+    user: v.user ?? '',
+    pass: v.pass ?? '',
+    secure: v.secure ?? false,
+    from: v.from ?? '',
+    fromName: v.fromName ?? 'B4BeT',
+    enabled: v.enabled ?? false,
   };
 }
 
-async function saveSmtpToSupabase(cfg: { host: string; port: string; user: string; pass: string; tls: boolean; active: boolean }) {
-  const pairs = [
-    { key: 'smtp_host', value: cfg.host },
-    { key: 'smtp_port', value: cfg.port },
-    { key: 'smtp_user', value: cfg.user },
-    { key: 'smtp_pass', value: cfg.pass },
-    { key: 'smtp_tls', value: cfg.tls },
-    { key: 'smtp_active', value: cfg.active },
-  ];
-  for (const { key, value } of pairs) {
-    await supabase.rpc('admin_update_setting', { p_key: key, p_value: value }).catch(() => {});
-  }
+async function saveSmtpToSupabase(cfg: SmtpSettings) {
+  await supabase
+    .rpc('admin_update_setting', { p_key: 'smtp_settings', p_value: cfg })
+    .catch(() => {});
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -47,8 +65,10 @@ export default function SmtpTab() {
   const [port, setPort] = useState('587');
   const [user, setUser] = useState('');
   const [pass, setPass] = useState('');
-  const [tls, setTls] = useState(true);
-  const [active, setActive] = useState(false);
+  const [from, setFrom] = useState('');
+  const [fromName, setFromName] = useState('B4BeT');
+  const [secure, setSecure] = useState(false);
+  const [enabled, setEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -59,31 +79,37 @@ export default function SmtpTab() {
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
-    loadSmtpFromSupabase().then(cfg => {
-      if (cfg) {
-        setHost(cfg.host || cms.smtpConfig.host);
-        setPort(cfg.port || cms.smtpConfig.port);
-        setUser(cfg.user || cms.smtpConfig.user);
-        setPass(cfg.pass || cms.smtpConfig.pass);
-        setTls(cfg.tls);
-        setActive(cfg.active);
-        cms.setSmtpConfig(cfg);
-      } else {
-        setHost(cms.smtpConfig.host);
-        setPort(cms.smtpConfig.port);
-        setUser(cms.smtpConfig.user);
-        setPass(cms.smtpConfig.pass);
-        setTls(cms.smtpConfig.tls);
-        setActive(cms.smtpConfig.active);
-      }
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    loadSmtpFromSupabase()
+      .then(cfg => {
+        const c = cfg ?? DEFAULT_SMTP;
+        setHost(c.host);
+        setPort(String(c.port));
+        setUser(c.user);
+        setPass(c.pass);
+        setFrom(c.from);
+        setFromName(c.fromName);
+        setSecure(c.secure);
+        setEnabled(c.enabled);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
+
+  const buildCfg = (): SmtpSettings => ({
+    host,
+    port: parseInt(port, 10) || 587,
+    user,
+    pass,
+    from: from || user,
+    fromName,
+    secure,
+    enabled,
+  });
 
   const handleSave = async () => {
     setSaving(true);
-    const cfg = { host, port, user, pass, tls, active };
-    cms.setSmtpConfig(cfg);
+    const cfg = buildCfg();
+    cms.setSmtpConfig({ host, port, user, pass, tls: secure, active: enabled });
     await saveSmtpToSupabase(cfg);
     setSaving(false);
     setSaved(true);
@@ -96,11 +122,8 @@ export default function SmtpTab() {
     setTesting(true);
     setTestResult(null);
     try {
-      // Get Supabase URL for edge function
-      const supabaseUrl = (supabase as unknown as { supabaseUrl: string }).supabaseUrl
-        || import.meta.env.VITE_SUPABASE_URL
-        || '';
-      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string || '';
+      const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string || '';
 
       const res = await fetch(`${supabaseUrl}/functions/v1/send-smtp-test`, {
         method: 'POST',
@@ -111,7 +134,7 @@ export default function SmtpTab() {
         },
         body: JSON.stringify({
           to: testEmail.trim(),
-          smtpConfig: { host, port, user, pass, tls },
+          smtpConfig: buildCfg(),
         }),
       });
       const json = await res.json() as { ok: boolean; message?: string; error?: string };
@@ -154,9 +177,9 @@ export default function SmtpTab() {
           </div>
         </div>
         <span className={`text-xs px-2.5 py-1 rounded-full font-semibold ${
-          active ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-700 text-slate-400'
+          enabled ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-slate-700 text-slate-400'
         }`}>
-          {active ? 'Active' : 'Disabled'}
+          {enabled ? 'Active' : 'Disabled'}
         </span>
       </div>
 
@@ -166,7 +189,7 @@ export default function SmtpTab() {
           <div className="col-span-2 md:col-span-1">
             <Field label="SMTP Host">
               <input value={host} onChange={e => setHost(e.target.value)}
-                placeholder="smtp.example.com"
+                placeholder="smtp.gmail.com"
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-violet-500 transition" />
             </Field>
           </div>
@@ -178,15 +201,29 @@ export default function SmtpTab() {
             </Field>
           </div>
           <div className="col-span-2">
-            <Field label="Username / Email">
+            <Field label="Username / Email (SMTP Login)">
               <input value={user} onChange={e => setUser(e.target.value)}
                 placeholder="noreply@example.com"
                 className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-violet-500 transition" />
             </Field>
           </div>
           <div className="col-span-2">
-            <Field label="Password">
+            <Field label="Password / App Password">
               <PasswordInput value={pass} onChange={v => setPass(v)} className="mt-0" />
+            </Field>
+          </div>
+          <div className="col-span-2 md:col-span-1">
+            <Field label="From Email (sender address)">
+              <input value={from} onChange={e => setFrom(e.target.value)}
+                placeholder="noreply@example.com"
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-violet-500 transition" />
+            </Field>
+          </div>
+          <div className="col-span-2 md:col-span-1">
+            <Field label="From Name">
+              <input value={fromName} onChange={e => setFromName(e.target.value)}
+                placeholder="B4BeT"
+                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none focus:border-violet-500 transition" />
             </Field>
           </div>
         </div>
@@ -194,21 +231,16 @@ export default function SmtpTab() {
         {/* Toggles */}
         <div className="flex items-center gap-6 pt-1">
           <label className="flex items-center gap-2.5 cursor-pointer">
-            <button onClick={() => setTls(v => !v)}
-              className={`relative w-9 h-5 rounded-full transition-colors ${tls ? 'bg-emerald-500' : 'bg-slate-700'}`}>
-              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${tls ? 'translate-x-4' : 'translate-x-0.5'}`} />
+            <button onClick={() => setSecure(v => !v)}
+              className={`relative w-9 h-5 rounded-full transition-colors ${secure ? 'bg-emerald-500' : 'bg-slate-700'}`}>
+              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${secure ? 'translate-x-4' : 'translate-x-0.5'}`} />
             </button>
-            <span className="text-xs text-slate-300">TLS Encryption</span>
+            <span className="text-xs text-slate-300">TLS/SSL Encryption</span>
           </label>
           <label className="flex items-center gap-2.5 cursor-pointer">
-            <button onClick={async () => {
-              const next = !active;
-              setActive(next);
-              cms.setSmtpConfig({ active: next });
-              await supabase.rpc('admin_update_setting', { p_key: 'smtp_active', p_value: next }).catch(() => {});
-            }}
-              className={`relative w-9 h-5 rounded-full transition-colors ${active ? 'bg-violet-500' : 'bg-slate-700'}`}>
-              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${active ? 'translate-x-4' : 'translate-x-0.5'}`} />
+            <button onClick={() => setEnabled(v => !v)}
+              className={`relative w-9 h-5 rounded-full transition-colors ${enabled ? 'bg-violet-500' : 'bg-slate-700'}`}>
+              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
             </button>
             <span className="text-xs text-slate-300">Enable SMTP</span>
           </label>
@@ -219,7 +251,7 @@ export default function SmtpTab() {
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold transition disabled:opacity-60">
           {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
           {saving ? 'Saving…' : 'Save Settings'}
-          {saved && <span className="text-emerald-300">✓ Saved</span>}
+          {saved && <span className="text-emerald-300 ml-1">✓ Saved</span>}
         </button>
       </div>
 
@@ -230,7 +262,7 @@ export default function SmtpTab() {
           <h3 className="text-sm font-semibold text-white">Send Test Email</h3>
         </div>
         <p className="text-xs text-slate-500">
-          Settings ko pehle save karo, phir neeche email address daalke real test bhejo.
+          Pehle settings save karo, phir test email bhejo to verify SMTP is working.
         </p>
         <div className="flex gap-2">
           <input
