@@ -27,8 +27,7 @@ import MarketingTab from './admin/MarketingTab';
 import NotificationsTab from './admin/NotificationsTab';
 import AutoGatewaysTab from './admin/AutoGatewaysTab';
 import GameAlgosTab, {
-  CrashHandlingPanel, WingoHandlingPanel, K3HandlingPanel,
-  FiveDHandlingPanel, SunMoonHandlingPanel, AviatorHandlingPanel,
+  CrashHandlingPanel, SunMoonHandlingPanel, AviatorHandlingPanel,
   TopRankingsAdminPanel, OnlineCountPanel, TopWinPaidOutPanel,
 } from './admin/GameAlgosTab';
 import GameSettingsTab from './admin/GameSettingsTab';
@@ -53,65 +52,61 @@ type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationMa
   | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory'
   | 'signupBonus' | 'dashboard' | 'socialLinks' | 'maintenance';
 
-type GameHandlerKey = 'crash' | 'wingo' | 'k3' | 'fived' | 'sunvsmoon' | 'aviator';
+type GameHandlerKey = 'crash' | 'sunvsmoon' | 'aviator';
 type FloatToast = { id: number; message: string; icon: 'deposit' | 'withdrawal' | 'support' };
 
 const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
-  { key: 'dashboard',           label: 'Dashboard',        icon: LayoutDashboard },
-  { key: 'finance',             label: 'Finance',          icon: DollarSign },
-  { key: 'requests',            label: 'Requests',         icon: RefreshCw },
-  { key: 'tickets',             label: 'Tickets',          icon: Headphones },
-  { key: 'users',               label: 'Users',            icon: Users },
-  { key: 'staff',               label: 'Staff',            icon: ShieldCheck },
-  { key: 'affiliates',          label: 'Affiliates',       icon: Link2 },
-  { key: 'socialLinks',         label: 'Social Links',     icon: Share2 },
-  { key: 'gateways',            label: 'Auto Gateways',    icon: Zap },
-  { key: 'algos',               label: 'Game Algos',       icon: Cpu },
-  { key: 'games',               label: 'Game Handlers',    icon: Settings },
-  { key: 'gameSettings',        label: 'Game Settings',    icon: Settings },
-  { key: 'history',             label: 'History',          icon: History },
-  { key: 'balanceHistory',      label: 'Balance History',  icon: BarChart2 },
-  { key: 'topRankings',         label: 'Top Rankings',     icon: Trophy },
-  { key: 'notifications',       label: 'Notifications',    icon: Bell },
-  { key: 'notificationManager', label: 'Notif. Manager',   icon: Bell },
-  { key: 'marketing',           label: 'Marketing',        icon: Megaphone },
-  { key: 'crm',                 label: 'CRM',              icon: Users },
-  { key: 'email',               label: 'Email Manager',    icon: Mail },
-  { key: 'smtp',                label: 'SMTP',             icon: Server },
-  { key: 'currencies',          label: 'Currencies',       icon: Coins },
-  { key: 'paymentMethods',      label: 'Payment Methods',  icon: CreditCard },
-  { key: 'handlers',            label: 'Pay Handlers',     icon: Wallet },
-  { key: 'dynamicPages',        label: 'Dynamic Pages',    icon: FileText },
-  { key: 'banner',              label: 'Banner & Logo',    icon: Image },
-  { key: 'redeem',              label: 'Redeem Codes',     icon: Gift },
-  { key: 'signupBonus',         label: 'Signup Bonus',     icon: Gift },
-  { key: 'ban',                 label: 'Ban Section',      icon: ShieldBan },
-  { key: 'intercom',            label: 'Intercom',         icon: MessageSquare },
-  { key: 'maintenance',         label: 'Maintenance',      icon: Wrench },
+  { key: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { key: 'finance', label: 'Finance', icon: DollarSign },
+  { key: 'requests', label: 'Requests', icon: RefreshCw },
+  { key: 'tickets', label: 'Tickets', icon: Headphones },
+  { key: 'users', label: 'Users', icon: Users },
+  { key: 'staff', label: 'Staff', icon: ShieldCheck },
+  { key: 'affiliates', label: 'Affiliates', icon: Link2 },
+  { key: 'socialLinks', label: 'Social Links', icon: Share2 },
+  { key: 'gateways', label: 'Auto Gateways', icon: Zap },
+  { key: 'algos', label: 'Game Algos', icon: Cpu },
+  { key: 'games', label: 'Game Handlers', icon: Settings },
+  { key: 'gameSettings', label: 'Game Settings', icon: Settings },
+  { key: 'history', label: 'History', icon: History },
+  { key: 'balanceHistory', label: 'Balance History', icon: BarChart2 },
+  { key: 'topRankings', label: 'Top Rankings', icon: Trophy },
+  { key: 'notifications', label: 'Notifications', icon: Bell },
+  { key: 'notificationManager', label: 'Notif. Manager', icon: Bell },
+  { key: 'marketing', label: 'Marketing', icon: Megaphone },
+  { key: 'crm', label: 'CRM', icon: Users },
+  { key: 'email', label: 'Email Manager', icon: Mail },
+  { key: 'smtp', label: 'SMTP', icon: Server },
+  { key: 'currencies', label: 'Currencies', icon: Coins },
+  { key: 'paymentMethods', label: 'Payment Methods', icon: CreditCard },
+  { key: 'handlers', label: 'Pay Handlers', icon: Wallet },
+  { key: 'dynamicPages', label: 'Dynamic Pages', icon: FileText },
+  { key: 'banner', label: 'Banner & Logo', icon: Image },
+  { key: 'redeem', label: 'Redeem Codes', icon: Gift },
+  { key: 'signupBonus', label: 'Signup Bonus', icon: Gift },
+  { key: 'ban', label: 'Ban Section', icon: ShieldBan },
+  { key: 'intercom', label: 'Intercom', icon: MessageSquare },
+  { key: 'maintenance', label: 'Maintenance', icon: Wrench },
 ];
 
 // Maps tab keys that don't match a PermissionKey to the permission that gates them.
-// Tabs not listed here are expected to share the same name as their PermissionKey.
 const TAB_PERM_MAP: Partial<Record<string, PermissionKey>> = {
-  notifications:       'notify',
+  notifications: 'notify',
   notificationManager: 'notifyManager',
-  email:               'emails',
-  games:               'algos',        // Game Handlers shares Game Algos permission
-  handlers:            'paymentMethods',
-  balanceHistory:      'history',
-  topRankings:         'history',
-  signupBonus:         'marketing',
-  socialLinks:         'marketing',
-  maintenance:         'banner',       // Maintenance shares Banner permission (owner-level)
+  email: 'emails',
+  games: 'algos',
+  handlers: 'paymentMethods',
+  balanceHistory: 'history',
+  topRankings: 'history',
+  signupBonus: 'marketing',
+  socialLinks: 'marketing',
+  maintenance: 'banner',
 };
 
 const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.Element }[] = [
-  { key: 'crash',     label: 'Crash',       Panel: CrashHandlingPanel },
-  { key: 'wingo',     label: 'Win Go',      Panel: WingoHandlingPanel },
-  { key: 'k3',        label: 'K3',          Panel: K3HandlingPanel },
-  { key: 'fived',     label: '5D',          Panel: FiveDHandlingPanel },
+  { key: 'crash', label: 'Crash', Panel: CrashHandlingPanel },
   { key: 'sunvsmoon', label: 'Sun vs Moon', Panel: SunMoonHandlingPanel },
-  { key: 'aviator',   label: 'Aviator',     Panel: AviatorHandlingPanel },
+  { key: 'aviator', label: 'Aviator', Panel: AviatorHandlingPanel },
 ];
 
 async function sha256Hex(plain: string): Promise<string> {
@@ -150,24 +145,24 @@ function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () =
     <div className="space-y-1">
       <label className="text-[11px] text-slate-400">{label}</label>
       <div className="relative">
-        <input type={show ? 'text' : 'password'} value={val} onChange={e => set(e.target.value)}
+        <input type={show ? 'text' : 'password'} value={val} onChange={(e) => set(e.target.value)}
           className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white pr-9 outline-none" />
-        <button type="button" onClick={toggle} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
-          {show ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+        <button type="button" onClick={toggle} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400">
+          {show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
         </button>
       </div>
     </div>
   );
 
-  if (ok) return <p className="text-green-400 text-xs text-center py-2">Password changed!</p>;
+  if (ok) return <p className="text-xs text-emerald-400 font-semibold">Password changed!</p>;
   return (
-    <div className="space-y-2.5 pt-2">
+    <div className="space-y-3">
       <FieldRow label="Current Password" val={old} set={setOld} show={showOld} toggle={() => setShowOld(v => !v)} />
       <FieldRow label="New Password" val={next} set={setNext} show={showNext} toggle={() => setShowNext(v => !v)} />
-      <FieldRow label="Confirm New" val={confirm} set={setConfirm} show={showConf} toggle={() => setShowConf(v => !v)} />
-      {error && <p className="text-red-400 text-[11px]">{error}</p>}
-      <button onClick={submit} disabled={loading}
-        className="w-full bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white text-xs rounded-lg py-2 transition-colors">
+      <FieldRow label="Confirm Password" val={confirm} set={setConfirm} show={showConf} toggle={() => setShowConf(v => !v)} />
+      {error && <p className="text-xs text-red-400">{error}</p>}
+      <button onClick={() => void submit()} disabled={loading}
+        className="w-full py-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold transition disabled:opacity-60">
         {loading ? 'Saving…' : 'Change Password'}
       </button>
     </div>
@@ -176,9 +171,9 @@ function PasswordChangeForm({ staffId, onDone }: { staffId: string; onDone: () =
 
 function NotifRow({ icon: Icon, label, count, onClick, accent }: { icon: typeof Bell; label: string; count: number; onClick: () => void; accent: string }) {
   return (
-    <button onClick={onClick} className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-slate-800 transition-colors text-left">
-      <span className="flex items-center gap-2 text-sm text-slate-300"><Icon className={`w-4 h-4 ${accent}`} /> {label}</span>
-      <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-red-500/20 text-red-300">{count}</span>
+    <button onClick={onClick} className="w-full flex items-center justify-between px-3 py-2 rounded-lg hover:bg-slate-800 transition">
+      <span className="flex items-center gap-2 text-xs text-slate-300"><Icon className={`w-4 h-4 ${accent}`} />{label}</span>
+      <span className={`text-xs font-bold ${accent}`}>{count}</span>
     </button>
   );
 }
@@ -186,21 +181,19 @@ function NotifRow({ icon: Icon, label, count, onClick, accent }: { icon: typeof 
 function FloatingToasts({ toasts, onDismiss }: { toasts: FloatToast[]; onDismiss: (id: number) => void }) {
   if (toasts.length === 0) return null;
   const MAP = {
-    deposit:    { Icon: Banknote,      bg: 'bg-slate-900 border-emerald-500/40', color: 'text-emerald-400' },
-    withdrawal: { Icon: TrendingDown,  bg: 'bg-slate-900 border-red-500/40',     color: 'text-red-400' },
-    support:    { Icon: MessageSquare, bg: 'bg-slate-900 border-violet-500/40',  color: 'text-violet-400' },
+    deposit: { Icon: Banknote, bg: 'bg-slate-900 border-emerald-500/40', color: 'text-emerald-400' },
+    withdrawal: { Icon: TrendingDown, bg: 'bg-slate-900 border-red-500/40', color: 'text-red-400' },
+    support: { Icon: MessageSquare, bg: 'bg-slate-900 border-violet-500/40', color: 'text-violet-400' },
   } as const;
   return (
-    <div className="fixed bottom-6 right-4 z-[300] flex flex-col gap-2 w-[min(300px,calc(100vw-2rem))]" style={{ pointerEvents: 'none' }}>
+    <div className="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
       {toasts.map(t => {
         const { Icon, bg, color } = MAP[t.icon];
         return (
           <div key={t.id} onClick={() => onDismiss(t.id)} style={{ pointerEvents: 'auto' }}
             className={`flex items-center gap-3 px-4 py-3 rounded-xl border shadow-2xl text-sm font-semibold text-white cursor-pointer ${bg}`}>
-            <Bell className="w-4 h-4 text-white/60 shrink-0" />
-            <Icon className={`w-4 h-4 shrink-0 ${color}`} />
-            <span className="text-xs flex-1">{t.message}</span>
-            <X className="w-3.5 h-3.5 text-white/40 shrink-0" />
+            <Icon className={`w-5 h-5 ${color}`} />
+            <span>{t.message}</span>
           </div>
         );
       })}
@@ -222,252 +215,237 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
   }, [open]);
   return (
     <div className="relative" ref={ref}>
-      <button onClick={() => setOpen(v => !v)}
+      <button
+        onClick={() => setOpen(v => !v)}
         className="relative w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 grid place-items-center hover:border-violet-500/50 transition-colors">
         <Bell className="w-4 h-4 text-slate-300" />
         {totalUnread > 0 && (
-          <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-[20px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center border-2 border-slate-900 shadow-lg">
+          <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-bold grid place-items-center">
             {totalUnread > 99 ? '99+' : totalUnread}
           </span>
         )}
       </button>
       {open && (
-        <div className="absolute right-0 top-11 w-[280px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] p-2">
-          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold px-3 py-1.5">Notifications</p>
-          {pendingDeposits > 0 && <NotifRow icon={Banknote} accent="text-emerald-400" label="Pending deposits" count={pendingDeposits} onClick={() => { onNavigate('finance'); setOpen(false); }} />}
-          {pendingWithdrawals > 0 && <NotifRow icon={TrendingDown} accent="text-red-400" label="Pending withdrawals" count={pendingWithdrawals} onClick={() => { onNavigate('requests'); setOpen(false); }} />}
-          {unreadSupport > 0 && <NotifRow icon={MessageSquare} accent="text-violet-400" label="Unread support" count={unreadSupport} onClick={() => { cms.markSupportRead(); setOpen(false); }} />}
-          {totalUnread === 0 && <p className="text-xs text-slate-500 text-center py-4">No pending notifications</p>}
+        <div className="absolute right-0 top-11 w-56 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 z-50">
+          <p className="text-[11px] text-slate-400 px-3 pb-2 font-semibold uppercase tracking-wider">Notifications</p>
+          {pendingDeposits > 0 && <NotifRow icon={Banknote} label="Pending Deposits" count={pendingDeposits} accent="text-emerald-400" onClick={() => { onNavigate('finance'); setOpen(false); }} />}
+          {pendingWithdrawals > 0 && <NotifRow icon={TrendingDown} label="Pending Withdrawals" count={pendingWithdrawals} accent="text-red-400" onClick={() => { onNavigate('requests'); setOpen(false); }} />}
+          {unreadSupport > 0 && <NotifRow icon={MessageSquare} label="Support Tickets" count={unreadSupport} accent="text-violet-400" onClick={() => { onNavigate('tickets'); setOpen(false); }} />}
+          {totalUnread === 0 && <p className="text-xs text-slate-500 text-center py-3">All caught up!</p>}
         </div>
       )}
     </div>
   );
 }
 
-export default function AdminView({ onNavigate: _onNavigate }: { onNavigate: (r: Route) => void; onOpenMenu?: () => void }) {
-  const sessionId = useStaffSession();
-  const [tab, setTab] = useState<Tab>('dashboard');
-  const [gameHandlerTab, setGameHandlerTab] = useState<GameHandlerKey>('crash');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [profileOpen, setProfileOpen] = useState(false);
-  const [showPwForm, setShowPwForm] = useState(false);
-  const [floatToasts, setFloatToasts] = useState<FloatToast[]>([]);
-  const toastCounterRef = useRef(0);
-  const profileRef = useRef<HTMLDivElement>(null);
-
+export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r: Route) => void; onOpenWallet: () => void }) {
+  const staffSession = useStaffSession();
   const staff = useStaff();
-  const me = staff.find(s => s.id === sessionId);
   const finance = useFinance();
   const support = useSupport();
 
-  const pendingDeposits = finance.deposits.filter(d => d.status === 'pending' || d.status === 'processing').length;
-  const pendingWithdrawals = finance.withdrawals.filter(w => w.status === 'pending' || w.status === 'processing').length;
-  const unreadSupport = support.filter(s => !s.read).length;
+  const pendingDeposits = finance.deposits.filter(d => d.status === 'processing').length;
+  const pendingWithdrawals = finance.withdrawals.filter(w => w.status === 'processing').length;
+  const unreadSupport = support.filter(t => !t.adminRead).length;
   const totalUnread = pendingDeposits + pendingWithdrawals + unreadSupport;
 
-  const prevDepRef = useRef(pendingDeposits);
-  const prevWdRef = useRef(pendingWithdrawals);
-  const prevSupRef = useRef(unreadSupport);
+  const [activeTab, setActiveTab] = useState<Tab>('dashboard');
+  const [activeGameHandler, setActiveGameHandler] = useState<GameHandlerKey>('crash');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [floatToasts, setFloatToasts] = useState<FloatToast[]>([]);
+  const prevPending = useRef({ deposits: 0, withdrawals: 0, support: 0 });
+  const toastIdRef = useRef(0);
 
-  const pushToast = useCallback((message: string, icon: FloatToast['icon']) => {
-    const id = ++toastCounterRef.current;
-    setFloatToasts(prev => [...prev, { id, message, icon }]);
-    setTimeout(() => setFloatToasts(prev => prev.filter(t => t.id !== id)), 2000);
+  // Float toast on new notifications
+  useEffect(() => {
+    const prev = prevPending.current;
+    const newToasts: FloatToast[] = [];
+    if (pendingDeposits > prev.deposits) {
+      for (let i = 0; i < pendingDeposits - prev.deposits; i++) {
+        newToasts.push({ id: ++toastIdRef.current, message: 'New deposit request', icon: 'deposit' });
+      }
+    }
+    if (pendingWithdrawals > prev.withdrawals) {
+      for (let i = 0; i < pendingWithdrawals - prev.withdrawals; i++) {
+        newToasts.push({ id: ++toastIdRef.current, message: 'New withdrawal request', icon: 'withdrawal' });
+      }
+    }
+    if (unreadSupport > prev.support) {
+      for (let i = 0; i < unreadSupport - prev.support; i++) {
+        newToasts.push({ id: ++toastIdRef.current, message: 'New support ticket', icon: 'support' });
+      }
+    }
+    if (newToasts.length > 0) {
+      setFloatToasts(prev => [...prev, ...newToasts]);
+      newToasts.forEach(t => setTimeout(() => dismissToast(t.id), 5000));
+    }
+    prevPending.current = { deposits: pendingDeposits, withdrawals: pendingWithdrawals, support: unreadSupport };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDeposits, pendingWithdrawals, unreadSupport]);
+
+  const dismissToast = useCallback((id: number) => {
+    setFloatToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  useEffect(() => {
-    if (pendingDeposits > prevDepRef.current) pushToast(`${pendingDeposits - prevDepRef.current} new deposit!`, 'deposit');
-    prevDepRef.current = pendingDeposits;
-  }, [pendingDeposits, pushToast]);
+  if (!staffSession) {
+    return <AdminLoginPage />;
+  }
 
-  useEffect(() => {
-    if (pendingWithdrawals > prevWdRef.current) pushToast(`${pendingWithdrawals - prevWdRef.current} new withdrawal!`, 'withdrawal');
-    prevWdRef.current = pendingWithdrawals;
-  }, [pendingWithdrawals, pushToast]);
-
-  useEffect(() => {
-    if (unreadSupport > prevSupRef.current) pushToast(`${unreadSupport - prevSupRef.current} new message!`, 'support');
-    prevSupRef.current = unreadSupport;
-  }, [unreadSupport, pushToast]);
-
-  useEffect(() => {
-    const handler = (e: Event) => { const d = (e as CustomEvent<string>).detail as Tab; if (d) setTab(d); };
-    window.addEventListener('admin-navigate', handler);
-    return () => window.removeEventListener('admin-navigate', handler);
-  }, []);
-
-  useEffect(() => {
-    if (!profileOpen) return;
-    const close = (e: MouseEvent) => { if (profileRef.current && !profileRef.current.contains(e.target as Node)) { setProfileOpen(false); setShowPwForm(false); } };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [profileOpen]);
-
-  const hasPermission = (key: string): boolean => {
-    if (key === 'dashboard' || key === 'manageProfile') return true;
-    if (!me) return false;
-    if (me.role === 'superadmin' || me.isOwner) return true;
-    const permKey = (TAB_PERM_MAP[key] ?? key) as PermissionKey;
-    return me.permissions?.[permKey as keyof typeof me.permissions] === true;
+  const canAccess = (tab: Tab): boolean => {
+    if (staffSession.role === 'owner') return true;
+    const permKey = (TAB_PERM_MAP[tab] ?? tab) as PermissionKey;
+    return !!staffSession.permissions?.[permKey];
   };
 
-  useEffect(() => {
-    if (!me) return;
-    if (!hasPermission(tab)) {
-      const first = TABS.find(t => hasPermission(t.key));
-      if (first && first.key !== tab) setTab(first.key);
+  const visibleTabs = TABS.filter(t => canAccess(t.key));
+  const navigate = (tab: Tab) => { setActiveTab(tab); setSidebarOpen(false); };
+
+  const renderTab = () => {
+    switch (activeTab) {
+      case 'dashboard': return <DashboardOverviewTab onNavigate={navigate} />;
+      case 'finance': return <FinanceTab />;
+      case 'requests': return <RequestsTab />;
+      case 'tickets': return <TicketsTab />;
+      case 'users': return <UsersTab />;
+      case 'staff': return <StaffTab />;
+      case 'affiliates': return <AffiliatesTab />;
+      case 'socialLinks': return <SocialLinksTab />;
+      case 'gateways': return <AutoGatewaysTab />;
+      case 'algos': return <GameAlgosTab />;
+      case 'games': return (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            {GAME_HANDLER_TABS.map(t => (
+              <button key={t.key} onClick={() => setActiveGameHandler(t.key)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${activeGameHandler === t.key ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {GAME_HANDLER_TABS.find(t => t.key === activeGameHandler)?.Panel?.()}
+        </div>
+      );
+      case 'gameSettings': return <GameSettingsTab />;
+      case 'history': return <HistoryTab />;
+      case 'balanceHistory': return <BalanceHistoryTab />;
+      case 'topRankings': return <TopRankingsTab />;
+      case 'notifications': return <NotificationsTab />;
+      case 'notificationManager': return <NotificationManagerTab />;
+      case 'marketing': return <MarketingTab />;
+      case 'crm': return <CrmTab />;
+      case 'email': return <EmailManagerTab />;
+      case 'smtp': return <SmtpTab />;
+      case 'currencies': return <CurrenciesTab />;
+      case 'paymentMethods': return <PaymentMethodsTab />;
+      case 'handlers': return <PaymentMethodsTab />;
+      case 'dynamicPages': return <DynamicPagesTab />;
+      case 'banner': return <BannerLogoTab />;
+      case 'redeem': return <RedeemCodesTab />;
+      case 'signupBonus': return <SignupBonusTab />;
+      case 'ban': return <BanSectionTab />;
+      case 'intercom': return <IntercomTab />;
+      case 'maintenance': return <MaintenanceTab />;
+      default: return <div className="p-6 text-slate-400 text-sm">Tab not found.</div>;
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, me?.id, JSON.stringify(me?.permissions)]);
+  };
 
-  if (!sessionId) return <AdminLoginPage />;
-
-  const navigate = (t: Tab) => { setTab(t); setSidebarOpen(false); };
-  const ActiveGamePanel = GAME_HANDLER_TABS.find(g => g.key === gameHandlerTab)?.Panel ?? CrashHandlingPanel;
-
-  const SidebarNav = () => (
-    <nav className="flex-1 overflow-y-auto py-2">
-      {TABS.filter(t => hasPermission(t.key)).map(t => (
-        <button key={t.key} onClick={() => navigate(t.key)}
-          className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors ${
-            tab === t.key ? 'bg-violet-600/20 text-violet-300 border-r-2 border-violet-500' : 'text-slate-400 hover:bg-slate-800 hover:text-white'
-          }`}>
-          <t.icon className="w-4 h-4 shrink-0" /><span>{t.label}</span>
-        </button>
-      ))}
-    </nav>
-  );
+  const currentStaff = staff.find(s => s.id === staffSession.staffId);
 
   return (
-    <div className="flex flex-col min-h-screen h-screen bg-slate-950 text-white overflow-hidden">
-      <header className="fixed top-0 left-0 right-0 z-50 flex items-center bg-slate-900 border-b border-slate-800" style={{ height: '56px' }}>
-        <div className="flex items-center gap-3 pl-4 pr-2">
-          <button className="md:hidden text-slate-400 hover:text-white" onClick={() => setSidebarOpen(true)}><Menu className="w-5 h-5" /></button>
-          <ShieldCheck className="w-5 h-5 text-violet-400 shrink-0" />
-          <span className="font-bold text-sm tracking-wide text-white hidden sm:block select-none">Admin Panel</span>
+    <div className="min-h-screen bg-slate-950 text-white flex">
+      <FloatingToasts toasts={floatToasts} onDismiss={dismissToast} />
+      <TicketAlertOverlay onNavigate={(tab) => { setActiveTab(tab as Tab); }} />
+
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />
+      )}
+
+      {/* Sidebar */}
+      <aside className={`fixed md:static inset-y-0 left-0 z-50 w-56 bg-slate-900 border-r border-slate-800 flex flex-col transition-transform duration-200 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+        {/* Logo */}
+        <div className="h-14 flex items-center justify-between px-4 border-b border-slate-800 flex-shrink-0">
+          <span className="font-display font-extrabold text-white text-sm tracking-wide">B4BeT Admin</span>
+          <button onClick={() => setSidebarOpen(false)} className="md:hidden p-1 rounded text-slate-400 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <div className="flex-1" />
-        <div className="flex items-center gap-3 pr-4">
-          <NotifBell totalUnread={totalUnread} pendingDeposits={pendingDeposits} pendingWithdrawals={pendingWithdrawals} unreadSupport={unreadSupport} onNavigate={navigate} />
-          <div className="relative" ref={profileRef}>
-            <button onClick={() => { setProfileOpen(v => !v); setShowPwForm(false); }}
-              className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 pl-1.5 pr-3 py-1.5 rounded-lg transition-colors">
-              <div className="w-7 h-7 rounded-full bg-violet-600 grid place-items-center text-xs font-bold shrink-0">
-                {(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}
+
+        {/* Nav */}
+        <nav className="flex-1 overflow-y-auto py-2 space-y-0.5 px-2">
+          {visibleTabs.map(tab => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.key;
+            return (
+              <button key={tab.key} onClick={() => navigate(tab.key)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left text-xs font-semibold transition-colors ${active ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}>
+                <Icon className="w-4 h-4 flex-shrink-0" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Footer */}
+        <div className="border-t border-slate-800 p-3 flex-shrink-0 space-y-2">
+          {!changingPassword && (
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-full bg-violet-600/30 border border-violet-500/40 grid place-items-center flex-shrink-0">
+                <span className="text-[10px] font-bold text-violet-300">{staffSession.username?.[0]?.toUpperCase() ?? 'A'}</span>
               </div>
-              <span className="hidden sm:block text-slate-300 text-xs max-w-[110px] truncate">{me?.name ?? me?.email ?? 'Admin'}</span>
+              <div className="flex-1 min-w-0">
+                <p className="text-[11px] font-semibold text-white truncate">{staffSession.username}</p>
+                <p className="text-[10px] text-slate-500 capitalize">{staffSession.role}</p>
+              </div>
+              <button onClick={() => setChangingPassword(true)} title="Change Password"
+                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white">
+                <KeyRound className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          {changingPassword && (
+            <div className="space-y-2">
+              <PasswordChangeForm staffId={staffSession.staffId} onDone={() => setChangingPassword(false)} />
+              <button onClick={() => setChangingPassword(false)} className="text-[10px] text-slate-500 hover:text-slate-300">Cancel</button>
+            </div>
+          )}
+          <button
+            onClick={() => { cms.logoutStaff(); onNavigate('home'); }}
+            className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-red-400 hover:bg-red-500/10 transition-colors">
+            <LogOut className="w-3.5 h-3.5" /> Logout
+          </button>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <div className="flex-1 flex flex-col min-w-0 md:ml-0">
+        {/* Topbar */}
+        <header className="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <button onClick={() => setSidebarOpen(true)} className="md:hidden p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white">
+              <Menu className="w-4 h-4" />
             </button>
-            {profileOpen && (
-              <div className="absolute right-0 top-full mt-2 w-[272px] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl z-[200] overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-800">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-violet-600 grid place-items-center text-base font-bold shrink-0">{(me?.name ?? me?.email ?? 'A')[0].toUpperCase()}</div>
-                    <div>
-                      <p className="text-sm font-semibold text-white">{me?.name ?? '—'}</p>
-                      <p className="text-xs text-slate-400">{me?.email ?? '—'}</p>
-                      <span className="text-[10px] bg-violet-600/30 text-violet-300 px-1.5 py-0.5 rounded-full capitalize">{me?.role ?? 'staff'}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="px-4 py-2 border-b border-slate-800">
-                  <button onClick={() => setShowPwForm(v => !v)}
-                    className="w-full flex items-center gap-2 text-sm text-slate-300 hover:text-white py-1 transition-colors">
-                    <KeyRound className="w-4 h-4" /> Change Password
-                  </button>
-                  {showPwForm && me && <PasswordChangeForm staffId={me.id} onDone={() => { setShowPwForm(false); setProfileOpen(false); }} />}
-                </div>
-                <div className="px-4 py-2">
-                  <button onClick={() => cms.staffLogout()}
-                    className="w-full flex items-center gap-2 text-sm text-red-400 hover:text-red-300 py-1 transition-colors">
-                    <LogOut className="w-4 h-4" /> Logout
-                  </button>
-                </div>
-              </div>
-            )}
+            <h1 className="font-display font-bold text-white text-sm">{TABS.find(t => t.key === activeTab)?.label ?? activeTab}</h1>
           </div>
-        </div>
-      </header>
-
-      <div className="flex flex-1 overflow-hidden" style={{ paddingTop: '56px' }}>
-        <aside className="hidden md:flex w-56 flex-col border-r border-slate-800 bg-slate-900 shrink-0 h-full">
-          <SidebarNav />
-        </aside>
-
-        {sidebarOpen && (
-          <div className="fixed inset-0 z-40 md:hidden">
-            <div className="absolute inset-0 bg-black/60" onClick={() => setSidebarOpen(false)} />
-            <aside className="absolute left-0 top-0 bottom-0 w-64 bg-slate-900 border-r border-slate-800 flex flex-col z-50">
-              <div className="flex items-center justify-between px-4 py-4 border-b border-slate-800 shrink-0">
-                <span className="font-bold text-sm">Admin Panel</span>
-                <button onClick={() => setSidebarOpen(false)} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
-              </div>
-              <SidebarNav />
-            </aside>
+          <div className="flex items-center gap-2">
+            <NotifBell
+              totalUnread={totalUnread}
+              pendingDeposits={pendingDeposits}
+              pendingWithdrawals={pendingWithdrawals}
+              unreadSupport={unreadSupport}
+              onNavigate={navigate}
+            />
           </div>
-        )}
+        </header>
 
-        <main className="flex-1 overflow-y-auto p-4">
-          {tab === 'dashboard'            && <DashboardOverviewTab />}
-          {tab === 'finance'              && hasPermission('finance') && <FinanceTab />}
-          {tab === 'requests'             && hasPermission('requests') && <RequestsTab />}
-          {tab === 'tickets'              && hasPermission('tickets') && <TicketsTab />}
-          {tab === 'affiliates'           && hasPermission('affiliates') && <AffiliatesTab />}
-          {tab === 'socialLinks'          && hasPermission('socialLinks') && <SocialLinksTab />}
-          {tab === 'gateways'             && hasPermission('gateways') && <AutoGatewaysTab />}
-          {tab === 'handlers'             && hasPermission('handlers') && (
-            <div className="space-y-4">
-              <h2 className="font-bold text-lg">Payment Handlers</h2>
-              <p className="text-slate-500 text-sm">Configure deposit/withdrawal handler logic here.</p>
-            </div>
-          )}
-          {tab === 'algos'                && hasPermission('algos') && <GameAlgosTab />}
-          {tab === 'games'               && hasPermission('games') && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4"><OnlineCountPanel /><TopWinPaidOutPanel /></div>
-              <div className="flex flex-wrap gap-2">
-                {GAME_HANDLER_TABS.map(g => (
-                  <button key={g.key} onClick={() => setGameHandlerTab(g.key)}
-                    className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-                      gameHandlerTab === g.key ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                    }`}>{g.label}</button>
-                ))}
-              </div>
-              <ActiveGamePanel />
-            </div>
-          )}
-          {tab === 'users'               && hasPermission('users') && <UsersTab currentStaffEmail={me?.email} />}
-          {tab === 'balanceHistory'      && hasPermission('balanceHistory') && <BalanceHistoryTab />}
-          {tab === 'topRankings'         && hasPermission('topRankings') && <TopRankingsTab />}
-          {tab === 'staff'               && hasPermission('staff') && <StaffTab />}
-          {tab === 'notifications'       && hasPermission('notifications') && <NotificationsTab />}
-          {tab === 'notificationManager' && hasPermission('notificationManager') && <NotificationManagerTab />}
-          {tab === 'marketing'           && hasPermission('marketing') && <MarketingTab />}
-          {tab === 'crm'                 && hasPermission('crm') && <CrmTab />}
-          {tab === 'email'               && hasPermission('email') && <EmailManagerTab />}
-          {tab === 'smtp'                && hasPermission('smtp') && <SmtpTab />}
-          {tab === 'currencies'          && hasPermission('currencies') && <CurrenciesTab />}
-          {tab === 'paymentMethods'      && hasPermission('paymentMethods') && <PaymentMethodsTab />}
-          {tab === 'dynamicPages'        && hasPermission('dynamicPages') && <DynamicPagesTab />}
-          {tab === 'banner'              && hasPermission('banner') && <BannerLogoTab />}
-          {tab === 'redeem'              && hasPermission('redeem') && <RedeemCodesTab />}
-          {tab === 'signupBonus'         && hasPermission('signupBonus') && <SignupBonusTab />}
-          {tab === 'gameSettings'        && hasPermission('gameSettings') && <GameSettingsTab />}
-          {tab === 'history'             && hasPermission('history') && <HistoryTab />}
-          {tab === 'ban'                 && hasPermission('ban') && <BanSectionTab />}
-          {tab === 'intercom'            && hasPermission('intercom') && <IntercomTab />}
-          {tab === 'maintenance'         && hasPermission('maintenance') && <MaintenanceTab />}
-          {tab === 'manageProfile'       && (
-            <div className="space-y-4">
-              <h2 className="font-bold text-lg">Profile</h2>
-              <p className="text-slate-500 text-sm">Use the profile button in the header to change your password.</p>
-            </div>
-          )}
+        {/* Content */}
+        <main className="flex-1 overflow-auto bg-slate-950">
+          {renderTab()}
         </main>
       </div>
 
-      <TicketAlertOverlay />
-      <AdminSupportNotification />
-      <FloatingToasts toasts={floatToasts} onDismiss={id => setFloatToasts(prev => prev.filter(t => t.id !== id))} />
+      {staffSession && <AdminSupportNotification />}
     </div>
   );
 }
