@@ -71,7 +71,7 @@ function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdm
   return true;
 }
 
-// Routes where the main header should be hidden (games have their own header)
+// Routes where the main header should be hidden (games have their own in-game header)
 const GAME_ROUTES: Route[] = ['crash', 'mines', 'aviator', 'sunvsmoon', 'trading', 'wingo', 'k3', 'fived', 'ludo'];
 
 export default function App() {
@@ -94,6 +94,8 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const routeRef = useRef<Route>(route);
+  routeRef.current = route;
 
   useEffect(() => {
     if (maintenance && !maintenance.enabled) {
@@ -114,6 +116,25 @@ export default function App() {
       }
     });
     return () => subscription.unsubscribe();
+  }, []);
+
+  // Push a history entry whenever we enter a game route so Android back works
+  useEffect(() => {
+    if (GAME_ROUTES.includes(route)) {
+      // Push a dummy state so pressing back triggers popstate
+      window.history.pushState({ route }, '', window.location.href);
+    }
+  }, [route]);
+
+  // Handle mobile/browser back button — go home from any game route
+  useEffect(() => {
+    const onPopState = () => {
+      if (GAME_ROUTES.includes(routeRef.current)) {
+        setRoute('home');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   useEffect(() => {
@@ -220,8 +241,6 @@ export default function App() {
         />
       )}
 
-      {/* Game routes have no top offset (their own header handles it) */}
-      {/* Non-game routes offset by header + bottom nav heights */}
       <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[60px]' : ''}`}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
@@ -241,7 +260,7 @@ export default function App() {
         {route === 'admin' && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
         {route === 'history' && <HistoryView />}
         {route === 'ludo' && <LudoView onExit={() => navigate('home')} />}
-        {route === 'crash' && <CrashView onBack={() => navigate('home')} />}
+        {route === 'crash' && <CrashView />}
         {route === 'aviator' && <AviatorView onExit={() => navigate('home')} />}
         {route === 'wingo' && <WingoView />}
         {route === 'k3' && <K3View />}
@@ -265,7 +284,6 @@ export default function App() {
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
       <AuthModal mode={authModalMode} open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
-
       {isLoggedIn && <BanPopup />}
     </div>
   );

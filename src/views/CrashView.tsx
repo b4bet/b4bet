@@ -8,7 +8,7 @@ import CashoutPopupOverlay from '../components/CashoutPopupOverlay';
 import CrashFeedPopup from '../components/CrashFeedPopup';
 import CrashHistoryTabs from '../components/CrashHistoryTabs';
 import { startCrashPendingBetsSync } from '../lib/crashPendingBets';
-import { Settings, History, Rocket, ChevronLeft, Wallet } from 'lucide-react';
+import { Settings, History, Rocket, Wallet } from 'lucide-react';
 import { store } from '../lib/store';
 
 function multiplierColor(x: number) {
@@ -19,7 +19,7 @@ function multiplierColor(x: number) {
   return 'text-red-400 bg-red-500/10 border-red-500/40';
 }
 
-export default function CrashView({ onBack }: { onBack?: () => void }) {
+export default function CrashView() {
   const state = useCrashState();
   const history = useCrashHistory();
   const logos = useGameLogos();
@@ -54,16 +54,8 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
 
       {/* ── Game Header ── */}
       <div className="flex items-center justify-between px-3 h-[52px] bg-slatepanel-900 border-b border-borderline-900 flex-shrink-0">
-        {/* Left: back + logo + name */}
+        {/* Logo + name */}
         <div className="flex items-center gap-2">
-          {onBack && (
-            <button
-              onClick={onBack}
-              className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors flex-shrink-0"
-            >
-              <ChevronLeft className="w-4 h-4 text-white/70" />
-            </button>
-          )}
           <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-slatepanel-800 border border-borderline-900 grid place-items-center">
             {logos.crash ? (
               <img src={logos.crash} alt="Crash" className="w-full h-full object-cover" />
@@ -74,7 +66,7 @@ export default function CrashView({ onBack }: { onBack?: () => void }) {
           <span className="text-sm font-bold text-white">Crash</span>
         </div>
 
-        {/* Right: balance + settings + feed */}
+        {/* Balance + settings + feed */}
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 bg-slatepanel-800 border border-borderline-900 rounded-xl px-2.5 py-1">
             <Wallet className="w-3 h-3 text-emeraldwin-400" />
