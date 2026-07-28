@@ -26,7 +26,9 @@ export default function TicketsTab() {
 
   const claim = (id: string) => {
     if (!sessionId) { cms.toast({ title: 'Sign in', body: 'Pick an operator session first.', kind: 'alert' }); return; }
-    if (cms.claimTicket(id, sessionId)) setOpenTicketId(id);
+    // assignTicket is the correct method — sets status='assigned' and assignedStaffId=staffId
+    cms.assignTicket(id, sessionId);
+    setOpenTicketId(id);
   };
 
   // Auto-close window if ticket was closed elsewhere
@@ -35,51 +37,53 @@ export default function TicketsTab() {
   }, [tickets, openTicketId]);
 
   return (
-    <div className="space-y-4">
+    <div className="p-4 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="font-display font-bold text-lg text-white flex items-center gap-2"><Headphones className="w-5 h-5 text-neon-300" /> Live Support Tickets</h2>
-          <p className="text-xs text-slate-500">{isManager ? 'Manager view — all tickets visible.' : 'Agent view — unassigned and your claimed tickets only.'}</p>
+          <h2 className="font-display font-bold text-lg text-white">Live Support Tickets</h2>
+          <p className="text-xs text-slate-500">
+            {isManager ? 'Manager view — all tickets visible.' : 'Agent view — unassigned and your claimed tickets only.'}
+          </p>
         </div>
         {isManager && (
-          <span className="chip bg-emeraldwin-500/15 border border-emeraldwin-500/40 text-emeraldwin-400 text-xs">
-            <ShieldCheck className="w-3.5 h-3.5" /> Manager
+          <span className="chip bg-blue-500/15 text-blue-300 border border-blue-500/30 flex items-center gap-1">
+            <ShieldCheck className="w-3 h-3" /> Manager
           </span>
         )}
       </div>
 
-      <Section title="Unassigned Queue" badge={unassigned.length} accent="text-coral-300">
-        {unassigned.length === 0 ? <Empty msg="No new tickets waiting." /> : unassigned.map((t) => (
+      <Section title="Unassigned" badge={unassigned.length} accent="text-amberx-400">
+        {unassigned.length === 0 ? <Empty msg="No unassigned tickets." /> : unassigned.map((t) => (
           <Row key={t.id} accountId={t.accountId} preview={lastBody(t.messages)}>
             <button onClick={() => claim(t.id)} className="btn-primary px-3 py-1.5 text-xs">
-              <Lock className="w-3.5 h-3.5" /> Claim Ticket
+              Claim Ticket
             </button>
           </Row>
         ))}
       </Section>
 
-      <Section title="My Active Tickets" badge={mine.length} accent="text-emeraldwin-300">
-        {mine.length === 0 ? <Empty msg="You haven't claimed any tickets yet." /> : mine.map((t) => (
+      <Section title="My Tickets" badge={mine.length} accent="text-neon-400">
+        {mine.length === 0 ? <Empty msg="No tickets assigned to you." /> : mine.map((t) => (
           <Row key={t.id} accountId={t.accountId} preview={lastBody(t.messages)}>
-            <button onClick={() => setOpenTicketId(t.id)} className="btn-primary px-3 py-1.5 text-xs">
-              <MessageSquare className="w-3.5 h-3.5" /> Open
+            <button onClick={() => setOpenTicketId(t.id)} className="btn-primary px-3 py-1.5 text-xs flex items-center gap-1">
+              <MessageSquare className="w-3 h-3" /> Open
             </button>
           </Row>
         ))}
       </Section>
 
       {isManager && (
-        <Section title="Assigned to other agents" badge={othersAssigned.length} accent="text-slate-400">
-          {othersAssigned.length === 0 ? <Empty msg="None." /> : othersAssigned.map((t) => {
+        <Section title="Others' Tickets" badge={othersAssigned.length} accent="text-slate-400">
+          {othersAssigned.length === 0 ? <Empty msg="No other assigned tickets." /> : othersAssigned.map((t) => {
             const assignee = staff.find((s) => s.id === t.assignedStaffId);
             return (
               <Row key={t.id} accountId={t.accountId} preview={lastBody(t.messages)}>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-slate-400">{assignee?.name ?? 'Unknown'}</span>
-                  <button onClick={() => setOpenTicketId(t.id)} className="btn-primary px-3 py-1.5 text-xs">
-                    <Eye className="w-3.5 h-3.5" /> Monitor
-                  </button>
-                </div>
+                <span className="chip text-[10px] bg-slatepanel-800 text-slate-400 flex items-center gap-1">
+                  <Lock className="w-2.5 h-2.5" /> {assignee?.name ?? 'Unknown'}
+                </span>
+                <button onClick={() => setOpenTicketId(t.id)} className="btn-primary px-3 py-1.5 text-xs flex items-center gap-1">
+                  <Eye className="w-3 h-3" /> Monitor
+                </button>
               </Row>
             );
           })}
@@ -97,28 +101,28 @@ function lastBody(messages: { body: string }[]) {
   return messages.length ? messages[messages.length - 1].body.slice(0, 80) : '';
 }
 
-function Section({ title, badge, accent, children }: { title: string; badge: number; accent: string; children: any }) {
+function Section({ title, badge, accent, children }: { title: string; badge: number; accent: string; children: React.ReactNode }) {
   return (
-    <div className="panel p-3">
-      <div className="flex items-center justify-between mb-2">
-        <h3 className={`font-display font-bold text-sm ${accent}`}>{title}</h3>
-        <span className="chip bg-midnight-850 border border-borderline-900 text-slate-300 text-[10px]">{badge}</span>
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <h3 className={`text-sm font-bold ${accent}`}>{title}</h3>
+        <span className="chip text-[10px] bg-slatepanel-800 text-slate-400">{badge}</span>
       </div>
-      <div className="space-y-1.5">{children}</div>
+      <div className="space-y-2">{children}</div>
     </div>
   );
 }
 
-function Row({ accountId, preview, children }: { accountId: string; preview: string; children: any }) {
+function Row({ accountId, preview, children }: { accountId: string; preview: string; children: React.ReactNode }) {
   return (
-    <div className="bg-midnight-850 rounded-lg px-3 py-2 flex items-center justify-between gap-2">
+    <div className="flex items-center justify-between gap-3 bg-slatepanel-800 border border-borderline-900 rounded-xl px-4 py-3">
       <div className="min-w-0 flex-1">
-        <div className="text-sm text-white">#{accountId}</div>
-        <div className="text-[11px] text-slate-500 truncate">{preview}</div>
+        <p className="text-sm font-semibold text-white">#{accountId}</p>
+        <p className="text-[11px] text-slate-500 truncate">{preview}</p>
       </div>
-      <div className="flex-shrink-0">{children}</div>
+      <div className="flex items-center gap-2 flex-shrink-0">{children}</div>
     </div>
   );
 }
 
-function Empty({ msg }: { msg: string }) { return <p className="text-xs text-slate-500">{msg}</p>; }
+function Empty({ msg }: { msg: string }) { return <p className="text-xs text-slate-500 py-2">{msg}</p>; }

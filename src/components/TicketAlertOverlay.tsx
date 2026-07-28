@@ -13,11 +13,6 @@ interface Toast {
   ts: number;
 }
 
-/**
- * Small floating notification popup (bottom-left) for support / manager
- * accounts. Fires when a new user chat message arrives or an unclaimed
- * ticket is waiting. No full-screen blur or overlays.
- */
 export default function TicketAlertOverlay() {
   const tickets = useTickets();
   const sessionId = useStaffSession();
@@ -86,37 +81,32 @@ export default function TicketAlertOverlay() {
 
   const dismiss = (id: string) => setToasts((prev) => prev.filter((t) => t.id !== id));
   const claim = (t: Toast) => {
-    if (sessionId && t.kind === 'new-ticket') cms.claimTicket(t.ticketId, sessionId);
+    // Use assignTicket (the correct CMS method for claiming)
+    if (sessionId && t.kind === 'new-ticket') cms.assignTicket(t.ticketId, sessionId);
     dismiss(t.id);
   };
 
   return (
-    <div className="fixed bottom-4 left-4 z-[140] flex flex-col gap-2 max-w-[320px] pointer-events-none">
+    <div className="fixed bottom-4 left-4 z-[150] space-y-2 max-w-[280px]">
       {toasts.map((t) => (
-        <div
-          key={t.id}
-          className="pointer-events-auto panel border border-neon-400/40 bg-midnight-900/95 backdrop-blur-xl shadow-2xl p-3 animate-fade-in"
-        >
-          <div className="flex items-start gap-2">
-            <div className={`w-8 h-8 rounded-lg grid place-items-center flex-shrink-0 ${t.kind === 'new-ticket' ? 'bg-coral-500/20' : 'bg-neon-500/20'}`}>
-              {t.kind === 'new-ticket'
-                ? <Bell className="w-4 h-4 text-coral-400" />
-                : <MessageSquare className="w-4 h-4 text-neon-300" />}
+        <div key={t.id} className="bg-slatepanel-900 border border-borderline-900 rounded-2xl shadow-2xl overflow-hidden">
+          <div className={`h-[2px] ${t.kind === 'new-ticket' ? 'bg-gradient-to-r from-neon-400 to-neon-600' : 'bg-gradient-to-r from-amberx-400 to-amberx-600'}`} />
+          <div className="p-3 flex items-start gap-2">
+            <div className={`w-7 h-7 rounded-lg grid place-items-center flex-shrink-0 ${t.kind === 'new-ticket' ? 'bg-neon-400/15 border border-neon-400/30' : 'bg-amberx-400/15 border border-amberx-400/30'}`}>
+              {t.kind === 'new-ticket' ? <Bell className="w-3.5 h-3.5 text-neon-400" /> : <MessageSquare className="w-3.5 h-3.5 text-amberx-400" />}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-white truncate">
-                  {t.kind === 'new-ticket' ? 'New support ticket' : 'New chat message'}
-                </span>
-                <span className="text-[10px] text-neon-300 font-mono">#{t.accountId}</span>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-0.5 line-clamp-2 break-words">{t.preview}</p>
+              <p className="text-xs font-bold text-white">
+                {t.kind === 'new-ticket' ? 'New support ticket' : 'New chat message'}
+              </p>
+              <p className="text-[10px] text-slate-500">#{t.accountId}</p>
+              <p className="text-[11px] text-slate-300 mt-0.5 line-clamp-2">{t.preview}</p>
               {t.kind === 'new-ticket' && sessionId && (
                 <button
                   onClick={() => claim(t)}
                   className="mt-2 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-neon-500/20 border border-neon-500/40 text-neon-200 text-[10px] font-semibold hover:bg-neon-500/30"
                 >
-                  <Lock className="w-3 h-3" /> Claim
+                  <Lock className="w-2.5 h-2.5" /> Claim
                 </button>
               )}
             </div>
