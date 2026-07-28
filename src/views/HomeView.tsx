@@ -30,8 +30,8 @@ export default function HomeView({ onNavigate }: Props) {
         <GameGrid onPlay={onNavigate} />
       </div>
 
-      {/* Spacer pushes strips to bottom */}
-      <div className="flex-1" />
+      {/* Flexible spacer — pushes strips to bottom */}
+      <div className="flex-1 min-h-[12px]" />
 
       {/* Live stats strip */}
       <div className="mx-3 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
@@ -39,7 +39,7 @@ export default function HomeView({ onNavigate }: Props) {
           <span className="text-[10px] text-slate-500 font-medium">Online</span>
           <span className="text-sm font-bold text-emeraldwin-400">{stats.onlineUsers.toLocaleString()}</span>
         </div>
-        <div className="flex flex-col items-center py-2.5 gap-0.5">
+        <div className="flex flex-col items-center py-2.5 gap-0.5 border-x border-borderline-900">
           <span className="text-[10px] text-slate-500 font-medium">Top Win</span>
           <span className="text-sm font-bold text-neon-400">{stats.topWin.toFixed(1)}x</span>
         </div>
@@ -55,7 +55,7 @@ export default function HomeView({ onNavigate }: Props) {
           <ShieldCheck className="w-4 h-4 text-emeraldwin-400" />
           <span className="text-[10px] text-slate-400 font-medium">Provably Fair</span>
         </div>
-        <div className="flex flex-col items-center py-2.5 gap-1">
+        <div className="flex flex-col items-center py-2.5 gap-1 border-x border-borderline-900">
           <Zap className="w-4 h-4 text-neon-400" />
           <span className="text-[10px] text-slate-400 font-medium">Instant Payout</span>
         </div>
