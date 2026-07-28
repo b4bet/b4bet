@@ -15,17 +15,27 @@ export default function HomeView({ onNavigate }: Props) {
   }, []);
 
   return (
-    <div className="pt-[62px] pb-24 space-y-4">
-      <SliderBanner onSlideClick={(i) => {
-        if (i === 1) onNavigate('crash');
-        else if (i === 2) onNavigate('mines');
-        else onNavigate('deposit');
-      }} />
+    <div className="pt-[62px] pb-24 flex flex-col min-h-screen overflow-hidden">
 
-      <GameGrid onNavigate={onNavigate} />
+      {/* Banner — side margins + gap from header */}
+      <div className="px-3 pt-3">
+        <SliderBanner onSlideClick={(i) => {
+          if (i === 1) onNavigate('crash');
+          else if (i === 2) onNavigate('mines');
+          else onNavigate('deposit');
+        }} />
+      </div>
+
+      {/* Games grid */}
+      <div className="mt-4">
+        <GameGrid onNavigate={onNavigate} />
+      </div>
+
+      {/* Spacer pushes strips to bottom */}
+      <div className="flex-1" />
 
       {/* Live stats strip */}
-      <div className="mx-3 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
+      <div className="mx-3 mb-3 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
         <div className="flex flex-col items-center py-3 gap-0.5">
           <span className="text-[10px] text-slate-500 font-medium">Online</span>
           <span className="text-sm font-bold text-emeraldwin-400">{stats.onlineUsers.toLocaleString()}</span>
@@ -41,7 +51,7 @@ export default function HomeView({ onNavigate }: Props) {
       </div>
 
       {/* Trust strip */}
-      <div className="mx-3 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
+      <div className="mx-3 mb-3 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
         <div className="flex flex-col items-center py-3 gap-1">
           <ShieldCheck className="w-5 h-5 text-emeraldwin-400" />
           <span className="text-[10px] text-slate-400 font-medium">Provably Fair</span>
@@ -55,6 +65,7 @@ export default function HomeView({ onNavigate }: Props) {
           <span className="text-[10px] text-slate-400 font-medium">Secure Wallet</span>
         </div>
       </div>
+
     </div>
   );
 }
