@@ -115,6 +115,16 @@ function LoginForm({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+
+    // Validate: must be email or mobile number (not plain username)
+    const val = identifier.trim();
+    const isMobile = /^[\d\s+\-()]{7,15}$/.test(val);
+    const isEmail = val.includes('@');
+    if (!isMobile && !isEmail) {
+      setError('Please enter a valid email address or mobile number.');
+      return;
+    }
+
     setLoading(true);
     setTimeout(async () => {
       const result = await auth.login(identifier, password);
@@ -130,16 +140,16 @@ function LoginForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-3">
-        {/* Email / Username / Mobile */}
+        {/* Email or Mobile */}
         <div>
           <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold flex items-center gap-1 mb-1">
-            <Phone className="w-3 h-3" /> Email, Username or Mobile
+            <Phone className="w-3 h-3" /> Email or Mobile Number
           </label>
           <input
             type="text"
             value={identifier}
             onChange={(e) => setIdentifier(e.target.value)}
-            placeholder="Email, username or mobile number"
+            placeholder="Email or mobile number"
             autoComplete="username"
             className="input w-full"
             required
