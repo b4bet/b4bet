@@ -8,7 +8,7 @@ import { gameLogos } from '../../lib/gameLogos';
 import type { GameKey } from '../../lib/gameLogos';
 import {
   Shield, Sliders, Target, Cpu, Zap, Upload, Image as ImageIcon, Trash2,
-  Rocket, Bomb, Trophy, DollarSign, Dices, Circle, BarChart2, Sun, Plane,
+  Rocket, Bomb, Trophy, DollarSign, BarChart2, Sun, Plane,
   Plus, X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal,
   CheckCircle, AlertCircle,
 } from 'lucide-react';
@@ -19,14 +19,11 @@ export { CrashHandlingPanel } from './CrashHandlingPanel';
 // AviatorHandlingPanel — dedicated async Supabase-connected panel (same pattern as Crash)
 export { AviatorHandlingPanel } from './AviatorHandlingPanel';
 
-// ─── 8-game registry: crash, mines, aviator, wingo, k3, fived, sunvsmoon, trading
+// ─── 5-game registry: crash, mines, aviator, sunvsmoon, trading
 const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
   { key: 'crash',     label: 'Crash',      icon: Rocket    },
   { key: 'mines',     label: 'Mines',      icon: Bomb      },
   { key: 'aviator',   label: 'Aviator',    icon: Plane     },
-  { key: 'wingo',     label: 'Win Go',     icon: Circle    },
-  { key: 'k3',        label: 'K3',         icon: Dices     },
-  { key: 'fived',     label: '5D',         icon: Dices     },
   { key: 'sunvsmoon', label: 'Sun vs Moon',icon: Sun       },
   { key: 'trading',   label: 'Trading',    icon: BarChart2 },
 ];
@@ -70,11 +67,9 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
     const h = store.getGameHandler(gameKey);
     if (h.mode === 'AUTO') setPreview(computeAutoOutcome(gameKey, h));
     else if (h.mode === 'MANUAL' && h.manualResult) {
-      let detail = 'Manual override active';
-      if (gameKey === 'wingo') detail = 'Manual digit: ' + h.manualResult;
-      else if (gameKey === 'k3') detail = 'Manual dice: ' + h.manualResult;
-      else if (gameKey === 'fived') detail = 'Manual digits: ' + h.manualResult;
-      else if (gameKey === 'sunvsmoon') detail = 'Manual side: ' + h.manualResult;
+      const detail = h.manualResult === 'sun' || h.manualResult === 'moon' || h.manualResult === 'eclipse'
+        ? 'Manual side: ' + h.manualResult
+        : 'Manual override active';
       setPreview({ outcome: h.manualResult, detail });
     } else setPreview(null);
   };
@@ -207,10 +202,6 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   );
 }
 
-// ── Individual exported handler panels (lottery-style games only)
-export function WingoHandlingPanel() { return <GameHandlerPanel gameKey="wingo" label="Win Go" icon={Circle} manualLabel="Result Number (0-9)" manualPlaceholder="5" manualHint="Force the winning digit for the queued draw." />; }
-export function K3HandlingPanel() { return <GameHandlerPanel gameKey="k3" label="K3" icon={Dices} manualLabel="Dice Result (a,b,c)" manualPlaceholder="3,3,3" manualHint="Three comma-separated dice values (1-6 each)." />; }
-export function FiveDHandlingPanel() { return <GameHandlerPanel gameKey="fived" label="5D" icon={Dices} manualLabel="Result Digits (5)" manualPlaceholder="12345" manualHint="Five-digit outcome, one digit per column." />; }
 export function SunMoonHandlingPanel() { return <GameHandlerPanel gameKey="sunvsmoon" label="Sun vs Moon" icon={Sun} manualLabel="Winning Side" manualPlaceholder="sun / moon / eclipse" manualHint="Forces the round outcome to Sun, Eclipse, or Moon." />; }
 export function MinesHandlingPanel() { return <GameHandlerPanel gameKey="mines" label="Mines" icon={Bomb} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." />; }
 export function TradingHandlingPanel() { return <GameHandlerPanel gameKey="trading" label="Trading" icon={BarChart2} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." />; }
@@ -218,9 +209,6 @@ export function TradingHandlingPanel() { return <GameHandlerPanel gameKey="tradi
 export function AllGameHandlersSection() {
   return (
     <div className="space-y-4">
-      <WingoHandlingPanel />
-      <K3HandlingPanel />
-      <FiveDHandlingPanel />
       <SunMoonHandlingPanel />
       <MinesHandlingPanel />
       <TradingHandlingPanel />
@@ -361,7 +349,7 @@ const RANGE_MS: Record<Range, number> = { day: 86400_000, week: 7 * 86400_000, m
 
 export function TopRankingsAdminPanel() {
   const [range, setRange] = useState<Range>('day');
-  const [game, setGame] = useState<'crash' | 'mines' | 'aviator' | 'wingo' | 'k3' | 'fived'>('crash');
+  const [game, setGame] = useState<'crash' | 'mines' | 'aviator'>('crash');
   const [sort, setSort] = useState<'earnings' | 'recent'>('earnings');
 
   const rows = useMemo(() => {
@@ -379,7 +367,7 @@ export function TopRankingsAdminPanel() {
         <p className="text-xs text-slate-500">Global player metrics · mirrors the in-game leaderboard.</p>
       </div>
       <div className="flex flex-wrap gap-2">
-        <SelectModal value={game} options={[{value:'crash',label:'Crash'},{value:'mines',label:'Mines'},{value:'aviator',label:'Aviator'},{value:'wingo',label:'Win Go'},{value:'k3',label:'K3'},{value:'fived',label:'5D'}]} onChange={(v) => setGame(v as 'crash' | 'mines' | 'aviator' | 'wingo' | 'k3' | 'fived')} />
+        <SelectModal value={game} options={[{value:'crash',label:'Crash'},{value:'mines',label:'Mines'},{value:'aviator',label:'Aviator'}]} onChange={(v) => setGame(v as 'crash' | 'mines' | 'aviator')} />
         <SelectModal value={sort} options={[{value:'earnings',label:'Sort by Earnings'},{value:'recent',label:'Sort by Recency'}]} onChange={(v) => setSort(v as 'earnings' | 'recent')} />
         <div className="flex gap-1 ml-auto">
           {(['day', 'week', 'month', 'year'] as Range[]).map((r) => (

@@ -8,9 +8,7 @@ const GAMES = [
   { key: 'all', label: 'All Games' },
   { key: 'crash', label: 'Crash' },
   { key: 'mines', label: 'Mines' },
-  { key: 'wingo', label: 'Wingo' },
-  { key: 'k3', label: 'K3' },
-  { key: 'fived', label: '5D' },
+  { key: 'aviator', label: 'Aviator' },
   { key: 'sunvsmoon', label: 'Sun vs Moon' },
   { key: 'trading', label: 'Trading' },
 ] as const;
