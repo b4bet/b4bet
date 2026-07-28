@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Header from './components/Header';
 import BottomNav, { type Route } from './components/BottomNav';
 import HomeView from './views/HomeView';
@@ -14,9 +14,6 @@ import ReferralView from './views/ReferralView';
 import AdminView from './views/AdminView';
 import HistoryView from './views/HistoryView';
 import LudoView from './views/LudoView';
-import WingoView from './views/WingoView';
-import K3View from './views/K3View';
-import FiveDView from './views/FiveDView';
 import SunVsMoonView from './views/SunVsMoonView';
 import TradingGameView from './views/TradingGameView';
 import AffiliatePortalView from './views/AffiliatePortalView';
@@ -61,42 +58,28 @@ async function fetchMaintenanceConfig(): Promise<MaintenanceConfig | null> {
   return null;
 }
 
-// Check if current page was loaded while maintenance was OFF.
-// If maintenance is now ON and JS is from old cache, force a hard reload
-// so the browser fetches fresh JS bundle and shows the maintenance page.
 const MAINTENANCE_FLAG = 'b4bet_maint_v1';
 
 function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdmin: boolean) {
   if (!cfg?.enabled || isStaff || isAdmin) return false;
-
-  // If the maintenance flag is already set this session, no reload needed
   if (sessionStorage.getItem(MAINTENANCE_FLAG) === '1') return true;
-
-  // Set flag and hard-reload to bust JS cache
   sessionStorage.setItem(MAINTENANCE_FLAG, '1');
   window.location.reload();
   return true;
 }
 
-// ── Back Button (History) Management ─────────────────────────────────────────
-// We push a history entry every time the user navigates forward in the app.
-// On popstate (back button), we navigate to the previous route instead of
-// leaving the site. If already on 'home', we let the browser go back normally.
-
-function getInitialRoute(): Route {
-  if (typeof window !== 'undefined') {
-    const p = window.location.pathname;
-    const h = window.location.hash;
-    if (p === '/aryan' || p.startsWith('/aryan/') || h === '#aryan' || h === '#/aryan') return 'admin';
-    if (p === '/affiliate' || h === '#affiliate') return 'affiliate';
-    if (p === '/landing') return 'landing';
-  }
-  return 'home';
-}
-
 export default function App() {
   const staffSession = useStaffSession();
-  const [route, setRouteRaw] = useState<Route>(getInitialRoute);
+  const [route, setRoute] = useState<Route>(() => {
+    if (typeof window !== 'undefined') {
+      const p = window.location.pathname;
+      const h = window.location.hash;
+      if (p === '/aryan' || p.startsWith('/aryan/') || h === '#aryan' || h === '#/aryan') return 'admin';
+      if (p === '/affiliate' || h === '#affiliate') return 'affiliate';
+      if (p === '/landing') return 'landing';
+    }
+    return 'home';
+  });
   const [notifOpen, setNotifOpen] = useState(false);
   const [walletOpen, setWalletOpen] = useState(false);
   const [supportChatOpen, setSupportChatOpen] = useState(false);
@@ -106,55 +89,6 @@ export default function App() {
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Navigation stack for back button support ──────────────────────────────
-  const routeStackRef = useRef<Route[]>([getInitialRoute()]);
-  // Flag to distinguish user-initiated navigation from popstate-triggered
-  const isPopstateRef = useRef(false);
-
-  // Wrapped setRoute that pushes browser history
-  const navigate = useCallback((r: Route) => {
-    if (r === route) return; // no-op if same route
-    setRouteRaw(r);
-    routeStackRef.current.push(r);
-    // Push a new history entry so the back button can pop it
-    if (!isPopstateRef.current) {
-      window.history.pushState({ route: r }, '', null);
-    }
-  }, [route]);
-
-  // Listen for popstate (back/forward button)
-  useEffect(() => {
-    const handlePopstate = () => {
-      const stack = routeStackRef.current;
-      if (stack.length > 1) {
-        // Pop current route
-        stack.pop();
-        const prevRoute = stack[stack.length - 1];
-        isPopstateRef.current = true;
-        setRouteRaw(prevRoute);
-        isPopstateRef.current = false;
-      } else {
-        // Already at root (home) — push state again to prevent leaving the app.
-        // The user sees they're already home. If they truly want to leave, they
-        // can use the "X" or swipe-close gesture.
-        window.history.pushState({ route: 'home' }, '', null);
-      }
-    };
-
-    window.addEventListener('popstate', handlePopstate);
-
-    // Push initial state so we have something to pop
-    window.history.replaceState({ route: getInitialRoute() }, '', null);
-
-    return () => {
-      window.removeEventListener('popstate', handlePopstate);
-    };
-  }, []);
-
-  // Keep setRoute as alias for internal callers (doesn't need navigate dep tracking)
-  const setRoute = navigate;
-
-  // Clear the reload flag when maintenance is turned OFF so future ON triggers reload again
   useEffect(() => {
     if (maintenance && !maintenance.enabled) {
       sessionStorage.removeItem(MAINTENANCE_FLAG);
@@ -165,7 +99,6 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsLoggedIn(!!session);
     });
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
         auth.logout();
@@ -177,7 +110,6 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Load maintenance mode + realtime + polling so cache never causes a stale state
   useEffect(() => {
     const isAdminRoute = window.location.pathname === '/aryan' ||
       window.location.hash === '#aryan' || window.location.hash === '#/aryan';
@@ -185,15 +117,12 @@ export default function App() {
     const handleConfig = (cfg: MaintenanceConfig | null) => {
       if (cfg !== null) {
         setMaintenance(cfg);
-        // If we just loaded and maintenance is ON — force hard reload to bust JS cache
         applyMaintenance(cfg, !!staffSession, isAdminRoute);
       }
     };
 
-    // Initial load
     void fetchMaintenanceConfig().then(handleConfig);
 
-    // Realtime subscription — fires instantly when admin toggles maintenance
     const channel = supabase
       .channel('maintenance_mode_watch')
       .on(
@@ -206,19 +135,16 @@ export default function App() {
               : payload.new.value;
             const cfg = val as MaintenanceConfig;
             setMaintenance(cfg);
-            // Hard reload so cached JS is replaced with fresh bundle
             applyMaintenance(cfg, !!staffSession, isAdminRoute);
           }
         },
       )
       .subscribe();
 
-    // Polling fallback every 10s — catches cache/network misses
     pollTimerRef.current = setInterval(() => {
       void fetchMaintenanceConfig().then(handleConfig);
     }, 10_000);
 
-    // Re-fetch when the tab becomes visible (user switches back from another tab)
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void fetchMaintenanceConfig().then(handleConfig);
@@ -231,7 +157,7 @@ export default function App() {
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -243,6 +169,7 @@ export default function App() {
   }, []);
 
   const openAuthModal = (mode: AuthModalMode) => { setAuthModalMode(mode); setAuthModalOpen(true); };
+  const navigate = (r: Route) => setRoute(r);
 
   useEffect(() => {
     const off = bus.on('ui:open_support_chat', () => setSupportChatOpen(true));
@@ -264,17 +191,17 @@ export default function App() {
   if (showMaintenance) {
     return (
       <MaintenancePage
-        title={maintenance?.title}
-        message={maintenance?.message}
-        estimatedTime={maintenance?.estimated_time}
+        title={maintenance!.title}
+        message={maintenance!.message}
+        estimatedTime={maintenance!.estimated_time}
       />
     );
   }
 
   return (
-    <div className="min-h-screen bg-slatepanel-950 text-white">
-      <GeoBlockOverlay />
+    <div className="min-h-screen bg-midnight-900 text-white">
       <ToastHost />
+      <GeoBlockOverlay />
 
       {showHeader && (
         <Header
@@ -286,35 +213,32 @@ export default function App() {
         />
       )}
 
-      <div className={showHeader ? 'pb-16 pt-[62px]' : ''}>
+      <main className="pb-20">
         {route === 'home' && <HomeView onNavigate={navigate} />}
-        {route === 'mines' && <MinesView onNavigate={navigate} />}
+        {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
-        {route === 'deposit' && <DepositView onNavigate={navigate} />}
+        {route === 'deposit' && <DepositView />}
         {route === 'wallet' && <WalletView onNavigate={navigate} />}
         {route === 'withdraw' && <WithdrawView onNavigate={navigate} />}
         {route === 'profile' && (
           <ProfileView
             onNavigate={navigate}
-            onOpenSupport={() => setSupportChatOpen(true)}
+            onOpenSupportChat={() => setSupportChatOpen(true)}
             onOpenAuthModal={openAuthModal}
             onOpenMenu={() => setWalletOpen(true)}
           />
         )}
         {route === 'referral' && <ReferralView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
-        {route === 'admin' && <AdminView onNavigate={navigate} onOpenMenu={() => setWalletOpen(true)} />}
+        {route === 'admin' && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
         {route === 'history' && <HistoryView onNavigate={navigate} />}
-        {route === 'ludo' && <LudoView onBack={() => navigate('home')} />}
-        {route === 'crash' && <CrashView onNavigate={navigate} />}
-        {route === 'aviator' && <AviatorView onBack={() => navigate('home')} />}
-        {route === 'wingo' && <WingoView onNavigate={navigate} />}
-        {route === 'k3' && <K3View onNavigate={navigate} />}
-        {route === 'fived' && <FiveDView onNavigate={navigate} />}
+        {route === 'ludo' && <LudoView onClose={() => navigate('home')} />}
+        {route === 'crash' && <CrashView />}
+        {route === 'aviator' && <AviatorView onClose={() => navigate('home')} />}
         {route === 'sunvsmoon' && <SunVsMoonView onNavigate={navigate} />}
         {route === 'trading' && <TradingGameView onNavigate={navigate} />}
-        {route === 'affiliate' && <AffiliatePortalView onBack={() => navigate('home')} />}
+        {route === 'affiliate' && <AffiliatePortalView onClose={() => navigate('home')} />}
         {route === 'landing' && <LandingPage onNavigate={navigate} />}
-      </div>
+      </main>
 
       {showBottomNav && <BottomNav route={route} onNavigate={navigate} />}
 
@@ -327,7 +251,7 @@ export default function App() {
         onOpenAuthModal={openAuthModal}
       />
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
-      <AuthModal open={authModalOpen} initialMode={authModalMode} onClose={() => setAuthModalOpen(false)} />
+      <AuthModal open={authModalOpen} mode={authModalMode} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
 
       {isLoggedIn && <BanPopup />}
