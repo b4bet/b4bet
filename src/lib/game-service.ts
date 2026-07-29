@@ -34,7 +34,7 @@ export interface MinesRevealResult { success: boolean; is_mine: boolean; gems_fo
 export interface MinesCashoutResult { success: boolean; payout: number; multiplier: number; balance_after: number; mine_positions: number[]; }
 export interface SunMoonResult { result: "sun" | "moon" | "tie"; }
 export interface SunMoonSettleResult { success: boolean; result: string; won: boolean; payout: number; profit: number; balance_after: number; }
-export interface TradingSettleResult { success: boolean; won: boolean; payout: number; profit: number; balance_after: number; }
+export interface TradingSettleResult { success: boolean; won: boolean; payout: number; profit: number; balance_after: number; error?: string; }
 export interface AviatorRoundStartResult {
   success: boolean;
   round_id: number;
@@ -110,6 +110,8 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
 
 /**
  * Soft post — only throws on HTTP 5xx server failures.
+ * Returns the response data even if it contains an error field.
+ * Use this for actions that may not be supported by the server yet.
  */
 async function postSoft<T>(body: Record<string, unknown>): Promise<T> {
   const res = await fetch(EDGE_FN, {
@@ -185,6 +187,10 @@ export const GameService = {
   },
 
   // ── Trading ────────────────────────────────────────────────────────────────
+  /**
+   * Settle a trading bet. Uses postSoft so it NEVER throws for "Unknown action".
+   * The caller checks res.success and falls back to local settlement if false.
+   */
   tradingSettle(
     userId: string,
     symbol: string,
@@ -194,7 +200,7 @@ export const GameService = {
     exitPrice: number,
     payoutPct: number,
   ): Promise<TradingSettleResult> {
-    return post<TradingSettleResult>({
+    return postSoft<TradingSettleResult>({
       game_type: "trading_settle",
       user_id: userId,
       symbol,

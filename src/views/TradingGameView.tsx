@@ -1,10 +1,11 @@
 /**
  * TradingGameView — server-side settlement version.
  * Fixes:
- * 1. Fallback local settlement when server returns "Unknown action"
+ * 1. Uses postSoft for tradingSettle — NEVER shows error toast to user
  * 2. Chart shows countdown expiry line moving forward (like real trading)
  * 3. Active trades persist across asset switch (don't clear on asset change)
  * 4. Active bets saved to localStorage — survive navigation and page reload
+ * 5. Non-success server response handled gracefully with local fallback
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -239,20 +240,14 @@ function PriceChart({ priceHistory, currentPrice, selectedAsset, activeBets }: {
         const mins   = Math.floor(secs / 60);
         const remSecs = secs % 60;
         const timerText = `${mins}:${remSecs.toString().padStart(2, '0')}`;
-        const totalDuration = bet.durationMinutes * 60 * 1000;
-        const elapsed = now - bet.placedAt;
-        const progress = Math.min(1, elapsed / totalDuration);
 
         // Entry line position based on time
         const entryTimeRatio = Math.max(0, Math.min(1, (bet.placedAt - chartStartTime) / chartTimeSpan));
         const entryX = CP.left + entryTimeRatio * CW;
         const entryY = CP.top + CH - ((bet.entryPrice - adjMin) / adjRange) * CH;
 
-        // Expiry line — moves forward from entry based on progress
+        // Expiry line — position based on expiry timestamp
         const expiryTimeRatio = Math.max(0, Math.min(1, (bet.expiryTimestamp - chartStartTime) / chartTimeSpan));
-        // Current progress line between entry and expiry
-        const progressX = entryX + (expiryTimeRatio * CW - entryTimeRatio * CW + CP.left - CP.left) * progress;
-        const clampedProgressX = Math.min(CP.left + CW, Math.max(CP.left, entryX + (CP.left + expiryTimeRatio * CW - entryX) * progress));
 
         const color = bet.direction === 'UP' ? 'rgba(34,197,94,0.8)' : 'rgba(239,68,68,0.8)';
         const colorSolid = bet.direction === 'UP' ? '#22c55e' : '#ef4444';
@@ -294,7 +289,6 @@ function PriceChart({ priceHistory, currentPrice, selectedAsset, activeBets }: {
 
     // suppress unused
     void fmtPrice;
-    void clampedProgressX;
   }, [priceHistory, scrollOffset, visibleCount, activeBets, selectedAsset]);
 
   useEffect(() => { draw(); }, [draw]);
@@ -475,7 +469,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
       const remaining: ActiveBet[] = [];
       const updated = prev.map((bet) => {
         const tr = Math.max(0, Math.floor((bet.expiryTimestamp - now) / 1000));
-        // Use current price for the bet's asset (approximate with current selected asset price)
         const isWinning =
           (bet.direction === 'UP'   && cp > bet.entryPrice) ||
           (bet.direction === 'DOWN' && cp < bet.entryPrice);
@@ -490,7 +483,7 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
 
           const session = auth.getSession();
           if (session) {
-            // Try server settlement first, fallback to local on error
+            // postSoft never throws for "Unknown action" — it just returns the response
             void GameService.tradingSettle(
               session.userId,
               bet.asset.symbol,
@@ -500,26 +493,49 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
               bet.currentPrice,
               bet.payoutPercentage,
             ).then((res) => {
-              store.setBalance(res.balance_after);
-              if (res.won) {
-                addToast(`WIN +${store.currency}${Math.floor(res.profit)} on ${bet.asset.symbol}`, 'win');
+              // Check if server actually succeeded
+              if (res.success && res.balance_after != null) {
+                // Server handled settlement
+                store.setBalance(res.balance_after);
+                if (res.won) {
+                  addToast(`WIN +${store.currency}${Math.floor(res.profit)} on ${bet.asset.symbol}`, 'win');
+                } else {
+                  addToast(`LOSS -${store.currency}${Math.floor(bet.betAmount)} on ${bet.asset.symbol}`, 'lose');
+                }
+                store.recordTradingBet({
+                  symbol: bet.asset.symbol,
+                  direction: bet.direction,
+                  stake: bet.betAmount,
+                  duration: bet.durationMinutes,
+                  entryPrice: bet.entryPrice,
+                  exitPrice: bet.currentPrice,
+                  payout: bet.payoutPercentage,
+                  win: res.won ? res.payout : 0,
+                  won: res.won,
+                } as Omit<TradingBetRecord, 'id' | 'ts'>);
               } else {
-                addToast(`LOSS -${store.currency}${Math.floor(bet.betAmount)} on ${bet.asset.symbol}`, 'lose');
+                // Server didn't handle it (Unknown action / error) — settle locally
+                const payout = won ? bet.betAmount + (bet.betAmount * bet.payoutPercentage / 100) : 0;
+                if (won) {
+                  store.credit(payout);
+                  addToast(`WIN +${store.currency}${Math.floor(payout - bet.betAmount)} on ${bet.asset.symbol}`, 'win');
+                } else {
+                  addToast(`LOSS -${store.currency}${Math.floor(bet.betAmount)} on ${bet.asset.symbol}`, 'lose');
+                }
+                store.recordTradingBet({
+                  symbol: bet.asset.symbol,
+                  direction: bet.direction,
+                  stake: bet.betAmount,
+                  duration: bet.durationMinutes,
+                  entryPrice: bet.entryPrice,
+                  exitPrice: bet.currentPrice,
+                  payout: bet.payoutPercentage,
+                  win: won ? payout : 0,
+                  won,
+                } as Omit<TradingBetRecord, 'id' | 'ts'>);
               }
-              store.recordTradingBet({
-                symbol: bet.asset.symbol,
-                direction: bet.direction,
-                stake: bet.betAmount,
-                duration: bet.durationMinutes,
-                entryPrice: bet.entryPrice,
-                exitPrice: bet.currentPrice,
-                payout: bet.payoutPercentage,
-                win: res.won ? res.payout : 0,
-                won: res.won,
-              } as Omit<TradingBetRecord, 'id' | 'ts'>);
             }).catch(() => {
-              // ── LOCAL FALLBACK SETTLEMENT ──
-              // Server doesn't support trading_settle yet, settle locally
+              // Network error / 5xx — settle locally (no toast for error)
               const payout = won ? bet.betAmount + (bet.betAmount * bet.payoutPercentage / 100) : 0;
               if (won) {
                 store.credit(payout);
@@ -600,7 +616,7 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
   const handleAssetChange = (asset: Asset) => {
     setSelectedAsset(asset);
     setAssetDropdown(false);
-    // DO NOT clear activeBets — they should persist across asset switches
+    // DO NOT clear activeBets — they persist across asset switches
   };
 
   const adjustAmount = (delta: number) => {
