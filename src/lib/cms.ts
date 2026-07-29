@@ -81,7 +81,7 @@ export interface SupportTicket {
   createdTs: number; lastUserMsgTs: number; acknowledged: boolean;
 }
 export interface StaffDM { id: string; fromId: string; toId: string; body: string; ts: number; read: boolean; }
-export interface EmailTemplates { welcome: string; depositSuccess: string; withdrawalStatus: string; }
+export interface EmailTemplates { welcome: string; depositSuccess: string; withdrawalStatus: string; forgotPassword: string; }
 export interface SmtpConfig { host: string; port: string; user: string; pass: string; tls: boolean; active: boolean; }
 export interface DynamicPage { id: string; title: string; html: string; ts: number; }
 export interface ToastEvent { id: string; title: string; body: string; kind: 'info' | 'success' | 'warn' | 'alert'; }
@@ -98,6 +98,7 @@ const defaultEmails: EmailTemplates = {
   welcome: '<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:24px;border-radius:12px"><h1 style="margin:0 0 16px;color:#00ff88;font-size:28px">Welcome to B4BeT, {{username}}!</h1><p style="margin:0 0 12px;font-size:16px">Your account is now live and ready to play.</p><p style="margin:0 0 12px;font-size:14px">Enjoy our exclusive games, live betting, and amazing rewards.</p><p style="margin:0;font-size:14px;color:#a0aec0">Start playing now and claim your welcome bonus on your first deposit!</p></div>',
   depositSuccess: '<div style="font-family:Inter,sans-serif;padding:24px;background:#0a0f1c;color:#fff;border-radius:12px"><h2 style="color:#00ff88">Deposit {{status}}</h2><p>Hi {{username}}, your deposit of <strong>{{amount}}</strong> is <strong>{{status}}</strong>.</p><p>New balance: <strong>{{balance}}</strong></p><p style="color:#a0aec0;font-size:12px">Transaction ID: {{txn_id}}</p></div>',
   withdrawalStatus: '<div style="font-family:Inter,sans-serif;padding:24px;background:#0a0f1c;color:#fff;border-radius:12px"><h2 style="color:#ff5a5a">Withdrawal {{status}}</h2><p>Hi {{username}}, your withdrawal of <strong>{{amount}}</strong> is now <strong>{{status}}</strong>.</p><p style="color:#a0aec0;font-size:12px">Transaction ID: {{txn_id}}</p></div>',
+  forgotPassword: '<div style="font-family:Inter,sans-serif;padding:24px;background:#0a0f1c;color:#fff;border-radius:12px"><h2 style="color:#00ff88">Password Reset Request</h2><p>Hi {{username}},</p><p>Aapne password reset request ki hai. Neeche diye link par click karein:</p><p><a href="{{reset_link}}" style="background:#00ff88;color:#000;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;margin:8px 0">Reset Password</a></p><p style="color:#a0aec0;font-size:12px">Yeh link {{expiry}} me expire ho jayega.</p><p style="color:#a0aec0;font-size:12px">Agar aapne yeh request nahi ki toh ignore karein. Request IP: {{ip_address}}</p></div>',
 };
 
 // ---- Helpers ----
@@ -760,178 +761,56 @@ class Cms {
   sendStaffDM(toId: string, body: string) {
     const me = this.currentStaff();
     if (!me) return;
-    const rec: StaffDM = { id: Math.random().toString(36).slice(2), fromId: me.id, toId, body, ts: Date.now(), read: false };
+    const dmId = Math.random().toString(36).slice(2);
+    const rec: StaffDM = { id: dmId, fromId: me.id, toId, body, ts: Date.now(), read: false };
     this.staffDMs = [...this.staffDMs, rec]; this.emitDMs();
   }
 
-  staffConversation(otherId: string): StaffDM[] {
-    const meId = this.staffSessionId;
-    if (!meId) return [];
-    return this.staffDMs.filter(m => (m.fromId === meId && m.toId === otherId) || (m.fromId === otherId && m.toId === meId));
+  markDMRead(id: string) {
+    this.staffDMs = this.staffDMs.map(d => d.id === id ? { ...d, read: true } : d); this.emitDMs();
   }
 
-  // ---- Geo / Countries ----
-  isGeoBlocked(): boolean {
-    const c = this.countries.find(x => x.id === this.detectedCountryId);
-    return c ? !c.isActive : false;
+  unreadDMs(staffId?: string) {
+    const me = staffId ?? this.staffSessionId;
+    if (!me) return 0;
+    return this.staffDMs.filter(d => d.toId === me && !d.read).length;
   }
 
-  detectedCountry(): Country | undefined {
-    return this.countries.find(c => c.id === this.detectedCountryId);
-  }
+  addReferral(r: Referral) { this.referrals = [...this.referrals, r]; this.emitReferrals(); }
 
-  setDetectedCountry(id: string) {
-    this.detectedCountryId = id;
-    bus.emit(Topics.Countries, this.countries);
-  }
-
-  addCountry(c: Omit<Country, 'id'>) {
-    this.countries = [...this.countries, { ...c, id: 'c_' + Math.random().toString(36).slice(2, 7) }];
-    bus.emit(Topics.Countries, this.countries);
-  }
-
-  updateCountry(id: string, patch: Partial<Country>) {
-    this.countries = this.countries.map(c => c.id === id ? { ...c, ...patch } : c);
-    bus.emit(Topics.Countries, this.countries);
-  }
-
-  async hasIpAlreadySignedUp(ip: string): Promise<boolean> {
-    try {
-      const { data, error } = await supabase.rpc('check_ip_signup_bonus', { p_ip: ip });
-      if (error) return false;
-      return !!data;
-    } catch { return false; }
-  }
-
-  // ---- Manual Methods ----
-  addManualMethod(m: Omit<ManualMethod, 'id'>) {
-    const rec: ManualMethod = { ...m, id: Math.random().toString(36).slice(2) };
-    this.manualMethods = [...this.manualMethods, rec]; this.emitManual();
-    supabase.from('payment_methods').insert({ method_type: m.kind, account_details: { ...rec }, is_active: m.active }).then(() => {}).catch(() => {});
-  }
-
-  updateManualMethod(id: string, patch: Partial<ManualMethod>) {
-    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
-    const updated = this.manualMethods.find(m => m.id === id);
-    if (updated) supabase.from('payment_methods').update({ account_details: { ...updated }, is_active: updated.active }).eq('id', id).then(() => {}).catch(() => {});
-  }
-
-  removeManualMethod(id: string) {
-    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
-    supabase.from('payment_methods').update({ is_active: false }).eq('id', id).then(() => {}).catch(() => {});
-  }
-
-  // ---- Auto Gateways ----
-  addAutoGateway(g: Omit<AutoGateway, 'id'>) {
-    const rec: AutoGateway = { ...g, id: Math.random().toString(36).slice(2) };
-    this.autoGateways = [...this.autoGateways, rec]; this.emitGateways();
-  }
-
-  updateAutoGateway(id: string, patch: Partial<AutoGateway>) {
-    this.autoGateways = this.autoGateways.map(g => g.id === id ? { ...g, ...patch } : g); this.emitGateways();
-  }
-
-  removeAutoGateway(id: string) {
-    this.autoGateways = this.autoGateways.filter(g => g.id !== id); this.emitGateways();
-  }
-
-  // ---- Referrals ----
-  recordReferralSignup(user: AuthUser, referrerId: string) {
-    const ref: Referral = {
-      id: Math.random().toString(36).slice(2),
-      referrerId, referredUserId: user.id, referredUsername: user.username,
-      depositAmount: 0, firstDepositApproved: false,
-      rewardPaid: false, rewardCredited: false, rewardAmount: 0,
-      createdAt: Date.now(), ts: Date.now(),
-    };
-    this.referrals = [ref, ...this.referrals]; this.emitReferrals();
-    supabase.from('referrals').insert({
-      referrer_id: referrerId, referred_user_id: user.id,
-      referred_username: user.username, deposit_amount: 0,
-      first_deposit_approved: false, reward_paid: false, reward_credited: false,
-      reward_amount: 0, created_at: new Date().toISOString(),
-    }).then(() => {}).catch(() => {});
-  }
-
-  addReferral(r: Omit<Referral, 'id' | 'ts'>) {
-    const rec: Referral = { ...r, id: Math.random().toString(36).slice(2), ts: Date.now() };
-    this.referrals = [...this.referrals, rec]; this.emitReferrals();
-    supabase.from('referrals').insert({
-      referrer_id: r.referrerId, referred_user_id: r.referredUserId,
-      referred_username: r.referredUsername, deposit_amount: r.depositAmount,
-      first_deposit_approved: r.firstDepositApproved, reward_paid: r.rewardPaid,
-      reward_credited: r.rewardCredited, reward_amount: r.rewardAmount,
-    }).then(() => {}).catch(() => {});
-  }
-
-  updateReferralReward(referrerId: string, referredUserId: string, patch: Partial<Referral>) {
-    this.referrals = this.referrals.map(r =>
-      r.referrerId === referrerId && r.referredUserId === referredUserId ? { ...r, ...patch } : r
-    );
-    this.emitReferrals();
-  }
-
-  async loadReferrals(userId: string) {
-    try {
-      const { data } = await supabase.from('referrals').select('*').eq('referrer_id', userId).order('created_at', { ascending: false });
-      if (data) {
-        this.referrals = (data as Array<Record<string, unknown>>).map(r => ({
-          id: r.id as string, referrerId: r.referrer_id as string,
-          referredUserId: r.referred_user_id as string, referredUsername: r.referred_username as string,
-          depositAmount: Number(r.deposit_amount) || 0,
-          firstDepositApproved: Boolean(r.first_deposit_approved),
-          rewardPaid: Boolean(r.reward_paid), rewardCredited: Boolean(r.reward_credited),
-          rewardAmount: Number(r.reward_amount) || 0,
-          createdAt: new Date(r.created_at as string).getTime(), ts: new Date(r.created_at as string).getTime(),
-        }));
-        this.emitReferrals();
-      }
-    } catch { /* ignore */ }
-  }
-
-  // ---- Affiliates ----
-  async loadAffiliates() {
-    try {
-      const { data } = await supabase.from('affiliates').select('*').order('created_at', { ascending: false });
-      if (data) {
-        this.affiliates = (data as Array<Record<string, unknown>>).map(r => ({
-          id: r.id as string, userId: r.user_id as string, username: r.username as string,
-          email: r.email as string, telegram: r.telegram as string,
-          trafficSource: r.traffic_source as string, estimatedTraffic: r.estimated_traffic as string,
-          status: r.status as AffiliateApplication['status'], revSharePct: Number(r.rev_share_pct) || 0,
-          stats: (r.stats as AffiliateApplication['stats']) ?? { clicks: 0, registered: 0, deposits: 0, revenueShare: 0 },
-          ts: new Date(r.created_at as string).getTime(),
-        }));
-        bus.emit(Topics.Affiliates, this.affiliates);
-      }
-    } catch { /* ignore */ }
-  }
-
-  async submitAffiliateApplication(app: Omit<AffiliateApplication, 'id' | 'ts' | 'stats' | 'status' | 'revSharePct'>): Promise<void> {
-    try {
-      await supabase.from('affiliates').insert({
-        user_id: app.userId, username: app.username, email: app.email,
-        telegram: app.telegram, traffic_source: app.trafficSource,
-        estimated_traffic: app.estimatedTraffic, status: 'pending',
-        rev_share_pct: 0, stats: { clicks: 0, registered: 0, deposits: 0, revenueShare: 0 },
-      });
-      await this.loadAffiliates();
-    } catch { /* ignore */ }
-  }
-
+  addAffiliate(app: AffiliateApplication) { this.affiliates = [...this.affiliates, app]; bus.emit(Topics.Affiliates, this.affiliates); }
   updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
     this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
     bus.emit(Topics.Affiliates, this.affiliates);
   }
 
-  async updateAffiliateStatus(id: string, status: AffiliateApplication['status'], revSharePct?: number) {
-    try {
-      const updateData: Record<string, unknown> = { status };
-      if (revSharePct !== undefined) updateData.rev_share_pct = revSharePct;
-      await supabase.from('affiliates').update(updateData).eq('id', id);
-      await this.loadAffiliates();
-    } catch { /* ignore */ }
+  setAutoGateways(gws: AutoGateway[]) { this.autoGateways = gws; this.emitGateways(); }
+
+  async saveManualMethod(method: ManualMethod) {
+    const details = { ...method };
+    const exists = this.manualMethods.find(m => m.id === method.id);
+    if (exists) {
+      this.manualMethods = this.manualMethods.map(m => m.id === method.id ? method : m);
+    } else {
+      this.manualMethods = [...this.manualMethods, method];
+    }
+    this.emitManual();
+    const row = { id: method.id, method_type: method.kind, is_active: method.active, account_details: details };
+    if (exists) {
+      await supabase.from('payment_methods').update(row).eq('id', method.id).catch(() => {});
+    } else {
+      await supabase.from('payment_methods').insert(row).catch(() => {});
+    }
   }
+
+  async deleteManualMethod(id: string) {
+    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
+    await supabase.from('payment_methods').delete().eq('id', id).catch(() => {});
+  }
+
+  getAutoGateway(id: string): AutoGateway | undefined { return this.autoGateways.find(g => g.id === id); }
 }
 
+// Singleton
 export const cms = new Cms();
+export type { AuthUser };
