@@ -3,6 +3,7 @@
  * FIX: round_number stored in bet_details (round_id DB col is UUID type)
  * FIX: My Bets fetched from Supabase on mount + after each settle.
  * FIX: overlayResult prevents image flash on result reveal.
+ * FIX: My Bets row shows only round# — no date/time.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -56,12 +57,10 @@ function loadSunMoonBet(): SunMoonSavedBet | null {
   } catch { return null; }
 }
 
-// ── Supabase types ─────────────────────────────────────────────────────────────
-// bet_details = { game:'sunvsmoon', round_number:20261, result:'sun', bet:'sun', bet_choice:'sun' }
-// Older rows (before this fix) have: { bet:'sun', result:'sun' } with no round_number
+// ── Supabase types ────────────────────────────────────────────────────────────
 interface SupabaseBetRow {
   id: string;
-  round_id: string | null;  // UUID in DB, always null for sunvsmoon
+  round_id: string | null;
   bet_amount: number;
   win_amount: number;
   status: string;
@@ -82,7 +81,6 @@ type MyBetEntry = {
   result: BetChoice;
   stake: number;
   win: number;
-  ts: number;
 };
 
 function isBetChoice(v: unknown): v is BetChoice {
@@ -92,18 +90,15 @@ function isBetChoice(v: unknown): v is BetChoice {
 function rowToMyBet(row: SupabaseBetRow): MyBetEntry | null {
   const d = row.bet_details;
   if (!d) return null;
-  // Support both new format (bet_choice) and old format (bet)
   const betChoice = d.bet_choice ?? d.bet;
   if (!isBetChoice(betChoice) || !isBetChoice(d.result)) return null;
   return {
     id: row.id,
-    // New rows store int round in bet_details.round_number; old rows have null
     round: typeof d.round_number === 'number' && d.round_number > 0 ? d.round_number : null,
     bet: betChoice,
     result: d.result,
     stake: Number(row.bet_amount),
     win: Number(row.win_amount),
-    ts: new Date(row.placed_at).getTime(),
   };
 }
 
@@ -115,11 +110,10 @@ async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
     .order('placed_at', { ascending: false })
     .limit(20);
   if (error || !data) return [];
-  // Only sunvsmoon bets have result field as BetChoice in bet_details
   return (data as SupabaseBetRow[]).map(rowToMyBet).filter((r): r is MyBetEntry => r !== null);
 }
 
-// ── Sub-components ─────────────────────────────────────────────────────────────
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: number }) {
   const radius = 38;
