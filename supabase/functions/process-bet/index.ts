@@ -257,6 +257,8 @@ serve(async (req) => {
       const { user_id, round_id, bet, stake } = payload;
       const stakeNum = Number(stake);
       if (!user_id || !round_id || !bet || !stakeNum) throw new Error("Missing required fields: user_id, round_id, bet, stake");
+
+      // Get or create the round result
       let roundResult: string;
       const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
       if (existing) {
@@ -271,20 +273,47 @@ serve(async (req) => {
         }
         await supabase.from("sunvsmoon_rounds").insert({ round_id, result: roundResult });
       }
+
       const won = bet === roundResult;
+
+      // Payout multipliers (total return): Sun/Moon = 2x, Eclipse/Tie = 9x
+      // Example: stake 100 on Sun wins → receive 200 (net profit 100)
+      // Example: stake 100 on Eclipse wins → receive 900 (net profit 800)
       const totalMultipliers: Record<string, number> = { sun: 2, moon: 2, tie: 9 };
       const totalMultiplier = totalMultipliers[bet as string] ?? 2;
       const winAmount = won ? Math.round(stakeNum * totalMultiplier) : 0;
+      // profit = net gain to player (excluding returned stake)
       const profit = won ? winAmount - stakeNum : 0;
+
       const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
       if (profileError || !profile) throw new Error("User profile not found");
+
       const currentBalance = Number(profile.balance);
-      const newBalance = won ? currentBalance + winAmount : currentBalance;
+      // FIX: Always deduct stake first, then add back winAmount.
+      // Loss: newBalance = currentBalance - stake  (deduction)
+      // Win:  newBalance = currentBalance - stake + winAmount  (net gain)
+      const newBalance = currentBalance - stakeNum + winAmount;
+
       const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
       if (updateError) throw new Error(`Balance update failed: ${updateError.message}`);
+
       const now = new Date().toISOString();
-      await supabase.from("bets").insert({ user_id, round_id: round_id ?? null, bet_amount: stakeNum, win_amount: winAmount, multiplier: won ? totalMultiplier : 0, status: won ? "won" : "lost", bet_details: { game: "sunvsmoon", result: roundResult, bet_choice: bet, profit }, placed_at: now, resolved_at: now }).catch(() => {});
-      return new Response(JSON.stringify({ success: true, won, result: roundResult, profit, balance_after: newBalance }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      await supabase.from("bets").insert({
+        user_id,
+        round_id: round_id ?? null,
+        bet_amount: stakeNum,
+        win_amount: winAmount,
+        multiplier: won ? totalMultiplier : 0,
+        status: won ? "won" : "lost",
+        bet_details: { game: "sunvsmoon", result: roundResult, bet_choice: bet, profit },
+        placed_at: now,
+        resolved_at: now,
+      }).catch(() => {});
+
+      return new Response(
+        JSON.stringify({ success: true, won, result: roundResult, profit, balance_after: newBalance }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     // ── aviator_cancel_bet ───────────────────────────────────────────────────
@@ -378,7 +407,6 @@ serve(async (req) => {
       const now = new Date().toISOString();
       const betDetails = { game: "aviator", cashOutAt: cashoutMultiplier, bustPoint: 0, round_uuid: roundUuid, placed_at_ms: placed_at_ms ?? null };
 
-      // ── Verify cashout is before crash (fetch bust_point early for betDetails) ──
       let bustPoint: number | null = null;
       if (roundUuid) {
         const { data: roundData } = await supabase
@@ -397,25 +425,9 @@ serve(async (req) => {
           { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
         );
       }
-      // Update betDetails with actual bustPoint
       betDetails.bustPoint = bustPoint ?? 0;
 
-      // ── ATOMIC BET CLAIM — the only correct way to prevent double-credit ──
-      //
-      // Strategy:
-      //  1. If betId is known: atomically UPDATE the bet from pending→won.
-      //     If 0 rows updated → already resolved → return idempotent response.
-      //     If 1 row updated → we own the claim → credit balance.
-      //  2. If no betId (legacy path): INSERT the won bet with a unique guard.
-      //     Use ON CONFLICT DO NOTHING. If 0 rows inserted → duplicate → return cached.
-      //     If 1 row inserted → we own the claim → credit balance.
-      //
-      // This eliminates the SELECT-then-INSERT race that allowed two concurrent
-      // requests to both pass the old "does a won bet exist?" check and both
-      // call profiles_add_balance.
-
       if (betId) {
-        // ── Path A: betId known — atomic claim via conditional UPDATE ────────
         const { data: claimedBets, error: claimError } = await supabase
           .from("bets")
           .update({
@@ -427,18 +439,16 @@ serve(async (req) => {
           })
           .eq("id", betId)
           .eq("user_id", user_id)
-          .eq("status", "pending")   // ← only claim if still pending (atomic mutex)
+          .eq("status", "pending")
           .select("id");
 
         if (claimError) {
-          // DB error — fall through to idempotent read
           console.error("Bet claim UPDATE error:", claimError.message);
         }
 
         const claimed = !claimError && Array.isArray(claimedBets) && claimedBets.length > 0;
 
         if (!claimed) {
-          // Bet was already resolved (won or lost) — return idempotent result
           const { data: existingBet } = await supabase
             .from("bets")
             .select("id, status, win_amount, multiplier")
@@ -453,14 +463,12 @@ serve(async (req) => {
               { headers: { ...corsHeaders, "Content-Type": "application/json" } }
             );
           }
-          // Lost or unknown
           return new Response(
             JSON.stringify({ success: false, won: false, win: 0, balance_after: Number(profile?.balance ?? 0), crash_point: bustPoint }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
           );
         }
 
-        // Claim succeeded — now safely credit the balance
         const { data: newBalanceData, error: balanceRpcError } = await supabase
           .rpc("profiles_add_balance", { p_user_id: user_id, p_amount: winAmount });
 
@@ -481,16 +489,6 @@ serve(async (req) => {
         );
 
       } else {
-        // ── Path B: no betId — legacy path with round_uuid idempotency ───────
-        //
-        // Attempt to INSERT a new won bet. If a won bet for this user+round
-        // already exists the insert returns 0 rows (no unique constraint crash,
-        // just a server-side check) and we return the cached response.
-        //
-        // Note: without a DB unique constraint this path still has a narrow race
-        // window. For production, ensure betId is always passed from the client
-        // (it is set since aviator_place_bet started returning bet_id).
-
         if (roundUuid) {
           const { data: existingCashout } = await supabase
             .from("bets")
@@ -508,7 +506,6 @@ serve(async (req) => {
           }
         }
 
-        // Insert won bet record first
         const { error: insertError } = await supabase.from("bets").insert({
           user_id,
           round_id: null,
@@ -522,7 +519,6 @@ serve(async (req) => {
         });
 
         if (insertError) {
-          // Could be a race condition duplicate — return cached balance
           const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
           return new Response(
             JSON.stringify({ success: false, won: false, win: 0, balance_after: Number(profile?.balance ?? 0), crash_point: bustPoint }),
@@ -530,7 +526,6 @@ serve(async (req) => {
           );
         }
 
-        // Bet inserted — credit the balance
         const { data: newBalanceData, error: balanceRpcError } = await supabase
           .rpc("profiles_add_balance", { p_user_id: user_id, p_amount: winAmount });
 
