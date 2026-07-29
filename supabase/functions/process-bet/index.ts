@@ -19,72 +19,75 @@ async function safeInsert(queryBuilder: PromiseLike<unknown>): Promise<void> {
 }
 
 /**
- * Reads the admin-configured manual result for sunvsmoon.
- * Returns null when no MANUAL override is active.
- * Checks BOTH cfg.gameHandlers.sunvsmoon AND top-level cfg.sunvsmoon.
+ * Read admin manual override for sunvsmoon DIRECTLY from settings table.
+ * Returns null when mode is not MANUAL or result is invalid.
  */
 async function getAdminSunMoonManualResult(
   supabase: ReturnType<typeof createClient>
 ): Promise<"sun" | "moon" | "tie" | null> {
   try {
-    const { data } = await supabase.rpc("admin_get_settings");
-    if (!data) return null;
-    const rows = data as { key: string; value: unknown }[];
-    const row = rows.find((r) => r.key === "admin_config");
-    if (!row?.value || typeof row.value !== "object") return null;
-    const cfg = row.value as Record<string, unknown>;
+    const { data, error } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", "admin_config")
+      .single();
 
-    function parseSunMoonResult(obj: unknown): "sun" | "moon" | "tie" | null {
+    if (error || !data?.value) return null;
+    const cfg = data.value as Record<string, unknown>;
+
+    function parse(obj: unknown): "sun" | "moon" | "tie" | null {
       if (!obj || typeof obj !== "object") return null;
       const sm = obj as Record<string, unknown>;
       if (sm.mode !== "MANUAL") return null;
-      const result = sm.manualResult as string | undefined;
-      if (!result) return null;
-      const lower = result.toLowerCase();
-      if (lower === "sun") return "sun";
-      if (lower === "moon") return "moon";
-      if (lower === "tie" || lower === "eclipse") return "tie";
+      const r = (sm.manualResult as string ?? "").toLowerCase().trim();
+      if (r === "sun") return "sun";
+      if (r === "moon") return "moon";
+      if (r === "tie" || r === "eclipse") return "tie";
       return null;
     }
 
-    // Check gameHandlers.sunvsmoon first
     const handlers = cfg.gameHandlers as Record<string, unknown> | undefined;
-    if (handlers) {
-      const fromHandlers = parseSunMoonResult(handlers["sunvsmoon"]);
-      if (fromHandlers) return fromHandlers;
+    if (handlers?.sunvsmoon) {
+      const result = parse(handlers.sunvsmoon);
+      if (result) return result;
     }
-    // Fallback: top-level cfg.sunvsmoon
-    return parseSunMoonResult(cfg["sunvsmoon"]);
-  } catch {
+    return parse(cfg.sunvsmoon);
+  } catch (e) {
+    console.error("getAdminSunMoonManualResult error:", e);
     return null;
   }
 }
 
 /**
- * Reverts sunvsmoon back to AUTO in BOTH locations of admin_config
- * so admin panel shows AUTO after the manual round fires.
+ * Revert sunvsmoon to AUTO in BOTH locations so admin panel shows AUTO after
+ * the manual round fires. Direct table update — no RPC.
  */
 async function revertSunMoonToAuto(
   supabase: ReturnType<typeof createClient>
 ): Promise<void> {
   try {
-    const { data } = await supabase.rpc("admin_get_settings");
-    if (!data) return;
-    const rows = data as { key: string; value: unknown }[];
-    const row = rows.find((r) => r.key === "admin_config");
-    if (!row?.value || typeof row.value !== "object") return;
-    const cfg = { ...(row.value as Record<string, unknown>) };
-    const autoState = { mode: "AUTO", manualResult: "", manualTargetRoundId: null };
+    const { data } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", "admin_config")
+      .single();
+    if (!data?.value) return;
 
-    const handlers = { ...(cfg.gameHandlers as Record<string, unknown> ?? {}) };
-    handlers["sunvsmoon"] = { ...(handlers["sunvsmoon"] as Record<string, unknown> ?? {}), ...autoState };
+    const cfg = JSON.parse(JSON.stringify(data.value)) as Record<string, unknown>;
+    const auto = { mode: "AUTO", manualResult: "", manualTargetRoundId: null };
+
+    const handlers = cfg.gameHandlers as Record<string, unknown> ?? {};
+    handlers.sunvsmoon = { ...(handlers.sunvsmoon as Record<string, unknown> ?? {}), ...auto };
     cfg.gameHandlers = handlers;
 
-    cfg["sunvsmoon"] = { ...(cfg["sunvsmoon"] as Record<string, unknown> ?? {}), ...autoState };
+    cfg.sunvsmoon = { ...(cfg.sunvsmoon as Record<string, unknown> ?? {}), ...auto };
 
-    await supabase.rpc("admin_update_setting", { p_key: "admin_config", p_value: cfg });
-  } catch {
-    // non-fatal
+    await supabase
+      .from("settings")
+      .update({ value: cfg, updated_at: new Date().toISOString() })
+      .eq("key", "admin_config");
+  } catch (e) {
+    console.error("revertSunMoonToAuto error:", e);
   }
 }
 
@@ -169,22 +172,20 @@ serve(async (req) => {
     }
 
     // ── sunvsmoon_result ─────────────────────────────────────────────────────
-    // CRITICAL FIX: Admin manual override is checked FIRST and UPSERTS to overwrite
-    // stale DB entries. Round IDs repeat across page reloads — old entries must be
-    // overwritten, not reused.
+    // Admin manual override is checked FIRST. UPSERT overwrites stale DB entries.
     if (action === "sunvsmoon_result") {
       const round_id = payload.round_id;
+      console.log("[sunvsmoon_result] round_id:", round_id);
 
-      // 1. Admin manual override — HIGHEST priority, UPSERT overwrites stale entries
       const adminManual = await getAdminSunMoonManualResult(supabase);
+      console.log("[sunvsmoon_result] adminManual:", adminManual);
+
       if (adminManual) {
-        await supabase.from("sunvsmoon_rounds")
-          .upsert({ round_id, result: adminManual }, { onConflict: "round_id" });
+        await supabase.from("sunvsmoon_rounds").upsert({ round_id, result: adminManual }, { onConflict: "round_id" });
         await revertSunMoonToAuto(supabase);
         return new Response(JSON.stringify({ success: true, result: adminManual }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      // 2. No manual override — use existing entry or generate new random
       const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
       if (existing) {
         return new Response(JSON.stringify({ success: true, result: existing.result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -196,23 +197,24 @@ serve(async (req) => {
     }
 
     // ── sunvsmoon_settle ─────────────────────────────────────────────────────
-    // CRITICAL FIX: Admin manual override checked FIRST, UPSERT overwrites stale entries.
+    // Admin manual override checked FIRST. UPSERT overwrites any stale DB entry.
     if (action === "sunvsmoon_settle") {
       const { user_id, round_id, bet, stake } = payload;
       const stakeNum = Number(stake);
       if (!user_id || !round_id || !bet || !stakeNum) throw new Error("Missing required fields: user_id, round_id, bet, stake");
 
+      console.log("[sunvsmoon_settle] round_id:", round_id, "bet:", bet);
+
       let roundResult: string;
 
-      // 1. Admin manual override — HIGHEST priority
       const adminManual = await getAdminSunMoonManualResult(supabase);
+      console.log("[sunvsmoon_settle] adminManual:", adminManual);
+
       if (adminManual) {
         roundResult = adminManual;
-        await supabase.from("sunvsmoon_rounds")
-          .upsert({ round_id, result: roundResult }, { onConflict: "round_id" });
+        await supabase.from("sunvsmoon_rounds").upsert({ round_id, result: roundResult }, { onConflict: "round_id" });
         await revertSunMoonToAuto(supabase);
       } else {
-        // 2. Use existing entry or generate new random
         const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
         if (existing) {
           roundResult = existing.result;
@@ -222,6 +224,8 @@ serve(async (req) => {
           await supabase.from("sunvsmoon_rounds").insert({ round_id, result: roundResult });
         }
       }
+
+      console.log("[sunvsmoon_settle] roundResult:", roundResult);
 
       const won = bet === roundResult;
       const totalMultipliers: Record<string, number> = { sun: 2, moon: 2, tie: 9 };
