@@ -227,10 +227,12 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const [historyTab, setHistoryTab] = useState<'rounds' | 'my'>('rounds');
   const [settling,   setSettling]   = useState(false);
 
-  const settledRoundRef   = useRef<number>(-1);
-  const selectedChoiceRef = useRef<BetChoice | null>(null);
-  const betAmountRef      = useRef<number>(betAmount);
-  const betPlacedRef      = useRef(false);
+  const settledRoundRef    = useRef<number>(-1);
+  // Track the round we've already reset for — prevents repeated resets on each bus tick
+  const resetForRoundRef   = useRef<number>(-1);
+  const selectedChoiceRef  = useRef<BetChoice | null>(null);
+  const betAmountRef       = useRef<number>(betAmount);
+  const betPlacedRef       = useRef(false);
   useEffect(() => { selectedChoiceRef.current = selectedChoice; }, [selectedChoice]);
   useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
   useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
@@ -245,7 +247,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         setBetPlaced(true);
         setBetAmount(saved.betAmount);
       } else {
-        // Round changed, clear stale data
         saveSunMoonBet(null);
       }
     }
@@ -274,8 +275,10 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       setSecondsLeft(s.secondsLeft);
       setResult(s.result);
 
-      // Reset on new round
-      if (s.phase === 'betting' && settledRoundRef.current !== -1 && settledRoundRef.current !== rn) {
+      // Reset bet state ONCE when a new betting round begins.
+      // resetForRoundRef prevents this from firing on every tick of the same round.
+      if (s.phase === 'betting' && resetForRoundRef.current !== rn) {
+        resetForRoundRef.current = rn;
         setSelectedChoice(null);
         setBetPlaced(false);
         setLastQuickStake(null);
@@ -289,7 +292,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         const outcome = s.result;
 
         setHistory((prev) => [{ round: rn, result: outcome }, ...prev].slice(0, 20));
-        saveSunMoonBet(null); // Clear persisted bet after settlement
+        saveSunMoonBet(null);
 
         if (sb !== null && placed) {
           const stake = betAmountRef.current;
@@ -325,11 +328,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     return off;
   }, []);
 
-  // FIX: Allow selecting a new choice only when bet is NOT yet placed for this round.
-  // Once bet is placed, selection is locked. On new round betPlaced resets to false,
-  // allowing a fresh selection again.
   const handleSelectChoice = useCallback((choice: BetChoice) => {
-    if (betPlaced) return; // locked after placing bet
+    if (betPlaced) return;
     setSelectedChoice(choice);
   }, [betPlaced]);
 
