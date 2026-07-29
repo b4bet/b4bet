@@ -2,6 +2,7 @@
  * SunVsMoonView — server-side outcome version.
  * FIX: Persist bet state (choice, placed, amount, round) to localStorage
  * so navigating away mid-round and coming back shows the placed bet.
+ * FEAT: My Bets tab loads full history from Supabase on mount.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -15,6 +16,7 @@ import { cms } from '../lib/cms';
 import { auth } from '../lib/auth';
 import { sunMoonLoop, EngineTopics, type SunMoonState } from '../lib/persistentGameEngine';
 import { GameService } from '../lib/game-service';
+import { supabase } from '@/integrations/supabase/client';
 
 type BetChoice = 'sun' | 'moon' | 'tie';
 type Phase = 'betting' | 'processing' | 'revealed';
@@ -23,10 +25,8 @@ const BETTING_DURATION = 15;
 const YEAR_PREFIX      = 2026;
 const PAYOUTS: Record<BetChoice, number> = { sun: 1, moon: 1, tie: 8 };
 
-// Quick stake denominations
 const QUICK_STAKES = [100, 200, 500, 1000];
 
-// Image and label helpers — "tie" is always shown as "ECLIPSE" with eclipse.png
 const CHOICE_IMAGES: Record<BetChoice, string> = { sun: '/sun.png', moon: '/moon.png', tie: '/eclipse.png' };
 const CHOICE_LABELS: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
 
@@ -62,6 +62,52 @@ function loadSunMoonBet(): SunMoonSavedBet | null {
     }
     return parsed;
   } catch { return null; }
+}
+
+// ── Supabase bet record shape ─────────────────────────────────────────────────
+interface SupabaseBetRow {
+  id: string;
+  round_id: number | null;
+  bet_amount: number;
+  win_amount: number;
+  status: string;
+  placed_at: string;
+  bet_details: {
+    game?: string;
+    result?: string;
+    bet_choice?: string;
+  } | null;
+}
+
+type MyBetEntry = {
+  id: string;
+  round: number;
+  bet: BetChoice;
+  result: BetChoice;
+  stake: number;
+  win: number;
+  ts: number;
+};
+
+function isBetChoice(v: unknown): v is BetChoice {
+  return v === 'sun' || v === 'moon' || v === 'tie';
+}
+
+function rowToMyBet(row: SupabaseBetRow): MyBetEntry | null {
+  const details = row.bet_details;
+  if (!details || details.game !== 'sunvsmoon') return null;
+  const bet = details.bet_choice;
+  const result = details.result;
+  if (!isBetChoice(bet) || !isBetChoice(result)) return null;
+  return {
+    id: row.id,
+    round: row.round_id ?? 0,
+    bet,
+    result,
+    stake: Number(row.bet_amount),
+    win: Number(row.win_amount),
+    ts: new Date(row.placed_at).getTime(),
+  };
 }
 
 function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: number }) {
@@ -217,9 +263,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     const h = sunMoonLoop.getHistory();
     return h.map((r, i) => ({ round: YEAR_PREFIX * 10 + initEng.roundId - (i + 1), result: r }));
   });
-  const [myBets, setMyBets] = useState<Array<{
-    id: string; round: number; bet: BetChoice; result: BetChoice; stake: number; win: number; ts: number;
-  }>>([]);
+  const [myBets, setMyBets] = useState<MyBetEntry[]>([]);
+  const [myBetsLoading, setMyBetsLoading] = useState(false);
   const [historyTab, setHistoryTab] = useState<'rounds' | 'my'>('rounds');
   const [settling,   setSettling]   = useState(false);
 
@@ -231,6 +276,28 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   useEffect(() => { selectedChoiceRef.current = selectedChoice; }, [selectedChoice]);
   useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
   useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
+
+  // ── Load full bet history from Supabase on mount ──────────────────────────
+  useEffect(() => {
+    const session = auth.getSession();
+    if (!session?.userId) return;
+
+    setMyBetsLoading(true);
+    supabase
+      .from('bets')
+      .select('id, round_id, bet_amount, win_amount, status, placed_at, bet_details')
+      .eq('user_id', session.userId)
+      .contains('bet_details', { game: 'sunvsmoon' })
+      .order('placed_at', { ascending: false })
+      .limit(100)
+      .then(({ data, error }) => {
+        if (!error && data) {
+          const rows = (data as SupabaseBetRow[]).map(rowToMyBet).filter((r): r is MyBetEntry => r !== null);
+          setMyBets(rows);
+        }
+      })
+      .finally(() => setMyBetsLoading(false));
+  }, []);
 
   // ── Restore persisted bet on mount ──
   useEffect(() => {
@@ -278,8 +345,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         const sb     = selectedChoiceRef.current;
         const placed = betPlacedRef.current;
 
-        // Use the engine's local result for display in history immediately.
-        // The server will confirm the authoritative result during settle.
         const localOutcome = s.result;
         setHistory((prev) => [{ round: rn, result: localOutcome }, ...prev].slice(0, 20));
         saveSunMoonBet(null);
@@ -293,8 +358,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
           void GameService.sunMoonSettle(session.userId, rn, sb, stake)
             .then((res) => {
               store.setBalance(res.balance_after);
-              // FIX: Use server's authoritative result for won/lost display.
-              // The local engine RNG may differ from the server's stored result.
               const serverOutcome = res.result as BetChoice;
               const actuallyWon = res.won;
 
@@ -311,11 +374,14 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                 payout: PAYOUTS[sb], win: actuallyWon ? res.profit : 0,
               };
               store.recordSunMoonRound(record);
-              setMyBets((prev) => [{
+
+              // Prepend to my bets list
+              const newEntry: MyBetEntry = {
                 id: Math.random().toString(36).slice(2),
                 round: rn, bet: sb, result: serverOutcome, stake,
                 win: actuallyWon ? res.profit : 0, ts: Date.now(),
-              }, ...prev].slice(0, 50));
+              };
+              setMyBets((prev) => [newEntry, ...prev].slice(0, 100));
             })
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : 'Server error';
@@ -547,15 +613,20 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
           {historyTab === 'my' && (
             <div className="space-y-2">
-              {myBets.length === 0 ? (
+              {myBetsLoading ? (
+                <div className="flex flex-col gap-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-14 rounded-xl bg-slatepanel-800/60 border border-borderline-900 animate-pulse" />
+                  ))}
+                </div>
+              ) : myBets.length === 0 ? (
                 <p className="text-xs text-slate-500 text-center py-4">Place a bet to see your history here</p>
               ) : (
                 myBets.map((b) => (
                   <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
-                    {/* FIX: use CHOICE_IMAGES so tie shows eclipse.png not tie.png */}
                     <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-white">#{b.round}</p>
+                      <p className="text-xs font-bold text-white">#{b.round || '—'}</p>
                       <p className="text-[10px] text-slate-400">
                         Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}
                       </p>
