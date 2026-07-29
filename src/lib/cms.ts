@@ -5,6 +5,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { bus, Topics } from './bus';
 import { store } from './store';
+import { auth } from './auth';
 import { emailService } from './emailService';
 import type { AuthUser } from './auth';
 
@@ -581,23 +582,20 @@ class Cms {
 
   submitWithdrawal(user: string, amount: number, destination: string, details?: string, userId?: string) {
     // FIX: Deduct balance instantly from client state so user sees updated balance immediately.
-    // The Supabase row is inserted as 'pending' — admin approval is still required for actual payout.
-    // We use debitLocalOnly() to avoid a double-write to Supabase (the transaction row is the source of truth).
+    // Uses debitLocalOnly() to avoid a redundant Supabase write — the balance is already written
+    // below via direct profiles update, and Realtime will sync it back to the client.
     const debited = store.debitLocalOnly(amount);
     if (!debited) {
       this.toast({ title: 'Insufficient balance', body: `Available: ${store.currency}${store.balance.toFixed(2)}`, kind: 'alert' });
       return;
     }
 
-    // Also write the deduction to Supabase profiles so balance stays in sync if page reloads.
+    // Persist the deducted balance to Supabase so it survives a page reload.
     const newBalance = store.balance;
-    try {
-      const { auth: authModule } = require('./auth') as { auth: { getSession: () => { userId?: string } | null } };
-      const session = authModule.getSession();
-      if (session?.userId) {
-        supabase.from('profiles').update({ balance: newBalance }).eq('id', session.userId).then(() => {}).catch(() => {});
-      }
-    } catch { /* non-fatal */ }
+    const session = auth.getSession();
+    if (session?.userId) {
+      supabase.from('profiles').update({ balance: newBalance }).eq('id', session.userId).then(() => {}).catch(() => {});
+    }
 
     const meta = { username: user, destination, ...(details ? { details } : {}) };
     supabase.from('transactions').insert({
