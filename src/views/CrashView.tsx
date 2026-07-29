@@ -54,7 +54,6 @@ export default function CrashView() {
 
       {/* ── Game Header ── */}
       <div className="flex items-center justify-between px-3 h-[52px] bg-slatepanel-900 border-b border-borderline-900 flex-shrink-0">
-        {/* Logo + name */}
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-slatepanel-800 border border-borderline-900 grid place-items-center">
             {logos.crash ? (
@@ -66,7 +65,6 @@ export default function CrashView() {
           <span className="text-sm font-bold text-white">Crash</span>
         </div>
 
-        {/* Balance + settings + feed */}
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 bg-slatepanel-800 border border-borderline-900 rounded-xl px-2.5 py-1">
             <Wallet className="w-3 h-3 text-emeraldwin-400" />
@@ -114,14 +112,25 @@ export default function CrashView() {
         }
       </div>
 
-      {/* ── Canvas ── */}
-      <div className="relative flex-1 min-h-0">
-        <CrashCanvas state={state} />
-        <CashoutPopupOverlay />
+      {/* ── Main area: Canvas + Bet Panel side by side on lg, stacked on mobile ── */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+
+        {/* Canvas */}
+        <div className="relative flex-1 min-h-0 min-w-0">
+          <CrashCanvas state={state} />
+          <CashoutPopupOverlay />
+        </div>
+
+        {/* Bet Panel — right sidebar on lg+, hidden here on mobile (shown below) */}
+        <div className="hidden lg:flex lg:w-[340px] lg:flex-shrink-0 lg:flex-col lg:overflow-y-auto lg:border-l lg:border-borderline-900">
+          <DualBetPanel />
+        </div>
       </div>
 
-      {/* ── Bet panels ── */}
-      <DualBetPanel />
+      {/* Bet Panel — below canvas on mobile only */}
+      <div className="lg:hidden flex-shrink-0">
+        <DualBetPanel />
+      </div>
 
       {/* ── History tabs ── */}
       <div className="flex-shrink-0">

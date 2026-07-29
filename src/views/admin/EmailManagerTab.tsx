@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Mail, Save, Eye, Code2, Send } from 'lucide-react';
+import { Mail, Save, Eye, Code2, Send, AlertCircle } from 'lucide-react';
 import { cms } from '../../lib/cms';
 import { useEmailTemplates } from '../../lib/cmsHooks';
+import { supabase } from '../../integrations/supabase/client';
 import type { EmailTemplates } from '../../lib/cms';
 
 const tabs: { key: keyof EmailTemplates; label: string; vars: { name: string; desc: string }[]; smtpFn: string }[] = [
@@ -61,9 +62,10 @@ export default function EmailManagerTab() {
   const templates = useEmailTemplates();
   const [active, setActive] = useState<keyof EmailTemplates>('welcome');
   const [preview, setPreview] = useState(false);
-  // draft syncs with latest templates from Supabase on first load
   const [draft, setDraft] = useState<EmailTemplates>(templates);
   const [synced, setSynced] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // When Supabase templates load (non-empty), sync draft once
   useEffect(() => {
@@ -76,9 +78,35 @@ export default function EmailManagerTab() {
   const current = tabs.find((t) => t.key === active)!;
   const html = (draft[active] as string | undefined) ?? '';
 
-  const save = () => {
-    cms.setEmailTemplate(active, html);
-    cms.toast({ title: 'Template saved', body: `${current.label} saved successfully.`, kind: 'success' });
+  const save = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      // Update in-memory + emit
+      cms.setEmailTemplate(active, html);
+
+      // Also direct-upsert to settings table as reliable fallback
+      const updatedTemplates = { ...cms.emailTemplates };
+      const { error } = await supabase
+        .from('settings')
+        .upsert({ key: 'email_templates', value: updatedTemplates }, { onConflict: 'key' });
+
+      if (error) {
+        // RPC path as secondary fallback
+        await supabase.rpc('admin_update_setting', {
+          p_key: 'email_templates',
+          p_value: updatedTemplates as unknown as string,
+        });
+      }
+
+      cms.toast({ title: 'Template saved', body: `${current.label} saved successfully.`, kind: 'success' });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Save failed';
+      setSaveError(msg);
+      cms.toast({ title: 'Save failed', body: msg, kind: 'alert' });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const test = () => {
@@ -91,42 +119,61 @@ export default function EmailManagerTab() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
         <div>
-          <h2 className="font-display font-bold text-lg text-white">Email Manager</h2>
-          <p className="text-xs text-slate-500">Customizable HTML templates mapped to active SMTP functions.</p>
+          <h2 className="text-lg font-bold text-white flex items-center gap-2"><Mail className="w-5 h-5 text-neon-400" /> Email Manager</h2>
+          <p className="text-xs text-slate-400 mt-0.5">Customizable HTML templates mapped to active SMTP functions.</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={test} className="btn-ghost px-3 py-2 text-sm"><Send className="w-4 h-4" /> Send test</button>
-          <button onClick={save} className="btn-primary px-3 py-2 text-sm"><Save className="w-4 h-4" /> Save</button>
+          <button onClick={test} className="btn-ghost px-3 py-1.5 text-xs flex items-center gap-1.5">
+            <Send className="w-3.5 h-3.5" /> Send test
+          </button>
+          <button
+            onClick={() => { void save(); }}
+            disabled={saving}
+            className="btn-primary px-3 py-1.5 text-xs flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Save className="w-3.5 h-3.5" />
+            {saving ? 'Saving...' : 'Save'}
+          </button>
         </div>
       </div>
 
-      <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+      {saveError && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/30 rounded-xl text-xs text-red-400">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          {saveError}
+        </div>
+      )}
+
+      {/* Tab bar */}
+      <div className="flex gap-2 overflow-x-auto scrollbar-none">
         {tabs.map((t) => (
           <button
             key={t.key}
-            onClick={() => { setActive(t.key); setPreview(false); }}
+            onClick={() => { setActive(t.key); setPreview(false); setSaveError(null); }}
             className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-sm font-semibold whitespace-nowrap transition-all ${
               active === t.key ? 'bg-gradient-to-br from-neon-400 to-neon-600 text-white' : 'bg-slatepanel-800 border border-borderline-900 text-slate-400'
             }`}
           >
-            <Mail className="w-4 h-4" />
+            <Mail className="w-3.5 h-3.5" />
             {t.label}
           </button>
         ))}
       </div>
 
-      <div className="panel p-3 text-xs text-slate-400">
-        Mapped SMTP function: <code className="text-neon-300">{current.smtpFn}</code>
+      <div className="text-xs text-slate-500">
+        Mapped SMTP function: <span className="text-neon-400 font-mono">{current.smtpFn}</span>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <div className="panel p-1">
-          <div className="flex items-center justify-between px-3 py-2 border-b border-borderline-900">
-            <div className="flex items-center gap-2 text-slate-500 text-xs font-semibold uppercase tracking-wider">
-              <Code2 className="w-4 h-4" /> {active}.html
+      <div className="grid lg:grid-cols-2 gap-4">
+        {/* Editor pane */}
+        <div className="rounded-xl overflow-hidden border border-borderline-900">
+          <div className="flex items-center justify-between px-3 py-2 bg-slatepanel-800 border-b border-borderline-900">
+            <div className="flex items-center gap-2 text-xs text-slate-400">
+              <Code2 className="w-3.5 h-3.5" />
+              <span className="font-mono">{active}.html</span>
             </div>
             <button onClick={() => setPreview(!preview)} className="btn-ghost px-3 py-1.5 text-xs lg:hidden">
               {preview ? <Code2 className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
@@ -134,7 +181,7 @@ export default function EmailManagerTab() {
             </button>
           </div>
           {preview ? (
-            <div className="bg-white rounded-b-2xl p-4 min-h-[16rem] lg:hidden" dangerouslySetInnerHTML={{ __html: html }} />
+            <iframe srcDoc={html} className="w-full h-80 border-0 bg-white" title="email preview" />
           ) : (
             <textarea
               value={html}
@@ -146,19 +193,20 @@ export default function EmailManagerTab() {
         </div>
 
         {/* Always-on live preview pane */}
-        <div className="panel p-1 hidden lg:block">
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-borderline-900 text-slate-500 text-xs font-semibold uppercase tracking-wider">
-            <Eye className="w-4 h-4" /> Live Preview
+        <div className="rounded-xl overflow-hidden border border-borderline-900">
+          <div className="flex items-center gap-2 px-3 py-2 bg-slatepanel-800 border-b border-borderline-900">
+            <Eye className="w-3.5 h-3.5 text-slate-400" />
+            <span className="text-xs text-slate-400">Live Preview</span>
           </div>
-          <div className="bg-white rounded-b-2xl p-4 min-h-[20rem] max-h-[28rem] overflow-auto" dangerouslySetInnerHTML={{ __html: html }} />
+          <iframe srcDoc={html} className="w-full h-80 border-0 bg-white" title="email live preview" />
         </div>
       </div>
 
       {/* Available Variables */}
-      <div className="panel p-4">
-        <h3 className="font-display font-bold text-sm text-white mb-3">Available Variables</h3>
-        <p className="text-xs text-slate-500 mb-3">Variable par click karo — clipboard me copy ho jayega. Template me paste karo.</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+      <div className="space-y-2">
+        <h3 className="text-sm font-semibold text-white">Available Variables</h3>
+        <p className="text-xs text-slate-500">Variable par click karo — clipboard me copy ho jayega. Template me paste karo.</p>
+        <div className="grid grid-cols-2 gap-2">
           {current.vars.map((v) => (
             <button
               key={v.name}
@@ -166,8 +214,8 @@ export default function EmailManagerTab() {
               title="Click to copy"
               className="flex items-center gap-3 px-3 py-2 rounded-xl bg-midnight-850 border border-borderline-900 hover:border-neon-500 hover:bg-midnight-800 transition-all text-left group"
             >
-              <code className="text-neon-300 font-mono text-xs shrink-0 group-hover:text-neon-200">{v.name}</code>
-              <span className="text-slate-500 text-xs truncate">{v.desc}</span>
+              <code className="text-neon-400 font-mono text-xs">{v.name}</code>
+              <span className="text-xs text-slate-400 truncate">{v.desc}</span>
             </button>
           ))}
         </div>
