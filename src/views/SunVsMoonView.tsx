@@ -3,6 +3,7 @@
  * FIX: My Bets fetched from Supabase on mount + after each settle.
  * FIX: bet_details format is {bet, result} not {game, bet_choice, result}
  * FIX: overlayResult prevents image flash on result reveal.
+ * FIX: Show date/time when round_id is null in DB.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -69,7 +70,7 @@ interface SupabaseBetRow {
 }
 
 type MyBetEntry = {
-  id: string; round: number; bet: BetChoice; result: BetChoice;
+  id: string; round: number | null; bet: BetChoice; result: BetChoice;
   stake: number; win: number; ts: number;
 };
 
@@ -80,17 +81,25 @@ function isBetChoice(v: unknown): v is BetChoice {
 function rowToMyBet(row: SupabaseBetRow): MyBetEntry | null {
   const d = row.bet_details;
   if (!d) return null;
-  // DB stores {bet, result} — no game field
   if (!isBetChoice(d.bet) || !isBetChoice(d.result)) return null;
   return {
     id: row.id,
-    round: row.round_id ?? 0,
+    round: row.round_id ?? null,
     bet: d.bet,
     result: d.result,
     stake: Number(row.bet_amount),
     win: Number(row.win_amount),
     ts: new Date(row.placed_at).getTime(),
   };
+}
+
+function formatBetTime(ts: number): string {
+  const d = new Date(ts);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}/${mo} ${hh}:${mm}`;
 }
 
 async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
@@ -101,7 +110,6 @@ async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
     .order('placed_at', { ascending: false })
     .limit(20);
   if (error || !data) return [];
-  // Filter to only sunvsmoon bets: bet_details has {bet, result} both as BetChoice
   return (data as SupabaseBetRow[]).map(rowToMyBet).filter((r): r is MyBetEntry => r !== null);
 }
 
@@ -334,7 +342,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               };
               store.recordSunMoonRound(record);
 
-              // Re-fetch from Supabase after settle so new bet appears
               const updated = await fetchMyBetsFromSupabase(session.userId);
               if (updated.length > 0) setMyBets(updated);
             })
@@ -555,7 +562,10 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
                     <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-white">#{b.round || '—'}</p>
+                      {/* Show round# if available, else show date/time */}
+                      <p className="text-xs font-bold text-white">
+                        {b.round !== null && b.round > 0 ? `#${b.round}` : formatBetTime(b.ts)}
+                      </p>
                       <p className="text-[10px] text-slate-400">Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}</p>
                     </div>
                     <div className="text-right flex-shrink-0">
