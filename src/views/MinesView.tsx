@@ -1,5 +1,7 @@
 /**
  * MinesView — server-side outcome version.
+ * FIX: Persist active session to localStorage so navigating away and back
+ * restores the game state (grid, revealed tiles, multiplier, session id).
  */
 
 import { useState, useCallback, useEffect } from 'react';
@@ -42,6 +44,37 @@ function initialState(mineCount: number, stake: number): ClientMinesState {
     busted: false,
     cashedOut: false,
   };
+}
+
+// ── Persistence helpers ───────────────────────────────────────────────────────
+const MINES_SESSION_KEY = 'b4bet_mines_active_session';
+
+function saveMinesSession(game: ClientMinesState) {
+  try {
+    if (game.active && game.sessionId) {
+      localStorage.setItem(MINES_SESSION_KEY, JSON.stringify(game));
+    } else {
+      localStorage.removeItem(MINES_SESSION_KEY);
+    }
+  } catch { /* ignore */ }
+}
+
+function loadMinesSession(): ClientMinesState | null {
+  try {
+    const raw = localStorage.getItem(MINES_SESSION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ClientMinesState;
+    // Only restore if session is still active
+    if (parsed.active && parsed.sessionId && !parsed.busted && !parsed.cashedOut) {
+      return parsed;
+    }
+    localStorage.removeItem(MINES_SESSION_KEY);
+    return null;
+  } catch { return null; }
+}
+
+function clearMinesSession() {
+  try { localStorage.removeItem(MINES_SESSION_KEY); } catch { /* ignore */ }
 }
 
 // ── Supabase mines history via RPC ────────────────────────────────────────────
@@ -163,7 +196,11 @@ export default function MinesView() {
   const [stakeStr, setStakeStr] = useState('100');
   const [minesInput, setMinesInput] = useState(3);
   const [loading, setLoading] = useState(false);
-  const [game, setGame] = useState<ClientMinesState>(() => initialState(3, 100));
+  // Load persisted session on mount
+  const [game, setGame] = useState<ClientMinesState>(() => {
+    const saved = loadMinesSession();
+    return saved ?? initialState(3, 100);
+  });
 
   const { rows: myHistory, loading: histLoading, error: histError, refresh: refreshHistory } = useSupabaseMinesHistory();
 
@@ -173,6 +210,11 @@ export default function MinesView() {
   const quickStakes = adminCfg.gameHandlers['mines']?.quickStakes?.length
     ? adminCfg.gameHandlers['mines'].quickStakes
     : [100, 500, 1000, 5000];
+
+  // Persist game state whenever it changes
+  useEffect(() => {
+    saveMinesSession(game);
+  }, [game]);
 
   const start = useCallback(async () => {
     const session = auth.getSession();
@@ -194,7 +236,7 @@ export default function MinesView() {
     try {
       const res = await GameService.minesStart(session.userId, minesInput, amt);
       store.setBalance(res.balance_after);
-      setGame({
+      const newState: ClientMinesState = {
         active: true,
         sessionId: res.session_id,
         stake: amt,
@@ -206,7 +248,8 @@ export default function MinesView() {
         revealed: new Array(25).fill(false),
         busted: false,
         cashedOut: false,
-      });
+      };
+      setGame(newState);
     } catch (err) {
       cms.toast({ title: 'Could not start', body: err instanceof Error ? err.message : 'Server error', kind: 'alert' });
     } finally {
@@ -230,6 +273,7 @@ export default function MinesView() {
           res.mine_positions.forEach((pos) => { newGrid[pos] = 'mine'; newRevealed[pos] = true; });
         }
         setGame((g) => ({ ...g, active: false, busted: true, grid: newGrid, revealed: newRevealed, gemsFound: res.gems_found }));
+        clearMinesSession();
         store.recordMinesRound({ stake: game.stake, mines: game.mineCount, gems: res.gems_found, multiplier: res.current_multiplier, win: 0, busted: true });
         setTimeout(refreshHistory, 1500);
       } else {
@@ -258,6 +302,7 @@ export default function MinesView() {
       const newRevealed = [...game.revealed];
       res.mine_positions.forEach((pos) => { newGrid[pos] = 'mine'; newRevealed[pos] = true; });
       setGame((g) => ({ ...g, active: false, cashedOut: true, grid: newGrid, revealed: newRevealed }));
+      clearMinesSession();
       store.recordMinesRound({ stake: game.stake, mines: game.mineCount, gems: game.gemsFound, multiplier: res.multiplier, win: res.payout, busted: false });
       cms.toast({ title: 'Cashed out!', body: `You won ${store.currency}${res.payout.toFixed(2)}`, kind: 'success' });
       setTimeout(refreshHistory, 1500);

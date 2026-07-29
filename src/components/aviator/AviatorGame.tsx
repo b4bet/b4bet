@@ -24,6 +24,45 @@ interface AviatorGameProps {
   onBack?: () => void;
 }
 
+// ── Persistence helpers ──────────────────────────────────────────────────────
+const AV_BETS_KEY = 'b4bet_aviator_active_bets';
+
+interface AviatorSavedBets {
+  bet0: BetState;
+  bet1: BetState;
+  roundId: number;
+  savedAt: number;
+}
+
+function saveAviatorBets(bet0: BetState, bet1: BetState, roundId: number) {
+  try {
+    // Only save if at least one bet is placed
+    if (bet0.placed || bet1.placed || bet0.pendingNextRound || bet1.pendingNextRound || bet0.autoBetEnabled || bet1.autoBetEnabled) {
+      localStorage.setItem(AV_BETS_KEY, JSON.stringify({ bet0, bet1, roundId, savedAt: Date.now() }));
+    } else {
+      localStorage.removeItem(AV_BETS_KEY);
+    }
+  } catch { /* ignore */ }
+}
+
+function loadAviatorBets(): AviatorSavedBets | null {
+  try {
+    const raw = localStorage.getItem(AV_BETS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AviatorSavedBets;
+    // Only valid if saved less than 60 seconds ago (aviator rounds can be long)
+    if (Date.now() - parsed.savedAt > 60000) {
+      localStorage.removeItem(AV_BETS_KEY);
+      return null;
+    }
+    return parsed;
+  } catch { return null; }
+}
+
+function clearAviatorBets() {
+  try { localStorage.removeItem(AV_BETS_KEY); } catch { /* ignore */ }
+}
+
 // Fetch all bets for the current round from the server
 async function fetchRoundBets(roundUuid: string): Promise<BetRecord[]> {
   try {
@@ -68,8 +107,27 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   const { playCashOut } = useGameAudio(phase, soundOn, musicOn);
 
-  const [bet0, setBet0] = useState<BetState>(() => createInitialBet(1));
-  const [bet1, setBet1] = useState<BetState>(() => createInitialBet(1));
+  // Load persisted bets on mount
+  const [bet0, setBet0] = useState<BetState>(() => {
+    const saved = loadAviatorBets();
+    return saved?.bet0 ?? createInitialBet(1);
+  });
+  const [bet1, setBet1] = useState<BetState>(() => {
+    const saved = loadAviatorBets();
+    return saved?.bet1 ?? createInitialBet(1);
+  });
+
+  // Persist bets whenever they change
+  useEffect(() => {
+    saveAviatorBets(bet0, bet1, roundId);
+  }, [bet0, bet1, roundId]);
+
+  // Clear persisted bets when round crashes and no active bets remain
+  useEffect(() => {
+    if (phase === 'crashed' && !bet0.placed && !bet1.placed && !bet0.pendingNextRound && !bet1.pendingNextRound && !bet0.autoBetEnabled && !bet1.autoBetEnabled) {
+      clearAviatorBets();
+    }
+  }, [phase, bet0, bet1]);
 
   const [allBets, setAllBets] = useState<BetRecord[]>([]);
   const [myBets, setMyBets] = useState<BetRecord[]>([]);

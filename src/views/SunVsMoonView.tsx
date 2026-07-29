@@ -1,5 +1,7 @@
 /**
  * SunVsMoonView — server-side outcome version.
+ * FIX: Persist bet state (choice, placed, amount, round) to localStorage
+ * so navigating away mid-round and coming back shows the placed bet.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -23,6 +25,41 @@ const PAYOUTS: Record<BetChoice, number> = { sun: 1, moon: 1, tie: 8 };
 
 // Quick stake denominations
 const QUICK_STAKES = [100, 200, 500, 1000];
+
+// ── Persistence helpers ──────────────────────────────────────────────────────
+const SM_BET_KEY = 'b4bet_sunmoon_active_bet';
+
+interface SunMoonSavedBet {
+  roundNumber: number;
+  selectedChoice: BetChoice;
+  betAmount: number;
+  betPlaced: boolean;
+  savedAt: number;
+}
+
+function saveSunMoonBet(data: SunMoonSavedBet | null) {
+  try {
+    if (data && data.betPlaced) {
+      localStorage.setItem(SM_BET_KEY, JSON.stringify(data));
+    } else {
+      localStorage.removeItem(SM_BET_KEY);
+    }
+  } catch { /* ignore */ }
+}
+
+function loadSunMoonBet(): SunMoonSavedBet | null {
+  try {
+    const raw = localStorage.getItem(SM_BET_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SunMoonSavedBet;
+    // Only valid if saved less than 25 seconds ago (one full cycle + buffer)
+    if (Date.now() - parsed.savedAt > 25000) {
+      localStorage.removeItem(SM_BET_KEY);
+      return null;
+    }
+    return parsed;
+  } catch { return null; }
+}
 
 function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: number }) {
   const radius = 38;
@@ -75,11 +112,9 @@ function BetButton({
         borderColor:     selected ? glowColor : undefined,
         backgroundColor: selected ? `${glowColor}22` : undefined,
         boxShadow:       selected ? `0 0 18px 4px ${glowColor}55` : undefined,
-        // Prevent double-tap zoom delay on mobile
         touchAction: 'manipulation',
       }}
     >
-      {/* pointer-events-none on children ensures taps always reach the button */}
       <img src={imageSrc} alt={choice} className="w-14 h-14 object-contain drop-shadow-lg pointer-events-none" />
       <span className="text-[10px] text-slate-400 font-semibold pointer-events-none">{payout}</span>
     </button>
@@ -170,7 +205,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
   // ── Amount state ──
   const [betAmount, setBetAmount] = useState(limits.min > 0 ? limits.min : 100);
-  // Which quick-stake button was last pressed (tracks "same button" vs "different button")
   const [lastQuickStake, setLastQuickStake] = useState<number | null>(null);
 
   // ── Game state ──
@@ -201,6 +235,35 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
   useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
 
+  // ── Restore persisted bet on mount ──
+  useEffect(() => {
+    const saved = loadSunMoonBet();
+    if (saved) {
+      const currentRound = YEAR_PREFIX * 10 + sunMoonLoop.getState().roundId;
+      if (saved.roundNumber === currentRound && saved.betPlaced) {
+        setSelectedChoice(saved.selectedChoice);
+        setBetPlaced(true);
+        setBetAmount(saved.betAmount);
+      } else {
+        // Round changed, clear stale data
+        saveSunMoonBet(null);
+      }
+    }
+  }, []);
+
+  // ── Persist bet when placed ──
+  useEffect(() => {
+    if (betPlaced && selectedChoice) {
+      saveSunMoonBet({
+        roundNumber,
+        selectedChoice,
+        betAmount,
+        betPlaced: true,
+        savedAt: Date.now(),
+      });
+    }
+  }, [betPlaced, selectedChoice, betAmount, roundNumber]);
+
   useEffect(() => {
     const off = bus.on(EngineTopics.SunMoonState, (payload) => {
       const p = payload as { state: SunMoonState; history: BetChoice[] };
@@ -216,6 +279,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         setSelectedChoice(null);
         setBetPlaced(false);
         setLastQuickStake(null);
+        saveSunMoonBet(null);
       }
 
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
@@ -225,6 +289,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         const outcome = s.result;
 
         setHistory((prev) => [{ round: rn, result: outcome }, ...prev].slice(0, 20));
+        saveSunMoonBet(null); // Clear persisted bet after settlement
 
         if (sb !== null && placed) {
           const stake = betAmountRef.current;
@@ -260,7 +325,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     return off;
   }, []);
 
-  // Always SET (never toggle off) — allows changing choice after first click
   const handleSelectChoice = useCallback((choice: BetChoice) => {
     if (betPlaced) return;
     setSelectedChoice(choice);
@@ -282,28 +346,15 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       bus.emit(Topics.InsufficientBalance);
       return;
     }
-    // FIX: Use debitLocalOnly to only update local UI immediately.
-    // The server will handle the actual Supabase balance deduction in sunMoonSettle.
-    // Previously store.debit() was used which also updated Supabase, causing double deduction.
     store.debitLocalOnly(stake);
     setBetPlaced(true);
   }, [phase, betPlaced, selectedChoice, balance, limits]);
 
-  /**
-   * Quick stake logic:
-   * - Click 100        → SET amount to 100
-   * - Click 100 again  → ADD 100  → amount 200
-   * - Click 100 again  → ADD 100  → amount 300
-   * - Click 200        → SET amount to 200  (different button resets)
-   * - Click 200 again  → ADD 200  → amount 400
-   */
   const handleQuickStake = (amount: number) => {
     if (betPlaced) return;
     if (lastQuickStake === amount) {
-      // Same button again → add
       setBetAmount((prev) => Math.min(prev + amount, balance));
     } else {
-      // Different button → set
       setBetAmount(Math.min(amount, balance));
       setLastQuickStake(amount);
     }
@@ -316,7 +367,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     setLastQuickStake(null);
   };
 
-  // − clamps at limits.min, never goes below
   const decreaseAmount = () => {
     setBetAmount((prev) => Math.max(limits.min, Math.round(prev - 50)));
     setLastQuickStake(null);
@@ -429,7 +479,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                           : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-neon-400/50 hover:text-neon-300',
                       ].join(' ')}
                     >
-                      {/* Show +label when already active (i.e. next click will add) */}
                       {isActive ? `+${label}` : label}
                     </button>
                   );
