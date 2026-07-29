@@ -1,2 +1,1 @@
-// This file was used as a temporary patch and is now empty. Can be deleted.
-export {};
+export interface EmailTemplates { welcome: string; depositSuccess: string; withdrawalStatus: string; forgotPassword: string; }
