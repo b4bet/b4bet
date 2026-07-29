@@ -93,8 +93,8 @@ export default function BanSectionTab() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  // ── Auto-ban toggle ──────────────────────────────────────────────────────
-  const [autoBanEnabled, setAutoBanEnabled] = useState(true);
+  // ── Auto-ban toggle (default OFF — admin/staff manually ban from IP tracker) ──
+  const [autoBanEnabled, setAutoBanEnabled] = useState(false);
   const [autoBanLoading, setAutoBanLoading] = useState(true);
 
   // ── Support email ────────────────────────────────────────────────────────
@@ -293,6 +293,8 @@ export default function BanSectionTab() {
             <p className="text-sm font-semibold text-white">Auto-Ban Duplicate IP</p>
             <p className="text-[11px] text-slate-500 mt-0.5">
               Automatically ban new accounts that sign up from an IP already linked to another account.
+              <br />
+              <span className="text-amberx-400">Default: OFF</span> — IPs are tracked in IP Tracker tab, admin/staff will manually ban.
             </p>
           </div>
           <button
@@ -455,6 +457,8 @@ export default function BanSectionTab() {
         <div className="panel p-4 space-y-3">
           <p className="text-[11px] text-slate-500">
             IPs with <span className="text-white font-semibold">2+ accounts</span> — username, email, phone, account ID, signup date per account.
+            <br />
+            <span className="text-amberx-300 font-semibold">Note:</span> Auto-ban is OFF. Use the Ban button here to manually ban suspicious accounts.
           </p>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
