@@ -94,10 +94,63 @@ const defaultBanners: BannerSlide[] = [
 ];
 const defaultDepositHtml = `<div style="font-family:Inter,sans-serif;padding:16px;background:#0f1225;color:#fff;border-radius:14px"><h2 style="margin:0 0 8px;color:#00ff88">Manual UPI Deposit</h2><p style="margin:0 0 8px">1. Scan the UPI QR above with any UPI app.</p><p style="margin:0 0 8px">2. Pay the exact amount you entered.</p><p style="margin:0">3. Submit the UTR / Transaction ID below for credit.</p></div>`;
 const defaultUpiQr = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="white"/><g fill="black"><rect x="10" y="10" width="60" height="60"/><rect x="20" y="20" width="40" height="40" fill="white"/><rect x="30" y="30" width="20" height="20"/><rect x="130" y="10" width="60" height="60"/><rect x="140" y="20" width="40" height="40" fill="white"/><rect x="150" y="30" width="20" height="20"/><rect x="10" y="130" width="60" height="60"/><rect x="20" y="140" width="40" height="40" fill="white"/><rect x="30" y="150" width="20" height="20"/><rect x="90" y="90" width="20" height="20"/><rect x="120" y="120" width="10" height="10"/><rect x="140" y="100" width="10" height="10"/></g></svg>');
+
+// ---- Default Email Templates (updated: both show Successful clearly) ----
 const defaultEmails: EmailTemplates = {
   welcome: '<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:24px;border-radius:12px"><h1 style="margin:0 0 16px;color:#00ff88;font-size:28px">Welcome to B4BeT, {{username}}!</h1><p style="margin:0 0 12px;font-size:16px">Your account is now live and ready to play.</p><p style="margin:0 0 12px;font-size:14px">Enjoy our exclusive games, live betting, and amazing rewards.</p><p style="margin:0;font-size:14px;color:#a0aec0">Start playing now and claim your welcome bonus on your first deposit!</p></div>',
-  depositSuccess: '<div style="font-family:Inter,sans-serif;padding:24px;background:#0a0f1c;color:#fff;border-radius:12px"><h2 style="color:#00ff88">Deposit {{status}}</h2><p>Hi {{username}}, your deposit of <strong>{{amount}}</strong> is <strong>{{status}}</strong>.</p><p>New balance: <strong>{{balance}}</strong></p><p style="color:#a0aec0;font-size:12px">Transaction ID: {{txn_id}}</p></div>',
-  withdrawalStatus: '<div style="font-family:Inter,sans-serif;padding:24px;background:#0a0f1c;color:#fff;border-radius:12px"><h2 style="color:#ff5a5a">Withdrawal {{status}}</h2><p>Hi {{username}}, your withdrawal of <strong>{{amount}}</strong> is now <strong>{{status}}</strong>.</p><p style="color:#a0aec0;font-size:12px">Transaction ID: {{txn_id}}</p></div>',
+
+  depositSuccess: `<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:0;border-radius:12px;overflow:hidden;max-width:520px">
+  <div style="background:linear-gradient(135deg,#00c97a,#00ff88);padding:28px 24px;text-align:center">
+    <div style="font-size:48px;margin-bottom:8px">✅</div>
+    <h1 style="margin:0;font-size:26px;font-weight:800;color:#0a0f1c;letter-spacing:-0.5px">Deposit Successful!</h1>
+    <p style="margin:6px 0 0;font-size:14px;color:#065f46">Your payment has been received and credited.</p>
+  </div>
+  <div style="padding:24px">
+    <p style="margin:0 0 16px;font-size:15px">Hi <strong>{{username}}</strong>,</p>
+    <p style="margin:0 0 16px;font-size:15px">Your deposit of <strong style="color:#00ff88;font-size:18px">{{amount}}</strong> has been <strong>successfully</strong> added to your B4BeT wallet.</p>
+    <div style="background:#151d35;border-radius:10px;padding:16px;margin:0 0 16px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span style="color:#a0aec0;font-size:13px">Amount Deposited</span>
+        <span style="color:#00ff88;font-weight:700">{{amount}}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span style="color:#a0aec0;font-size:13px">New Balance</span>
+        <span style="color:#fff;font-weight:700">{{balance}}</span>
+      </div>
+      <div style="border-top:1px solid #2d3748;padding-top:8px;margin-top:4px">
+        <span style="color:#718096;font-size:12px">Transaction ID: {{txn_id}}</span>
+      </div>
+    </div>
+    <p style="margin:0;font-size:13px;color:#718096;text-align:center">Thank you for choosing B4BeT. Good luck! 🎰</p>
+  </div>
+</div>`,
+
+  withdrawalStatus: `<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:0;border-radius:12px;overflow:hidden;max-width:520px">
+  <div style="background:linear-gradient(135deg,#00c97a,#00ff88);padding:28px 24px;text-align:center">
+    <div style="font-size:48px;margin-bottom:8px">💸</div>
+    <h1 style="margin:0;font-size:26px;font-weight:800;color:#0a0f1c;letter-spacing:-0.5px">Withdrawal Successful!</h1>
+    <p style="margin:6px 0 0;font-size:14px;color:#065f46">Your payout has been processed successfully.</p>
+  </div>
+  <div style="padding:24px">
+    <p style="margin:0 0 16px;font-size:15px">Hi <strong>{{username}}</strong>,</p>
+    <p style="margin:0 0 16px;font-size:15px">Your withdrawal of <strong style="color:#00ff88;font-size:18px">{{amount}}</strong> has been <strong>successfully</strong> processed and sent to your account.</p>
+    <div style="background:#151d35;border-radius:10px;padding:16px;margin:0 0 16px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span style="color:#a0aec0;font-size:13px">Amount Withdrawn</span>
+        <span style="color:#00ff88;font-weight:700">{{amount}}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+        <span style="color:#a0aec0;font-size:13px">Status</span>
+        <span style="color:#00ff88;font-weight:700">✓ Successful</span>
+      </div>
+      <div style="border-top:1px solid #2d3748;padding-top:8px;margin-top:4px">
+        <span style="color:#718096;font-size:12px">Transaction ID: {{txn_id}}</span>
+      </div>
+    </div>
+    <p style="margin:0;font-size:13px;color:#718096;text-align:center">Funds typically arrive within 1–24 hours depending on your bank.</p>
+  </div>
+</div>`,
+
   forgotPassword: '<div style="font-family:Inter,sans-serif;padding:24px;background:#0a0f1c;color:#fff;border-radius:12px"><h2 style="color:#00ff88">Password Reset Request</h2><p>Hi {{username}},</p><p>Aapne password reset request ki hai. Neeche diye link par click karein:</p><p><a href="{{reset_link}}" style="background:#00ff88;color:#000;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;margin:8px 0">Reset Password</a></p><p style="color:#a0aec0;font-size:12px">Yeh link {{expiry}} me expire ho jayega.</p><p style="color:#a0aec0;font-size:12px">Agar aapne yeh request nahi ki toh ignore karein. Request IP: {{ip_address}}</p></div>',
 };
 
