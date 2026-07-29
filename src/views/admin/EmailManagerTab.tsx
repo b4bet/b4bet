@@ -82,21 +82,17 @@ export default function EmailManagerTab() {
     setSaving(true);
     setSaveError(null);
     try {
-      // Update in-memory + emit
+      // Update in-memory CMS state
       cms.setEmailTemplate(active, html);
 
-      // Also direct-upsert to settings table as reliable fallback
+      // Persist to Supabase settings table
       const updatedTemplates = { ...cms.emailTemplates };
       const { error } = await supabase
         .from('settings')
         .upsert({ key: 'email_templates', value: updatedTemplates }, { onConflict: 'key' });
 
       if (error) {
-        // RPC path as secondary fallback
-        await supabase.rpc('admin_update_setting', {
-          p_key: 'email_templates',
-          p_value: updatedTemplates as unknown as string,
-        });
+        throw new Error(error.message);
       }
 
       cms.toast({ title: 'Template saved', body: `${current.label} saved successfully.`, kind: 'success' });
