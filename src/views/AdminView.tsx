@@ -5,7 +5,7 @@ import {
   CreditCard, FileText, Image, Gift, Settings, History,
   ShieldBan, MessageSquare, Zap, BarChart2, LogOut, Menu, X,
   KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown, Link2, Share2,
-  Wrench,
+  Wrench, Activity,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -46,11 +46,12 @@ import AffiliatesTab from './admin/AffiliatesTab';
 import TopRankingsTab from './admin/TopRankingsTab';
 import SocialLinksTab from './admin/SocialLinksTab';
 import MaintenanceTab from './admin/MaintenanceTab';
+import StatsSettingsTab from './admin/StatsSettingsTab';
 
 // Tab keys — some map to PermissionKey directly, others are routed via TAB_PERM_MAP below
 type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager'
   | 'manageProfile' | 'handlers' | 'topRankings' | 'balanceHistory'
-  | 'signupBonus' | 'dashboard' | 'socialLinks' | 'maintenance';
+  | 'signupBonus' | 'dashboard' | 'socialLinks' | 'maintenance' | 'homeStats';
 
 type GameHandlerKey = 'crash' | 'sunvsmoon' | 'aviator';
 type FloatToast = { id: number; message: string; icon: 'deposit' | 'withdrawal' | 'support' };
@@ -71,6 +72,7 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'history', label: 'History', icon: History },
   { key: 'balanceHistory', label: 'Balance History', icon: BarChart2 },
   { key: 'topRankings', label: 'Top Rankings', icon: Trophy },
+  { key: 'homeStats', label: 'Home Stats', icon: Activity },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'notificationManager', label: 'Notif. Manager', icon: Bell },
   { key: 'marketing', label: 'Marketing', icon: Megaphone },
@@ -101,6 +103,7 @@ const TAB_PERM_MAP: Partial<Record<string, PermissionKey>> = {
   signupBonus: 'marketing',
   socialLinks: 'marketing',
   maintenance: 'banner',
+  homeStats: 'algos',
 };
 
 const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.Element }[] = [
@@ -336,6 +339,7 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
       case 'history': return <HistoryTab />;
       case 'balanceHistory': return <BalanceHistoryTab />;
       case 'topRankings': return <TopRankingsTab />;
+      case 'homeStats': return <StatsSettingsTab />;
       case 'notifications': return <NotificationsTab />;
       case 'notificationManager': return <NotificationManagerTab />;
       case 'marketing': return <MarketingTab />;
