@@ -2,7 +2,7 @@
 // Supports sending by email address (to) or by userId (server resolves email securely)
 import { supabase } from '@/integrations/supabase/client';
 
-type EmailType = 'welcome' | 'depositSuccess' | 'withdrawalStatus';
+type EmailType = 'welcome' | 'depositSuccess' | 'withdrawalStatus' | 'forgotPassword';
 
 async function sendEmail(
   type: EmailType,
@@ -43,6 +43,7 @@ export const emailService = {
   sendWelcome(to: string, username: string): void {
     void sendEmail('welcome', { to }, {
       username,
+      site_name: 'B4BeT',
       date: new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }),
     });
   },
@@ -51,13 +52,30 @@ export const emailService = {
   sendDepositEmail(userId: string, username: string, amount: string, balance: string, txnId: string, status = 'approved'): void {
     void sendEmail('depositSuccess', { userId }, {
       username, amount, balance, txn_id: txnId, status,
+      date: new Date().toLocaleString('en-IN'),
     });
   },
 
   /** Send withdrawal status email. Looks up email server-side from userId */
-  sendWithdrawalEmail(userId: string, username: string, amount: string, status: string, txnId: string): void {
+  sendWithdrawalEmail(userId: string, username: string, amount: string, status: string, txnId: string, utr?: string, destination?: string): void {
     void sendEmail('withdrawalStatus', { userId }, {
       username, amount, status, txn_id: txnId,
+      utr: utr ?? '',
+      destination: destination ?? '',
+      date: new Date().toLocaleString('en-IN'),
+    });
+  },
+
+  /** Send forgot password / reset link email */
+  sendForgotPassword(to: string, username: string, resetLink: string, otp?: string, ipAddress?: string): void {
+    void sendEmail('forgotPassword', { to }, {
+      username,
+      reset_link: resetLink,
+      otp: otp ?? '',
+      expiry: '30 minutes',
+      site_name: 'B4BeT',
+      ip_address: ipAddress ?? '',
+      date: new Date().toLocaleString('en-IN'),
     });
   },
 };
