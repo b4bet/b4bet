@@ -316,9 +316,9 @@ export default function MinesView() {
   const isDisabled = loading;
 
   return (
-    <div className="space-y-4 animate-fade-in px-3">
-      {/* Header with admin logo + balance */}
-      <div className="flex items-center justify-between pt-4">
+    <div className="flex flex-col min-h-screen animate-fade-in">
+      {/* Sticky Header with admin logo + balance */}
+      <div className="sticky top-0 z-10 bg-midnight-950 flex items-center justify-between px-3 pt-4 pb-2">
         <div className="flex items-center gap-2">
           {gameLogos['mines'] ? (
             <img src={gameLogos['mines']} alt="Mines" className="w-9 h-9 object-contain rounded-xl" />
@@ -335,104 +335,107 @@ export default function MinesView() {
         </div>
       </div>
 
-      {/* Grid */}
-      <div className="panel p-3 sm:p-4">
-        <div className="grid grid-cols-5 gap-2 sm:gap-2.5">
-          {Array.from({ length: 25 }, (_, i) => (
-            <Cell key={i} index={i} grid={game.grid} revealed={game.revealed} active={game.active && !isDisabled} onReveal={reveal} />
-          ))}
-        </div>
-      </div>
-
-      {/* Controls */}
-      <div className="panel p-3 sm:p-4">
-        <div className="grid grid-cols-2 gap-3 mb-3">
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Stake</label>
-            <div className="relative mt-1">
-              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-bold text-sm">{store.currency}</span>
-              <input type="number" value={stakeStr} onChange={(e) => setStakeStr(e.target.value)} disabled={game.active} min={1} className="input text-center tabular" />
-            </div>
-          </div>
-          <div>
-            <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Mines</label>
-            <div className="relative mt-1">
-              <Flag className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-              <input
-                type="number"
-                value={minesInput || ''}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === '') setMinesInput(0);
-                  else { const num = parseInt(val); if (!isNaN(num)) setMinesInput(Math.max(1, Math.min(24, num))); }
-                }}
-                onBlur={() => { if (!minesInput) setMinesInput(1); }}
-                disabled={game.active} min={1} max={24} placeholder="1" className="input text-center tabular"
-              />
-            </div>
+      {/* Scrollable content */}
+      <div className="flex-1 space-y-4 px-3 pb-4">
+        {/* Grid */}
+        <div className="panel p-3 sm:p-4">
+          <div className="grid grid-cols-5 gap-2 sm:gap-2.5">
+            {Array.from({ length: 25 }, (_, i) => (
+              <Cell key={i} index={i} grid={game.grid} revealed={game.revealed} active={game.active && !isDisabled} onReveal={reveal} />
+            ))}
           </div>
         </div>
 
-        {/* Quick stake chips */}
-        <div className="flex gap-2 mb-3">
-          {quickStakes.map((v) => {
-            const label = v >= 1000 ? `${v / 1000}K` : String(v);
-            return (
-              <button
-                key={v}
-                type="button"
-                disabled={game.active}
-                onClick={() => setStakeStr(String(v))}
-                className="flex-1 py-1.5 rounded-lg text-xs font-bold border border-borderline-800 bg-slatepanel-800 text-slate-300 active:scale-95 transition-transform disabled:opacity-40"
-              >
-                {label}
+        {/* Controls */}
+        <div className="panel p-3 sm:p-4">
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Stake</label>
+              <div className="relative mt-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-bold text-sm">{store.currency}</span>
+                <input type="number" value={stakeStr} onChange={(e) => setStakeStr(e.target.value)} disabled={game.active} min={1} className="input text-center tabular" />
+              </div>
+            </div>
+            <div>
+              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Mines</label>
+              <div className="relative mt-1">
+                <Flag className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input
+                  type="number"
+                  value={minesInput || ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '') setMinesInput(0);
+                    else { const num = parseInt(val); if (!isNaN(num)) setMinesInput(Math.max(1, Math.min(24, num))); }
+                  }}
+                  onBlur={() => { if (!minesInput) setMinesInput(1); }}
+                  disabled={game.active} min={1} max={24} placeholder="1" className="input text-center tabular"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Quick stake chips */}
+          <div className="flex gap-2 mb-3">
+            {quickStakes.map((v) => {
+              const label = v >= 1000 ? `${v / 1000}K` : String(v);
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  disabled={game.active}
+                  onClick={() => setStakeStr(String(v))}
+                  className="flex-1 py-1.5 rounded-lg text-xs font-bold border border-borderline-800 bg-slatepanel-800 text-slate-300 active:scale-95 transition-transform disabled:opacity-40"
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-between mb-3 px-1">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Current</p>
+              <p className="tabular font-display font-extrabold text-2xl text-emeraldwin-400">{game.currentMultiplier.toFixed(2)}x</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Next Gem</p>
+              <p className="tabular font-bold text-lg text-neon-300">{game.nextMultiplier.toFixed(2)}x</p>
+            </div>
+            <div className="text-right">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Gems</p>
+              <p className="tabular font-bold text-lg text-white">{game.gemsFound}</p>
+            </div>
+          </div>
+
+          {!game.active ? (
+            <button onClick={() => { void start(); }} disabled={isDisabled} className="btn-primary w-full py-3">
+              <Play className="w-4 h-4" /> {loading ? 'Starting…' : 'Start Round'}
+            </button>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => { void cashout(); }} disabled={game.gemsFound === 0 || game.busted || game.cashedOut || isDisabled} className="btn-emerald py-3">
+                <HandCoins className="w-4 h-4" />
+                Cash Out {store.currency}{game.gemsFound > 0 ? (game.stake * game.currentMultiplier).toFixed(2) : '0.00'}
               </button>
-            );
-          })}
+              <button
+                disabled={game.busted || game.cashedOut}
+                className={`py-3 justify-center text-sm font-semibold rounded-xl border transition-colors ${
+                  game.busted ? 'btn-ghost text-slate-400' : game.cashedOut ? 'btn-ghost text-slate-400' : 'bg-neon-500/15 border-neon-500/40 text-neon-300'
+                }`}
+              >
+                {game.busted ? 'Round lost' : game.cashedOut ? 'Cashed out' : loading ? 'Checking…' : 'Pick a tile'}
+              </button>
+            </div>
+          )}
         </div>
 
-        <div className="flex items-center justify-between mb-3 px-1">
-          <div>
-            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Current</p>
-            <p className="tabular font-display font-extrabold text-2xl text-emeraldwin-400">{game.currentMultiplier.toFixed(2)}x</p>
-          </div>
-          <div className="text-right">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Next Gem</p>
-            <p className="tabular font-bold text-lg text-neon-300">{game.nextMultiplier.toFixed(2)}x</p>
-          </div>
-          <div className="text-right">
-            <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Gems</p>
-            <p className="tabular font-bold text-lg text-white">{game.gemsFound}</p>
-          </div>
-        </div>
+        <p className="text-[11px] text-slate-600 text-center px-4">
+          Reveal gems to grow your multiplier. Hit a mine and you lose your stake. Cash out anytime to lock in winnings.
+        </p>
 
-        {!game.active ? (
-          <button onClick={() => { void start(); }} disabled={isDisabled} className="btn-primary w-full py-3">
-            <Play className="w-4 h-4" /> {loading ? 'Starting…' : 'Start Round'}
-          </button>
-        ) : (
-          <div className="grid grid-cols-2 gap-2">
-            <button onClick={() => { void cashout(); }} disabled={game.gemsFound === 0 || game.busted || game.cashedOut || isDisabled} className="btn-emerald py-3">
-              <HandCoins className="w-4 h-4" />
-              Cash Out {store.currency}{game.gemsFound > 0 ? (game.stake * game.currentMultiplier).toFixed(2) : '0.00'}
-            </button>
-            <button
-              disabled={game.busted || game.cashedOut}
-              className={`py-3 justify-center text-sm font-semibold rounded-xl border transition-colors ${
-                game.busted ? 'btn-ghost text-slate-400' : game.cashedOut ? 'btn-ghost text-slate-400' : 'bg-neon-500/15 border-neon-500/40 text-neon-300'
-              }`}
-            >
-              {game.busted ? 'Round lost' : game.cashedOut ? 'Cashed out' : loading ? 'Checking…' : 'Pick a tile'}
-            </button>
-          </div>
-        )}
+        <MinesHistoryPanel rows={myHistory} loading={histLoading} error={histError} onRefresh={refreshHistory} />
       </div>
-
-      <p className="text-[11px] text-slate-600 text-center px-4">
-        Reveal gems to grow your multiplier. Hit a mine and you lose your stake. Cash out anytime to lock in winnings.
-      </p>
-
-      <MinesHistoryPanel rows={myHistory} loading={histLoading} error={histError} onRefresh={refreshHistory} />
     </div>
   );
 }
