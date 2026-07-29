@@ -325,8 +325,11 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     return off;
   }, []);
 
+  // FIX: Allow selecting a new choice only when bet is NOT yet placed for this round.
+  // Once bet is placed, selection is locked. On new round betPlaced resets to false,
+  // allowing a fresh selection again.
   const handleSelectChoice = useCallback((choice: BetChoice) => {
-    if (betPlaced) return;
+    if (betPlaced) return; // locked after placing bet
     setSelectedChoice(choice);
   }, [betPlaced]);
 
@@ -380,189 +383,195 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const canSelectChoice = phase === 'betting' && !betPlaced;
 
   return (
-    <div className="relative space-y-4 animate-fade-in px-3">
+    <div className="flex flex-col min-h-screen animate-fade-in">
 
-      {/* ── Header ── */}
-      <div className="flex items-center justify-between mt-2 mb-1">
-        <div className="flex items-center gap-2">
-          {onBack && (
-            <button onClick={onBack} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/40 transition-colors">
-              <ArrowLeft className="w-4 h-4 text-slate-300" />
-            </button>
-          )}
-          {gameLogos["sunvsmoon"] ? (
-            <img src={gameLogos["sunvsmoon"]} alt="Sun vs Moon" className="w-10 h-10 rounded-full object-cover flex-shrink-0 ring-2 ring-yellow-500/30" />
-          ) : (
-            <img src="/eclipse.png" alt="Sun vs Moon" className="w-10 h-10 rounded-full object-contain flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = '/sun.png'; }} />
-          )}
-          <div>
-            <p className="text-sm font-black text-white leading-none">Sun vs Moon</p>
-            <p className="text-[9px] text-slate-400 mt-0.5">Round #{roundNumber}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-slatepanel-800 border border-borderline-900">
-          <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
-            {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
-          </span>
-        </div>
-      </div>
-
-      {/* ── Game card ── */}
-      <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden min-h-[420px]">
-
-        <ResultOverlay
-          visible={phase === 'revealed'}
-          result={result}
-          won={lastWon}
-          payout={lastPayout}
-          choice={betPlaced ? selectedChoice : null}
-        />
-
-        <div className="p-4 space-y-4">
-
-          {/* Timer */}
-          <div className="flex flex-col items-center gap-2">
-            {phase === 'betting' ? (
-              <TimerCircle secondsLeft={secondsLeft} total={BETTING_DURATION} />
-            ) : phase === 'processing' ? (
-              <div className="py-6 flex flex-col items-center gap-3">
-                <div className="w-12 h-12 border-4 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-                <p className="text-sm font-bold text-amber-300">{settling ? 'Settling…' : 'Processing result…'}</p>
-              </div>
-            ) : null}
-          </div>
-
-          {/* 1. Choice buttons */}
-          {phase !== 'processing' && (
-            <div className="flex items-stretch gap-2">
-              <BetButton choice="sun"  payout="1:1" imageSrc="/sun.png"     glowColor="#FFB627" selected={selectedChoice === 'sun'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
-              <BetButton choice="tie"  payout="8:1" imageSrc="/eclipse.png" glowColor="#F59E0B" selected={selectedChoice === 'tie'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
-              <BetButton choice="moon" payout="1:1" imageSrc="/moon.png"    glowColor="#818CF8" selected={selectedChoice === 'moon'} disabled={!canSelectChoice} onSelect={handleSelectChoice} />
-            </div>
-          )}
-
-          {/* 2. Amount controls */}
-          {phase === 'betting' && !betPlaced && (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-[10px] text-slate-400 uppercase tracking-widest">Bet Amount</p>
-                <div className="flex gap-2">
-                  <span className="text-[9px] text-slate-500">Min: <span className="text-slate-400 font-semibold">₹{limits.min}</span></span>
-                  <span className="text-[9px] text-slate-500">Max: <span className="text-slate-400 font-semibold">₹{limits.max.toLocaleString()}</span></span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button onClick={decreaseAmount} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">−</button>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={String(betAmount)}
-                  onChange={(e) => handleAmountInput(e.target.value)}
-                  className="flex-1 bg-slatepanel-800 border border-borderline-900 rounded-xl px-3 py-2 text-center text-white font-bold text-sm focus:outline-none focus:border-neon-400/60"
-                />
-                <button onClick={increaseAmount} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">+</button>
-              </div>
-
-              {/* Quick stake buttons */}
-              <div className="flex gap-2">
-                {QUICK_STAKES.map((s) => {
-                  const isActive = lastQuickStake === s;
-                  const label = s >= 1000 ? `${s / 1000}K` : String(s);
-                  return (
-                    <button
-                      key={s}
-                      onClick={() => handleQuickStake(s)}
-                      className={[
-                        'flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors active:scale-95',
-                        isActive
-                          ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
-                          : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-neon-400/50 hover:text-neon-300',
-                      ].join(' ')}
-                    >
-                      {isActive ? `+${label}` : label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* PLACE BET */}
-          {phase === 'betting' && !betPlaced && (
-            <button
-              onClick={handlePlaceBet}
-              disabled={!canPlaceBet}
-              className={[
-                'w-full py-3.5 rounded-2xl font-black text-sm tracking-wide transition-all active:scale-[0.97]',
-                canPlaceBet
-                  ? 'bg-gradient-to-r from-amber-500 to-yellow-400 text-black shadow-lg shadow-amber-500/30 hover:brightness-110 cursor-pointer'
-                  : 'bg-slatepanel-800 border border-borderline-900 text-slate-500 cursor-not-allowed opacity-60',
-              ].join(' ')}
-            >
-              {selectedChoice === null
-                ? 'Select SUN / ECLIPSE / MOON first'
-                : betAmount < limits.min
-                  ? `Min bet is ₹${limits.min}`
-                  : `PLACE BET — ₹${betAmount.toLocaleString()}`}
-            </button>
-          )}
-
-          {/* Bet placed bar */}
-          {phase === 'betting' && betPlaced && (
-            <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
-              <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
-              <p className="text-xs font-bold text-amber-300">
-                ₹{betAmount.toLocaleString()} on {selectedChoice === 'tie' ? 'ECLIPSE' : selectedChoice?.toUpperCase()} — waiting for result
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ── History ── */}
-      <div className="rounded-2xl bg-slatepanel-900 border border-borderline-900 p-4 space-y-4">
-        <div className="flex gap-1 bg-slatepanel-800/60 rounded-xl p-1">
-          {(['rounds', 'my'] as const).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setHistoryTab(tab)}
-              className={[
-                'flex-1 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wide transition-colors',
-                historyTab === tab ? 'bg-slatepanel-700 text-white' : 'text-slate-500 hover:text-slate-300',
-              ].join(' ')}
-            >
-              {tab === 'rounds' ? 'Round History' : 'My Bets'}
-            </button>
-          ))}
-        </div>
-
-        {historyTab === 'rounds' && <HistoryStrip history={history} />}
-
-        {historyTab === 'my' && (
-          <div className="space-y-2">
-            {myBets.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-4">Place a bet to see your history here</p>
+      {/* ── Sticky Header ── */}
+      <div className="sticky top-0 z-10 bg-midnight-950 px-3 pt-3 pb-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {onBack && (
+              <button onClick={onBack} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/40 transition-colors">
+                <ArrowLeft className="w-4 h-4 text-slate-300" />
+              </button>
+            )}
+            {gameLogos["sunvsmoon"] ? (
+              <img src={gameLogos["sunvsmoon"]} alt="Sun vs Moon" className="w-10 h-10 rounded-full object-cover flex-shrink-0 ring-2 ring-yellow-500/30" />
             ) : (
-              myBets.map((b) => (
-                <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
-                  <img src={`/${b.result}.png`} alt={b.result} className="w-8 h-8 object-contain flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold text-white">#{b.round}</p>
-                    <p className="text-[10px] text-slate-400">
-                      Bet {b.bet === 'tie' ? 'ECLIPSE' : b.bet.toUpperCase()} · Result {b.result === 'tie' ? 'ECLIPSE' : b.result.toUpperCase()}
-                    </p>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className={`text-sm font-black ${b.win > 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
-                      {b.win > 0 ? `+₹${b.win.toLocaleString()}` : `-₹${b.stake.toLocaleString()}`}
-                    </p>
-                    <p className="text-[9px] text-slate-500">Stake ₹{b.stake.toLocaleString()}</p>
+              <img src="/eclipse.png" alt="Sun vs Moon" className="w-10 h-10 rounded-full object-contain flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).src = '/sun.png'; }} />
+            )}
+            <div>
+              <p className="text-sm font-black text-white leading-none">Sun vs Moon</p>
+              <p className="text-[9px] text-slate-400 mt-0.5">Round #{roundNumber}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-slatepanel-800 border border-borderline-900">
+            <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
+              {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Scrollable content ── */}
+      <div className="flex-1 space-y-4 px-3 pb-4">
+
+        {/* ── Game card ── */}
+        <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden min-h-[420px]">
+
+          <ResultOverlay
+            visible={phase === 'revealed'}
+            result={result}
+            won={lastWon}
+            payout={lastPayout}
+            choice={betPlaced ? selectedChoice : null}
+          />
+
+          <div className="p-4 space-y-4">
+
+            {/* Timer */}
+            <div className="flex flex-col items-center gap-2">
+              {phase === 'betting' ? (
+                <TimerCircle secondsLeft={secondsLeft} total={BETTING_DURATION} />
+              ) : phase === 'processing' ? (
+                <div className="py-6 flex flex-col items-center gap-3">
+                  <div className="w-12 h-12 border-4 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
+                  <p className="text-sm font-bold text-amber-300">{settling ? 'Settling…' : 'Processing result…'}</p>
+                </div>
+              ) : null}
+            </div>
+
+            {/* 1. Choice buttons */}
+            {phase !== 'processing' && (
+              <div className="flex items-stretch gap-2">
+                <BetButton choice="sun"  payout="1:1" imageSrc="/sun.png"     glowColor="#FFB627" selected={selectedChoice === 'sun'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
+                <BetButton choice="tie"  payout="8:1" imageSrc="/eclipse.png" glowColor="#F59E0B" selected={selectedChoice === 'tie'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
+                <BetButton choice="moon" payout="1:1" imageSrc="/moon.png"    glowColor="#818CF8" selected={selectedChoice === 'moon'} disabled={!canSelectChoice} onSelect={handleSelectChoice} />
+              </div>
+            )}
+
+            {/* 2. Amount controls */}
+            {phase === 'betting' && !betPlaced && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] text-slate-400 uppercase tracking-widest">Bet Amount</p>
+                  <div className="flex gap-2">
+                    <span className="text-[9px] text-slate-500">Min: <span className="text-slate-400 font-semibold">₹{limits.min}</span></span>
+                    <span className="text-[9px] text-slate-500">Max: <span className="text-slate-400 font-semibold">₹{limits.max.toLocaleString()}</span></span>
                   </div>
                 </div>
-              ))
+                <div className="flex items-center gap-2">
+                  <button onClick={decreaseAmount} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">−</button>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={String(betAmount)}
+                    onChange={(e) => handleAmountInput(e.target.value)}
+                    className="flex-1 bg-slatepanel-800 border border-borderline-900 rounded-xl px-3 py-2 text-center text-white font-bold text-sm focus:outline-none focus:border-neon-400/60"
+                  />
+                  <button onClick={increaseAmount} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">+</button>
+                </div>
+
+                {/* Quick stake buttons */}
+                <div className="flex gap-2">
+                  {QUICK_STAKES.map((s) => {
+                    const isActive = lastQuickStake === s;
+                    const label = s >= 1000 ? `${s / 1000}K` : String(s);
+                    return (
+                      <button
+                        key={s}
+                        onClick={() => handleQuickStake(s)}
+                        className={[
+                          'flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors active:scale-95',
+                          isActive
+                            ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                            : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-neon-400/50 hover:text-neon-300',
+                        ].join(' ')}
+                      >
+                        {isActive ? `+${label}` : label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* PLACE BET */}
+            {phase === 'betting' && !betPlaced && (
+              <button
+                onClick={handlePlaceBet}
+                disabled={!canPlaceBet}
+                className={[
+                  'w-full py-3.5 rounded-2xl font-black text-sm tracking-wide transition-all active:scale-[0.97]',
+                  canPlaceBet
+                    ? 'bg-gradient-to-r from-amber-500 to-yellow-400 text-black shadow-lg shadow-amber-500/30 hover:brightness-110 cursor-pointer'
+                    : 'bg-slatepanel-800 border border-borderline-900 text-slate-500 cursor-not-allowed opacity-60',
+                ].join(' ')}
+              >
+                {selectedChoice === null
+                  ? 'Select SUN / ECLIPSE / MOON first'
+                  : betAmount < limits.min
+                    ? `Min bet is ₹${limits.min}`
+                    : `PLACE BET — ₹${betAmount.toLocaleString()}`}
+              </button>
+            )}
+
+            {/* Bet placed bar */}
+            {phase === 'betting' && betPlaced && (
+              <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
+                <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+                <p className="text-xs font-bold text-amber-300">
+                  ₹{betAmount.toLocaleString()} on {selectedChoice === 'tie' ? 'ECLIPSE' : selectedChoice?.toUpperCase()} — waiting for result
+                </p>
+              </div>
             )}
           </div>
-        )}
+        </div>
+
+        {/* ── History ── */}
+        <div className="rounded-2xl bg-slatepanel-900 border border-borderline-900 p-4 space-y-4">
+          <div className="flex gap-1 bg-slatepanel-800/60 rounded-xl p-1">
+            {(['rounds', 'my'] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => setHistoryTab(tab)}
+                className={[
+                  'flex-1 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wide transition-colors',
+                  historyTab === tab ? 'bg-slatepanel-700 text-white' : 'text-slate-500 hover:text-slate-300',
+                ].join(' ')}
+              >
+                {tab === 'rounds' ? 'Round History' : 'My Bets'}
+              </button>
+            ))}
+          </div>
+
+          {historyTab === 'rounds' && <HistoryStrip history={history} />}
+
+          {historyTab === 'my' && (
+            <div className="space-y-2">
+              {myBets.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-4">Place a bet to see your history here</p>
+              ) : (
+                myBets.map((b) => (
+                  <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
+                    <img src={`/${b.result}.png`} alt={b.result} className="w-8 h-8 object-contain flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-white">#{b.round}</p>
+                      <p className="text-[10px] text-slate-400">
+                        Bet {b.bet === 'tie' ? 'ECLIPSE' : b.bet.toUpperCase()} · Result {b.result === 'tie' ? 'ECLIPSE' : b.result.toUpperCase()}
+                      </p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className={`text-sm font-black ${b.win > 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
+                        {b.win > 0 ? `+₹${b.win.toLocaleString()}` : `-₹${b.stake.toLocaleString()}`}
+                      </p>
+                      <p className="text-[9px] text-slate-500">Stake ₹{b.stake.toLocaleString()}</p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
