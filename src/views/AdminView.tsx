@@ -1,11 +1,12 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, Component } from 'react';
+import type { ReactNode, ErrorInfo } from 'react';
 import {
   LayoutDashboard, Users, ShieldCheck, Headphones, DollarSign,
   Cpu, Bell, Megaphone, Wallet, Trophy, Mail, Server, Coins,
   CreditCard, FileText, Image, Gift, Settings, History,
   ShieldBan, MessageSquare, Zap, BarChart2, LogOut, Menu, X,
   KeyRound, Eye, EyeOff, RefreshCw, Banknote, TrendingDown, Link2, Share2,
-  Wrench, Activity,
+  Wrench, Activity, AlertTriangle,
 } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
 import { useFinance, useSupport, useStaff, useStaffSession } from '../lib/cmsHooks';
@@ -26,9 +27,10 @@ import StaffTab from './admin/StaffTab';
 import MarketingTab from './admin/MarketingTab';
 import NotificationsTab from './admin/NotificationsTab';
 import AutoGatewaysTab from './admin/AutoGatewaysTab';
-import GameAlgosTab, {
-  CrashHandlingPanel, SunMoonHandlingPanel, AviatorHandlingPanel,
-} from './admin/GameAlgosTab';
+import GameAlgosTab from './admin/GameAlgosTab';
+import { CrashHandlingPanel } from './admin/CrashHandlingPanel';
+import { AviatorHandlingPanel } from './admin/AviatorHandlingPanel';
+import { SunMoonHandlingPanel } from './admin/GameAlgosTab';
 import GameSettingsTab from './admin/GameSettingsTab';
 import BanSectionTab from './admin/BanSectionTab';
 import IntercomTab from './admin/IntercomTab';
@@ -46,6 +48,45 @@ import TopRankingsTab from './admin/TopRankingsTab';
 import SocialLinksTab from './admin/SocialLinksTab';
 import MaintenanceTab from './admin/MaintenanceTab';
 import StatsSettingsTab from './admin/StatsSettingsTab';
+
+// ─── Error Boundary ───────────────────────────────────────────────────────────
+interface EBState { hasError: boolean; message: string }
+class TabErrorBoundary extends Component<{ children: ReactNode; tabKey: string }, EBState> {
+  constructor(props: { children: ReactNode; tabKey: string }) {
+    super(props);
+    this.state = { hasError: false, message: '' };
+  }
+  static getDerivedStateFromError(error: unknown): EBState {
+    const msg = error instanceof Error ? error.message : String(error);
+    return { hasError: true, message: msg };
+  }
+  componentDidCatch(error: unknown, info: ErrorInfo) {
+    console.error('[AdminView] Tab error:', error, info);
+  }
+  componentDidUpdate(prev: { tabKey: string }) {
+    if (prev.tabKey !== this.props.tabKey && this.state.hasError) {
+      this.setState({ hasError: false, message: '' });
+    }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-6 flex flex-col items-center gap-3">
+          <AlertTriangle className="w-8 h-8 text-red-400" />
+          <p className="text-sm font-semibold text-white">Tab failed to load</p>
+          <p className="text-xs text-slate-400 max-w-sm text-center">{this.state.message || 'Unknown error'}</p>
+          <button
+            onClick={() => this.setState({ hasError: false, message: '' })}
+            className="px-4 py-2 text-xs bg-violet-600 hover:bg-violet-500 rounded-lg text-white font-semibold transition"
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Tab keys — some map to PermissionKey directly, others are routed via TAB_PERM_MAP below
 type Tab = PermissionKey | 'email' | 'games' | 'notifications' | 'notificationManager'
@@ -90,7 +131,6 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'maintenance', label: 'Maintenance', icon: Wrench },
 ];
 
-// Maps tab keys that don't match a PermissionKey to the permission that gates them.
 const TAB_PERM_MAP: Partial<Record<string, PermissionKey>> = {
   notifications: 'notify',
   notificationManager: 'notifyManager',
@@ -105,19 +145,22 @@ const TAB_PERM_MAP: Partial<Record<string, PermissionKey>> = {
   homeStats: 'algos',
 };
 
-// Game handler sub-panel — rendered as proper JSX component to preserve React hooks
-function GameHandlerPanel({ activeKey }: { activeKey: GameHandlerKey }) {
-  if (activeKey === 'crash') return <CrashHandlingPanel />;
-  if (activeKey === 'sunvsmoon') return <SunMoonHandlingPanel />;
-  if (activeKey === 'aviator') return <AviatorHandlingPanel />;
-  return null;
-}
-
 const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string }[] = [
   { key: 'crash', label: 'Crash' },
   { key: 'sunvsmoon', label: 'Sun vs Moon' },
   { key: 'aviator', label: 'Aviator' },
 ];
+
+// Standalone component so React properly mounts/unmounts with hooks
+function CrashPanel() { return <CrashHandlingPanel />; }
+function SunMoonPanel() { return <SunMoonHandlingPanel />; }
+function AviatorPanel() { return <AviatorHandlingPanel />; }
+
+function GameHandlerContent({ activeKey }: { activeKey: GameHandlerKey }) {
+  if (activeKey === 'crash') return <CrashPanel />;
+  if (activeKey === 'sunvsmoon') return <SunMoonPanel />;
+  return <AviatorPanel />;
+}
 
 async function sha256Hex(plain: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(plain));
@@ -248,6 +291,26 @@ function NotifBell({ totalUnread, pendingDeposits, pendingWithdrawals, unreadSup
   );
 }
 
+// ─── Game Handlers Tab ────────────────────────────────────────────────────────
+function GameHandlersTab() {
+  const [activeKey, setActiveKey] = useState<GameHandlerKey>('crash');
+  return (
+    <div className="space-y-4 p-4">
+      <div className="flex flex-wrap gap-2">
+        {GAME_HANDLER_TABS.map(t => (
+          <button key={t.key} onClick={() => setActiveKey(t.key)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${activeKey === t.key ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+      <TabErrorBoundary tabKey={activeKey}>
+        <GameHandlerContent activeKey={activeKey} />
+      </TabErrorBoundary>
+    </div>
+  );
+}
+
 export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r: Route) => void; onOpenWallet: () => void }) {
   const staffSessionId = useStaffSession();
   const staff = useStaff();
@@ -260,17 +323,14 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
   const totalUnread = pendingDeposits + pendingWithdrawals + unreadSupport;
 
   const [activeTab, setActiveTab] = useState<Tab>('dashboard');
-  const [activeGameHandler, setActiveGameHandler] = useState<GameHandlerKey>('crash');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [floatToasts, setFloatToasts] = useState<FloatToast[]>([]);
   const prevPending = useRef({ deposits: 0, withdrawals: 0, support: 0 });
   const toastIdRef = useRef(0);
 
-  // Resolve the full StaffAccount object for the current session
   const currentStaff = staffSessionId ? staff.find(s => s.id === staffSessionId) ?? null : null;
 
-  // Float toast on new notifications
   useEffect(() => {
     const prev = prevPending.current;
     const newToasts: FloatToast[] = [];
@@ -301,9 +361,7 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
     setFloatToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  if (!staffSessionId) {
-    return <AdminLoginPage />;
-  }
+  if (!staffSessionId) return <AdminLoginPage />;
 
   const canAccess = (tab: Tab): boolean => {
     if (currentStaff?.isOwner) return true;
@@ -327,20 +385,7 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
       case 'socialLinks': return <SocialLinksTab />;
       case 'gateways': return <AutoGatewaysTab />;
       case 'algos': return <GameAlgosTab />;
-      case 'games': return (
-        <div className="space-y-4 p-4">
-          <div className="flex flex-wrap gap-2">
-            {GAME_HANDLER_TABS.map(t => (
-              <button key={t.key} onClick={() => setActiveGameHandler(t.key)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${activeGameHandler === t.key ? 'bg-violet-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>
-                {t.label}
-              </button>
-            ))}
-          </div>
-          {/* Rendered as a proper React component so hooks inside each panel work correctly */}
-          <GameHandlerPanel activeKey={activeGameHandler} />
-        </div>
-      );
+      case 'games': return <GameHandlersTab />;
       case 'gameSettings': return <GameSettingsTab />;
       case 'history': return <HistoryTab />;
       case 'balanceHistory': return <BalanceHistoryTab />;
@@ -371,14 +416,11 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
       <FloatingToasts toasts={floatToasts} onDismiss={dismissToast} />
       <TicketAlertOverlay onNavigate={(tab) => { setActiveTab(tab as Tab); }} />
 
-      {/* Mobile overlay */}
       {sidebarOpen && (
         <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />
       )}
 
-      {/* Sidebar */}
       <aside className={`fixed md:static inset-y-0 left-0 z-50 w-56 bg-slate-900 border-r border-slate-800 flex flex-col transition-transform duration-200 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-        {/* Logo */}
         <div className="h-14 flex items-center justify-between px-4 border-b border-slate-800 flex-shrink-0">
           <span className="font-display font-extrabold text-white text-sm tracking-wide">B4BeT Admin</span>
           <button onClick={() => setSidebarOpen(false)} className="md:hidden p-1 rounded text-slate-400 hover:text-white">
@@ -386,7 +428,6 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
           </button>
         </div>
 
-        {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-2 space-y-0.5 px-2">
           {visibleTabs.map(tab => {
             const Icon = tab.icon;
@@ -401,7 +442,6 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
           })}
         </nav>
 
-        {/* Footer */}
         <div className="border-t border-slate-800 p-3 flex-shrink-0 space-y-2">
           {!changingPassword && (
             <div className="flex items-center gap-2">
@@ -432,9 +472,7 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
         </div>
       </aside>
 
-      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0 md:ml-0">
-        {/* Topbar */}
         <header className="h-14 bg-slate-900 border-b border-slate-800 flex items-center justify-between px-4 flex-shrink-0">
           <div className="flex items-center gap-3">
             <button onClick={() => setSidebarOpen(true)} className="md:hidden p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white">
@@ -453,9 +491,10 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
           </div>
         </header>
 
-        {/* Content */}
         <main className="flex-1 overflow-auto bg-slate-950">
-          {renderTab()}
+          <TabErrorBoundary tabKey={activeTab}>
+            {renderTab()}
+          </TabErrorBoundary>
         </main>
       </div>
 
