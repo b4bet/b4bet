@@ -3,6 +3,7 @@
  * FIX: Persist bet state (choice, placed, amount, round) to localStorage
  * so navigating away mid-round and coming back shows the placed bet.
  * FEAT: My Bets tab loads full history from Supabase on mount.
+ * FIX: Use overlayResult (server-confirmed) to prevent image flash on result reveal.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -180,7 +181,12 @@ function ResultOverlay({
   return (
     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-3xl overflow-hidden bg-black/80 backdrop-blur-sm">
       <div className="flex flex-col items-center gap-6 px-6 py-10 w-full">
-        <img src={CHOICE_IMAGES[result]} alt={CHOICE_LABELS[result]} className="w-28 h-28 object-contain drop-shadow-2xl" />
+        {/* Static result image — no rotation or animation */}
+        <img
+          src={CHOICE_IMAGES[result]}
+          alt={CHOICE_LABELS[result]}
+          className="w-28 h-28 object-contain drop-shadow-2xl"
+        />
         <div className="text-center">
           <p className="text-slate-400 text-xs uppercase tracking-widest mb-2">Result</p>
           <p className="text-4xl font-black text-white">{CHOICE_LABELS[result]}</p>
@@ -257,6 +263,10 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const [secondsLeft,    setSecondsLeft]    = useState(initEng.secondsLeft);
   const [roundNumber,    setRoundNumber]    = useState(YEAR_PREFIX * 10 + initEng.roundId);
   const [result,         setResult]         = useState<BetChoice | null>(initEng.result);
+  // overlayResult is the CONFIRMED result shown in the overlay.
+  // When a bet is placed, this stays null until the server confirms (prevents image flash).
+  // When no bet is placed, this is set immediately from the engine.
+  const [overlayResult,  setOverlayResult]  = useState<BetChoice | null>(null);
   const [lastWon,        setLastWon]        = useState(false);
   const [lastPayout,     setLastPayout]     = useState(0);
   const [history, setHistory] = useState<Array<{ round: number; result: BetChoice }>>(() => {
@@ -337,6 +347,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         setSelectedChoice(null);
         setBetPlaced(false);
         setLastQuickStake(null);
+        setOverlayResult(null);
         saveSunMoonBet(null);
       }
 
@@ -350,6 +361,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         saveSunMoonBet(null);
 
         if (sb !== null && placed) {
+          // Bet was placed: wait for server confirmation before showing overlay.
+          // overlayResult stays null until server responds — no image flash.
           const stake = betAmountRef.current;
           const session = auth.getSession();
           if (!session) return;
@@ -366,6 +379,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                 prev.map((h) => h.round === rn ? { ...h, result: serverOutcome } : h)
               );
               setResult(serverOutcome);
+              // Set overlayResult ONCE from server — prevents flash from local→server result
+              setOverlayResult(serverOutcome);
               setLastWon(actuallyWon);
               setLastPayout(res.profit);
 
@@ -386,8 +401,13 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : 'Server error';
               cms.toast({ title: 'Settle failed', body: msg, kind: 'alert' });
+              // On error, fall back to local engine result so overlay doesn't stay blank
+              setOverlayResult(localOutcome);
             })
             .finally(() => setSettling(false));
+        } else {
+          // No bet placed: show local engine result immediately in overlay
+          setOverlayResult(localOutcome);
         }
       }
     });
@@ -447,6 +467,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
   const canPlaceBet     = phase === 'betting' && !betPlaced && !settling && selectedChoice !== null && betAmount >= limits.min;
   const canSelectChoice = phase === 'betting' && !betPlaced;
+  // Show settling spinner when phase is revealed but overlayResult not yet available (server pending)
+  const isAwaitingServer = phase === 'revealed' && overlayResult === null;
 
   return (
     <div className="flex flex-col min-h-screen animate-fade-in">
@@ -484,9 +506,10 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         {/* ── Game card ── */}
         <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden min-h-[420px]">
 
+          {/* Result overlay — only shows after server confirms result (no flash) */}
           <ResultOverlay
-            visible={phase === 'revealed'}
-            result={result}
+            visible={phase === 'revealed' && overlayResult !== null}
+            result={overlayResult}
             won={lastWon}
             payout={lastPayout}
             choice={betPlaced ? selectedChoice : null}
@@ -494,20 +517,22 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
           <div className="p-4 space-y-4">
 
-            {/* Timer */}
+            {/* Timer / Processing spinner */}
             <div className="flex flex-col items-center gap-2">
               {phase === 'betting' ? (
                 <TimerCircle secondsLeft={secondsLeft} total={BETTING_DURATION} />
-              ) : phase === 'processing' ? (
+              ) : (phase === 'processing' || isAwaitingServer) ? (
                 <div className="py-6 flex flex-col items-center gap-3">
                   <div className="w-12 h-12 border-4 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
-                  <p className="text-sm font-bold text-amber-300">{settling ? 'Settling…' : 'Processing result…'}</p>
+                  <p className="text-sm font-bold text-amber-300">
+                    {settling || isAwaitingServer ? 'Settling…' : 'Processing result…'}
+                  </p>
                 </div>
               ) : null}
             </div>
 
             {/* Choice buttons */}
-            {phase !== 'processing' && (
+            {phase !== 'processing' && !isAwaitingServer && (
               <div className="flex items-stretch gap-2">
                 <BetButton choice="sun"  payout="1:1" glowColor="#FFB627" selected={selectedChoice === 'sun'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
                 <BetButton choice="tie"  payout="8:1" glowColor="#F59E0B" selected={selectedChoice === 'tie'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
@@ -575,8 +600,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                 {selectedChoice === null
                   ? 'Select SUN / ECLIPSE / MOON first'
                   : betAmount < limits.min
-                    ? `Min bet is ₹${limits.min}`
-                    : `PLACE BET — ₹${betAmount.toLocaleString()}`}
+                    ? `Min bet is \u20b9${limits.min}`
+                    : `PLACE BET \u2014 \u20b9${betAmount.toLocaleString()}`}
               </button>
             )}
 
@@ -626,16 +651,16 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
                     <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-white">#{b.round || '—'}</p>
+                      <p className="text-xs font-bold text-white">#{b.round || '\u2014'}</p>
                       <p className="text-[10px] text-slate-400">
-                        Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}
+                        Bet {CHOICE_LABELS[b.bet]} \u00b7 Result {CHOICE_LABELS[b.result]}
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className={`text-sm font-black ${b.win > 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
-                        {b.win > 0 ? `+₹${b.win.toLocaleString()}` : `-₹${b.stake.toLocaleString()}`}
+                        {b.win > 0 ? `+\u20b9${b.win.toLocaleString()}` : `-\u20b9${b.stake.toLocaleString()}`}
                       </p>
-                      <p className="text-[9px] text-slate-500">Stake ₹{b.stake.toLocaleString()}</p>
+                      <p className="text-[9px] text-slate-500">Stake \u20b9{b.stake.toLocaleString()}</p>
                     </div>
                   </div>
                 ))
