@@ -4,6 +4,7 @@
  * FIX: My Bets fetched from Supabase on mount + after each settle.
  * FIX: overlayResult prevents image flash on result reveal.
  * FIX: My Bets row shows only round# — no date/time.
+ * FIX: round_number parsed via Number() to handle JSONB string/number type.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -67,7 +68,7 @@ interface SupabaseBetRow {
   placed_at: string;
   bet_details: {
     game?: string;
-    round_number?: number;
+    round_number?: number | string;
     result?: string;
     bet?: string;
     bet_choice?: string;
@@ -92,9 +93,11 @@ function rowToMyBet(row: SupabaseBetRow): MyBetEntry | null {
   if (!d) return null;
   const betChoice = d.bet_choice ?? d.bet;
   if (!isBetChoice(betChoice) || !isBetChoice(d.result)) return null;
+  // Use Number() to handle both number and string from JSONB
+  const rn = d.round_number != null ? Number(d.round_number) : NaN;
   return {
     id: row.id,
-    round: typeof d.round_number === 'number' && d.round_number > 0 ? d.round_number : null,
+    round: !isNaN(rn) && rn > 0 ? rn : null,
     bet: betChoice,
     result: d.result,
     stake: Number(row.bet_amount),
