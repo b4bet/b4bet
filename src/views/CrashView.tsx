@@ -50,10 +50,10 @@ export default function CrashView() {
   const recentHistory = history.slice(0, 10);
 
   return (
-    <div className="flex flex-col h-[100dvh] overflow-hidden bg-midnight-950">
+    <div className="flex flex-col h-[100dvh] bg-midnight-950" style={{ overflow: 'hidden' }}>
 
       {/* ── Game Header ── */}
-      <div className="flex items-center justify-between px-3 h-[52px] bg-slatepanel-900 border-b border-borderline-900 flex-shrink-0">
+      <div className="flex items-center justify-between px-3 h-[52px] bg-slatepanel-900 border-b border-borderline-900" style={{ flexShrink: 0 }}>
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-slatepanel-800 border border-borderline-900 grid place-items-center">
             {logos.crash ? (
@@ -99,7 +99,7 @@ export default function CrashView() {
       <CrashFeedPopup open={feedOpen} onClose={() => setFeedOpen(false)} history={history} buttonRef={feedButtonRef} />
 
       {/* ── Recent History Bar ── */}
-      <div className="flex gap-1.5 px-3 py-2 overflow-x-auto scrollbar-none flex-shrink-0 bg-slatepanel-900/50">
+      <div className="flex gap-1.5 px-3 py-2 overflow-x-auto scrollbar-none bg-slatepanel-900/50" style={{ flexShrink: 0 }}>
         {recentHistory.length === 0
           ? Array.from({ length: 10 }).map((_, i) => (
               <div key={i} className="h-5 w-12 rounded-md bg-slatepanel-800 animate-pulse flex-shrink-0" />
@@ -112,19 +112,22 @@ export default function CrashView() {
         }
       </div>
 
-      {/* ── Canvas ── */}
-      <div className="relative flex-1 min-h-0">
+      {/* ── Canvas — takes all remaining vertical space ── */}
+      <div className="relative" style={{ flex: '1 1 0', minHeight: 0, overflow: 'hidden' }}>
         <CrashCanvas state={state} />
         <CashoutPopupOverlay />
       </div>
 
-      {/* ── Bet Panel — always below canvas, never overlapping ── */}
-      <div className="flex-shrink-0 border-t border-borderline-900">
+      {/* ── Bet Panel — fixed height below canvas, never overlaps ── */}
+      <div
+        className="border-t border-borderline-900 overflow-y-auto"
+        style={{ flexShrink: 0, maxHeight: '260px' }}
+      >
         <DualBetPanel />
       </div>
 
       {/* ── History tabs ── */}
-      <div className="flex-shrink-0">
+      <div style={{ flexShrink: 0 }}>
         <CrashHistoryTabs />
       </div>
     </div>
