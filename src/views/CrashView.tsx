@@ -112,25 +112,14 @@ export default function CrashView() {
         }
       </div>
 
-      {/* ── Main area: Canvas + Bet Panel side by side on lg, stacked on mobile ── */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-
-        {/* Canvas */}
-        <div className="relative flex-1 min-h-0 min-w-0">
-          <CrashCanvas state={state} />
-          <CashoutPopupOverlay />
-        </div>
-
-        {/* Bet Panel — right sidebar on lg+, hidden here on mobile (shown below) */}
-        <div className="hidden lg:flex lg:w-[340px] lg:flex-shrink-0 lg:flex-col lg:overflow-y-auto lg:border-l lg:border-borderline-900">
-          <DualBetPanel />
-        </div>
+      {/* ── Canvas ── */}
+      <div className="relative flex-1 min-h-0">
+        <CrashCanvas state={state} />
+        <CashoutPopupOverlay />
       </div>
 
-      {/* Bet Panel — below canvas on mobile only */}
-      <div className="lg:hidden flex-shrink-0">
-        <DualBetPanel />
-      </div>
+      {/* ── Bet panels ── */}
+      <DualBetPanel />
 
       {/* ── History tabs ── */}
       <div className="flex-shrink-0">
