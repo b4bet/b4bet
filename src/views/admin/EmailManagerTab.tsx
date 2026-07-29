@@ -12,7 +12,6 @@ const tabs: { key: keyof EmailTemplates; label: string; vars: { name: string; de
     vars: [
       { name: '{{username}}', desc: 'User ka naam' },
       { name: '{{date}}', desc: 'Registration date' },
-      { name: '{{site_name}}', desc: 'Site naam (B4BeT)' },
     ],
   },
   {
@@ -53,7 +52,6 @@ const tabs: { key: keyof EmailTemplates; label: string; vars: { name: string; de
       { name: '{{otp}}', desc: 'OTP code (agar use ho)' },
       { name: '{{expiry}}', desc: 'Link expiry time (e.g. 30 minutes)' },
       { name: '{{date}}', desc: 'Request date/time' },
-      { name: '{{site_name}}', desc: 'Site naam (B4BeT)' },
       { name: '{{ip_address}}', desc: 'Request karne wale ka IP' },
     ],
   },
