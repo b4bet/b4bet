@@ -51,6 +51,11 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   const userEditedRoundRef = useRef(false);
   const isSunMoon = gameKey === 'sunvsmoon';
 
+  // Sync local state with Supabase-loaded config
+  useEffect(() => {
+    setManual(handler.manualResult);
+  }, [handler.manualResult]);
+
   useEffect(() => {
     if (userEditedRoundRef.current) return;
     if (handler.manualTargetRoundId && handler.manualTargetRoundId > currentRound) return;
@@ -65,18 +70,43 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   const [stakesStatus, setStakesStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [stakesMsg, setStakesMsg] = useState('');
 
-  const setMode = (mode: 'AUTO' | 'MANUAL') => store.setGameHandler(gameKey, { mode });
+  // Manual override save status (Sun vs Moon uses async save)
+  const [manualSaveStatus, setManualSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  const setMode = (mode: 'AUTO' | 'MANUAL') => {
+    void store.setGameHandlerAsync(gameKey, { mode }).catch(() => {});
+  };
   const setProb = (v: number) => store.setGameHandler(gameKey, { targetWinProbability: v });
   const setEdge = (v: number) => store.setGameHandler(gameKey, { houseEdge: v });
 
-  const applyManual = (outcome?: string) => {
+  // applyManual: for Sun vs Moon — use async save so Supabase is confirmed before round ends
+  const applyManual = async (outcome?: string) => {
     const finalOutcome = outcome ?? manual.trim();
     const target = parseInt(targetRound, 10);
     const resolvedTarget = Number.isFinite(target) && target > currentRound ? target : upcomingRound;
-    store.setGameHandler(gameKey, { manualResult: finalOutcome, manualTargetRoundId: resolvedTarget, mode: 'MANUAL' });
     setManual(finalOutcome);
     setTargetRound(String(resolvedTarget));
     userEditedRoundRef.current = false;
+
+    if (isSunMoon) {
+      setManualSaveStatus('saving');
+      try {
+        await store.setGameHandlerAsync(gameKey, {
+          manualResult: finalOutcome,
+          manualTargetRoundId: resolvedTarget,
+          mode: 'MANUAL',
+        });
+        await store.loadAdminConfigFromSupabase();
+        setManualSaveStatus('saved');
+        setTimeout(() => setManualSaveStatus('idle'), 3000);
+      } catch (e) {
+        setManualSaveStatus('error');
+        cms.toast({ title: 'Save failed', body: (e as Error).message ?? 'Could not save to Supabase', kind: 'alert' });
+        setTimeout(() => setManualSaveStatus('idle'), 4000);
+      }
+    } else {
+      store.setGameHandler(gameKey, { manualResult: finalOutcome, manualTargetRoundId: resolvedTarget, mode: 'MANUAL' });
+    }
   };
 
   // Save quick stakes to Supabase (async, confirmed)
@@ -132,19 +162,22 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
         <div className="space-y-3 animate-fade-in">
           <label className="text-sm font-semibold text-white flex items-center gap-2"><Target className="w-4 h-4 text-coral-400" /> {manualLabel}</label>
 
-          {/* Sun vs Moon — icon buttons */}
+          {/* Sun vs Moon — icon buttons with async save */}
           {isSunMoon ? (
             <div className="space-y-2">
               <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Select Next Round Outcome</p>
               <div className="grid grid-cols-3 gap-2">
                 {SUN_MOON_OPTIONS.map((opt) => {
                   const BtnIcon = opt.icon;
-                  const isActive = manual === opt.value;
+                  // Active = matches current saved value in Supabase (handler.manualResult) OR locally selected
+                  const isActive = manual === opt.value || handler.manualResult === opt.value;
+                  const isSaving = manualSaveStatus === 'saving' && manual === opt.value;
                   return (
                     <button
                       key={opt.value}
-                      onClick={() => applyManual(opt.value)}
-                      className={`flex flex-col items-center gap-2 py-4 rounded-xl border-2 font-bold text-sm transition-all ${
+                      onClick={() => { void applyManual(opt.value); }}
+                      disabled={manualSaveStatus === 'saving'}
+                      className={`flex flex-col items-center gap-2 py-4 rounded-xl border-2 font-bold text-sm transition-all disabled:opacity-60 ${
                         isActive
                           ? `${opt.color} ring-2 ring-offset-1 ring-offset-slate-900 scale-105`
                           : 'border-slate-700 text-slate-400 hover:border-slate-500 bg-slate-800/50'
@@ -152,12 +185,38 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
                     >
                       <BtnIcon className={`w-7 h-7 ${isActive ? '' : 'opacity-50'}`} />
                       {opt.label}
-                      {isActive && (
+                      {isSaving ? (
+                        <span className="text-[9px] uppercase tracking-widest font-semibold opacity-80">
+                          <RefreshCw className="w-3 h-3 inline animate-spin" /> Saving…
+                        </span>
+                      ) : isActive && manualSaveStatus === 'saved' ? (
+                        <span className="text-[9px] uppercase tracking-widest font-semibold opacity-80 text-emerald-400">
+                          ✓ Saved
+                        </span>
+                      ) : isActive ? (
                         <span className="text-[9px] uppercase tracking-widest font-semibold opacity-80">Queued ✓</span>
-                      )}
+                      ) : null}
                     </button>
                   );
                 })}
+              </div>
+              {/* Status row */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {manualSaveStatus === 'saving' && (
+                  <span className="text-[11px] text-amber-300 font-semibold flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3 animate-spin" /> Saving to Supabase…
+                  </span>
+                )}
+                {manualSaveStatus === 'saved' && (
+                  <span className="text-[11px] text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" /> Saved to Supabase ✓
+                  </span>
+                )}
+                {manualSaveStatus === 'error' && (
+                  <span className="text-[11px] text-coral-400 font-semibold flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" /> Save failed — retry
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-slate-500">
                 Queued: <span className="text-coral-300 font-semibold">{handler.manualResult || '—'}</span>
@@ -171,7 +230,7 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
                 <div><p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Outcome</p><input type="text" value={manual} onChange={(e) => setManual(e.target.value)} placeholder={manualPlaceholder} className="input tabular" /></div>
                 <div><p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Apply to Round #</p><input type="number" value={targetRound} onChange={(e) => { userEditedRoundRef.current = true; setTargetRound(e.target.value); }} min={upcomingRound} step={1} placeholder={String(upcomingRound)} className="input tabular" /></div>
               </div>
-              <button onClick={() => applyManual()} className="btn-coral w-full py-2">Apply Manual Override</button>
+              <button onClick={() => { void applyManual(); }} className="btn-coral w-full py-2">Apply Manual Override</button>
               <p className="text-[11px] text-slate-500">
                 {manualHint} Queued: <span className="text-coral-300 font-semibold">{handler.manualResult || '—'}</span>.
                 <br /><span className="text-emeraldwin-300 font-semibold">✓ Auto-reverts to AUTO after the manual round.</span>
