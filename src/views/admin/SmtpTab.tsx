@@ -69,7 +69,16 @@ export default function SmtpTab() {
       const { data, error } = await supabase.functions.invoke('send-smtp-test', {
         body: {
           to: testEmail,
-          smtp: { host: cfg.host, port: cfg.port, user: cfg.user, pass: cfg.pass, secure: cfg.secure },
+          smtp: {
+            host: cfg.host,
+            port: cfg.port,
+            user: cfg.user,
+            pass: cfg.pass,
+            secure: cfg.secure,
+            // Always pass from and fromName so edge function uses correct sender
+            from: cfg.from || cfg.user,
+            fromName: cfg.fromName || 'B4BeT',
+          },
         },
       });
       if (error || (data && !data.ok)) {
