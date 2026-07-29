@@ -316,18 +316,20 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   return (
     <div className="aviator-root flex flex-col h-full w-full bg-aviator-bg overflow-hidden">
-      <Header
-        balance={balance}
-        soundOn={soundOn}
-        onToggleSound={setSoundOn}
-        musicOn={musicOn}
-        onToggleMusic={setMusicOn}
-        animationOn={animationOn}
-        onToggleAnimation={setAnimationOn}
-        onBack={onBack}
-      />
-
-      <HistoryBar history={history} />
+      {/* Sticky header + history bar — these never scroll */}
+      <div className="sticky top-0 z-20 flex flex-col bg-aviator-bg">
+        <Header
+          balance={balance}
+          soundOn={soundOn}
+          onToggleSound={setSoundOn}
+          musicOn={musicOn}
+          onToggleMusic={setMusicOn}
+          animationOn={animationOn}
+          onToggleAnimation={setAnimationOn}
+          onBack={onBack}
+        />
+        <HistoryBar history={history} />
+      </div>
 
       <div className="flex flex-col flex-1 overflow-y-auto overflow-x-hidden">
         <FlightCanvas
