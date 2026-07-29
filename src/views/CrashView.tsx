@@ -52,7 +52,7 @@ export default function CrashView() {
   return (
     <div className="flex flex-col h-[100dvh] bg-midnight-950" style={{ overflow: 'hidden' }}>
 
-      {/* ── Game Header ── */}
+      {/* ── Game Header (fixed at top) ── */}
       <div className="flex items-center justify-between px-3 h-[52px] bg-slatepanel-900 border-b border-borderline-900" style={{ flexShrink: 0 }}>
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-slatepanel-800 border border-borderline-900 grid place-items-center">
@@ -98,7 +98,7 @@ export default function CrashView() {
       <CrashSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} buttonRef={settingsButtonRef} />
       <CrashFeedPopup open={feedOpen} onClose={() => setFeedOpen(false)} history={history} buttonRef={feedButtonRef} />
 
-      {/* ── Recent History Bar ── */}
+      {/* ── Recent History Bar (fixed below header) ── */}
       <div className="flex gap-1.5 px-3 py-2 overflow-x-auto scrollbar-none bg-slatepanel-900/50" style={{ flexShrink: 0 }}>
         {recentHistory.length === 0
           ? Array.from({ length: 10 }).map((_, i) => (
@@ -112,21 +112,24 @@ export default function CrashView() {
         }
       </div>
 
-      {/* ── Canvas — fixed height, never overlapped ── */}
-      <div className="relative" style={{ flexShrink: 0 }}>
-        <CrashCanvas state={state} />
-        <CashoutPopupOverlay />
-      </div>
-
-      {/* ── Bet Panel + History tabs — scrollable section below canvas ── */}
+      {/* ── Scrollable area: Canvas + Bet Panel + History ── */}
       <div
-        className="border-t border-borderline-900 overflow-y-auto"
+        className="overflow-y-auto"
         style={{ flex: '1 1 0', minHeight: 0 }}
       >
-        <div className="p-2">
+        {/* Game Canvas with side padding */}
+        <div className="relative px-3 pt-2">
+          <CrashCanvas state={state} />
+          <CashoutPopupOverlay />
+        </div>
+
+        {/* Bet Panel */}
+        <div className="px-3 pt-2">
           <DualBetPanel />
         </div>
-        <div className="px-2 pb-2">
+
+        {/* History Tabs */}
+        <div className="px-3 py-2">
           <CrashHistoryTabs />
         </div>
       </div>
