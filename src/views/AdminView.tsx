@@ -28,7 +28,6 @@ import NotificationsTab from './admin/NotificationsTab';
 import AutoGatewaysTab from './admin/AutoGatewaysTab';
 import GameAlgosTab, {
   CrashHandlingPanel, SunMoonHandlingPanel, AviatorHandlingPanel,
-  TopRankingsAdminPanel, OnlineCountPanel, TopWinPaidOutPanel,
 } from './admin/GameAlgosTab';
 import GameSettingsTab from './admin/GameSettingsTab';
 import BanSectionTab from './admin/BanSectionTab';
@@ -106,10 +105,18 @@ const TAB_PERM_MAP: Partial<Record<string, PermissionKey>> = {
   homeStats: 'algos',
 };
 
-const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string; Panel: () => JSX.Element }[] = [
-  { key: 'crash', label: 'Crash', Panel: CrashHandlingPanel },
-  { key: 'sunvsmoon', label: 'Sun vs Moon', Panel: SunMoonHandlingPanel },
-  { key: 'aviator', label: 'Aviator', Panel: AviatorHandlingPanel },
+// Game handler sub-panel — rendered as proper JSX component to preserve React hooks
+function GameHandlerPanel({ activeKey }: { activeKey: GameHandlerKey }) {
+  if (activeKey === 'crash') return <CrashHandlingPanel />;
+  if (activeKey === 'sunvsmoon') return <SunMoonHandlingPanel />;
+  if (activeKey === 'aviator') return <AviatorHandlingPanel />;
+  return null;
+}
+
+const GAME_HANDLER_TABS: { key: GameHandlerKey; label: string }[] = [
+  { key: 'crash', label: 'Crash' },
+  { key: 'sunvsmoon', label: 'Sun vs Moon' },
+  { key: 'aviator', label: 'Aviator' },
 ];
 
 async function sha256Hex(plain: string): Promise<string> {
@@ -299,9 +306,7 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
   }
 
   const canAccess = (tab: Tab): boolean => {
-    // Owner / super_admin can access everything
     if (currentStaff?.isOwner) return true;
-    // If staff not loaded yet, allow all tabs to avoid blank panel during loading
     if (!currentStaff) return true;
     const permKey = (TAB_PERM_MAP[tab] ?? tab) as PermissionKey;
     return !!currentStaff.permissions?.[permKey];
@@ -323,7 +328,7 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
       case 'gateways': return <AutoGatewaysTab />;
       case 'algos': return <GameAlgosTab />;
       case 'games': return (
-        <div className="space-y-4">
+        <div className="space-y-4 p-4">
           <div className="flex flex-wrap gap-2">
             {GAME_HANDLER_TABS.map(t => (
               <button key={t.key} onClick={() => setActiveGameHandler(t.key)}
@@ -332,7 +337,8 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
               </button>
             ))}
           </div>
-          {GAME_HANDLER_TABS.find(t => t.key === activeGameHandler)?.Panel?.()}
+          {/* Rendered as a proper React component so hooks inside each panel work correctly */}
+          <GameHandlerPanel activeKey={activeGameHandler} />
         </div>
       );
       case 'gameSettings': return <GameSettingsTab />;
