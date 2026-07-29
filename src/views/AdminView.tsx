@@ -361,6 +361,7 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
     setFloatToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
+  // If not logged in, show login page (stays on admin route, not user website)
   if (!staffSessionId) return <AdminLoginPage />;
 
   const canAccess = (tab: Tab): boolean => {
@@ -464,8 +465,9 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
               <button onClick={() => setChangingPassword(false)} className="text-[10px] text-slate-500 hover:text-slate-300">Cancel</button>
             </div>
           )}
+          {/* Logout: only clear staff session — AdminLoginPage will render since staffSessionId becomes null */}
           <button
-            onClick={() => { cms.logoutStaff(); onNavigate('home'); }}
+            onClick={() => { cms.logoutStaff(); }}
             className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-red-400 hover:bg-red-500/10 transition-colors">
             <LogOut className="w-3.5 h-3.5" /> Logout
           </button>
