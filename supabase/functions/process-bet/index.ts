@@ -20,6 +20,62 @@ async function safeInsert(queryBuilder: PromiseLike<unknown>): Promise<void> {
   try { await queryBuilder; } catch { /* ignore */ }
 }
 
+/**
+ * Reads the admin-configured manual result for sunvsmoon from Supabase settings.
+ * Returns null if no manual override is configured or mode is AUTO.
+ */
+async function getAdminSunMoonManualResult(
+  supabase: ReturnType<typeof createClient>
+): Promise<"sun" | "moon" | "tie" | null> {
+  try {
+    const { data } = await supabase.rpc("admin_get_settings");
+    if (!data) return null;
+    const rows = data as { key: string; value: unknown }[];
+    const row = rows.find((r) => r.key === "admin_config");
+    if (!row?.value || typeof row.value !== "object") return null;
+    const cfg = row.value as Record<string, unknown>;
+    const handlers = cfg.gameHandlers as Record<string, unknown> | undefined;
+    if (!handlers) return null;
+    const sunmoon = handlers["sunvsmoon"] as Record<string, unknown> | undefined;
+    if (!sunmoon) return null;
+    if (sunmoon.mode !== "MANUAL") return null;
+    const result = sunmoon.manualResult as string | undefined;
+    if (result === "sun" || result === "moon" || result === "tie") return result;
+    // Also accept "eclipse" as alias for "tie"
+    if (result === "eclipse") return "tie";
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * After using a manual result for a round, revert the sunvsmoon handler back to AUTO
+ * so the next round uses random outcome.
+ */
+async function revertSunMoonToAuto(
+  supabase: ReturnType<typeof createClient>
+): Promise<void> {
+  try {
+    const { data } = await supabase.rpc("admin_get_settings");
+    if (!data) return;
+    const rows = data as { key: string; value: unknown }[];
+    const row = rows.find((r) => r.key === "admin_config");
+    if (!row?.value || typeof row.value !== "object") return;
+    const cfg = { ...(row.value as Record<string, unknown>) };
+    const handlers = { ...(cfg.gameHandlers as Record<string, unknown> ?? {}) };
+    const sunmoon = { ...(handlers["sunvsmoon"] as Record<string, unknown> ?? {}) };
+    sunmoon.mode = "AUTO";
+    sunmoon.manualResult = "";
+    sunmoon.manualTargetRoundId = null;
+    handlers["sunvsmoon"] = sunmoon;
+    cfg.gameHandlers = handlers;
+    await supabase.rpc("admin_update_setting", { p_key: "admin_config", p_value: cfg });
+  } catch {
+    // Non-fatal — revert best-effort
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -272,12 +328,17 @@ serve(async (req) => {
       let roundResult: string;
       const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
       if (existing) {
+        // Round result already fixed (another player settled first) — use it
         roundResult = existing.result;
       } else {
-        const manualResult = payload.manualResult ?? null;
-        if (manualResult && ["sun", "moon", "tie"].includes(manualResult as string)) {
-          roundResult = manualResult as string;
+        // First settler: check admin manual override from Supabase settings
+        const adminManual = await getAdminSunMoonManualResult(supabase);
+        if (adminManual) {
+          roundResult = adminManual;
+          // Revert admin to AUTO so next round is random
+          await revertSunMoonToAuto(supabase);
         } else {
+          // Auto random
           const rand = getSecureRandom();
           roundResult = rand < 0.45 ? "sun" : rand < 0.90 ? "moon" : "tie";
         }
