@@ -1,16 +1,15 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import SelectModal from '../../components/SelectModal';
 import { cms } from '../../lib/cms';
-import { useAdminConfig, useGameLogos, useCrashState, useGameRound } from '../../lib/hooks';
-import { store, computeAutoOutcome } from '../../lib/store';
-import type { RoundOutcomePreview } from '../../lib/store';
+import { useAdminConfig, useGameLogos, useGameRound } from '../../lib/hooks';
+import { store } from '../../lib/store';
 import { gameLogos } from '../../lib/gameLogos';
 import type { GameKey } from '../../lib/gameLogos';
 import {
   Shield, Sliders, Target, Cpu, Zap, Upload, Image as ImageIcon, Trash2,
-  Rocket, Bomb, Trophy, DollarSign, Dices, Circle, BarChart2, Sun, Plane,
+  Rocket, Bomb, Trophy, DollarSign, BarChart2, Sun, Plane,
   Plus, X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal,
-  CheckCircle, AlertCircle,
+  CheckCircle, AlertCircle, Moon, Cloudy,
 } from 'lucide-react';
 
 // CrashHandlingPanel — dedicated async Supabase-connected panel
@@ -19,22 +18,25 @@ export { CrashHandlingPanel } from './CrashHandlingPanel';
 // AviatorHandlingPanel — dedicated async Supabase-connected panel (same pattern as Crash)
 export { AviatorHandlingPanel } from './AviatorHandlingPanel';
 
-// ─── 8-game registry: crash, mines, aviator, wingo, k3, fived, sunvsmoon, trading
+// ─── 5-game registry: crash, mines, aviator, sunvsmoon, trading
 const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
-  { key: 'crash', label: 'Crash', icon: Rocket },
-  { key: 'mines', label: 'Mines', icon: Bomb },
-  { key: 'aviator', label: 'Aviator', icon: Plane },
-  { key: 'wingo', label: 'Win Go', icon: Circle },
-  { key: 'k3', label: 'K3', icon: Dices },
-  { key: 'fived', label: '5D', icon: Dices },
-  { key: 'sunvsmoon', label: 'Sun vs Moon', icon: Sun },
-  { key: 'trading', label: 'Trading', icon: BarChart2 },
+  { key: 'crash',     label: 'Crash',      icon: Rocket    },
+  { key: 'mines',     label: 'Mines',      icon: Bomb      },
+  { key: 'aviator',   label: 'Aviator',    icon: Plane     },
+  { key: 'sunvsmoon', label: 'Sun vs Moon',icon: Sun       },
+  { key: 'trading',   label: 'Trading',    icon: BarChart2 },
+];
+
+// Sun vs Moon outcome buttons
+const SUN_MOON_OPTIONS: { value: string; label: string; icon: typeof Sun; color: string }[] = [
+  { value: 'sun',     label: 'Sun',     icon: Sun,    color: 'text-yellow-400 border-yellow-500/60 bg-yellow-500/10' },
+  { value: 'eclipse', label: 'Eclipse', icon: Cloudy, color: 'text-purple-400 border-purple-500/60 bg-purple-500/10' },
+  { value: 'moon',    label: 'Moon',    icon: Moon,   color: 'text-blue-400 border-blue-500/60 bg-blue-500/10' },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Generic Game Handler Panel (shared by lottery-style games)
-// ALL saves (mode, manual override, quick stakes) go through setGameHandlerAsync
-// so every change is written to Supabase and confirmed before the UI updates.
+// Quick stakes are Supabase-connected via setGameHandlerAsync for all games.
 // ─────────────────────────────────────────────────────────────────────────────
 function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlaceholder, manualHint }: {
   gameKey: string; label: string; icon: typeof Rocket; manualLabel: string;
@@ -47,6 +49,13 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   const [manual, setManual] = useState(handler.manualResult);
   const [targetRound, setTargetRound] = useState<string>(String(handler.manualTargetRoundId ?? upcomingRound));
   const userEditedRoundRef = useRef(false);
+  const isSunMoon = gameKey === 'sunvsmoon';
+
+  // Sync local state with Supabase-loaded config
+  useEffect(() => {
+    setManual(handler.manualResult);
+  }, [handler.manualResult]);
+
   useEffect(() => {
     if (userEditedRoundRef.current) return;
     if (handler.manualTargetRoundId && handler.manualTargetRoundId > currentRound) return;
@@ -61,57 +70,43 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   const [stakesStatus, setStakesStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [stakesMsg, setStakesMsg] = useState('');
 
-  // Save status for mode toggle + manual override
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [saveMsg, setSaveMsg] = useState('');
+  // Manual override save status (Sun vs Moon uses async save)
+  const [manualSaveStatus, setManualSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
-  const [preview, setPreview] = useState<RoundOutcomePreview | null>(null);
-
+  const setMode = (mode: 'AUTO' | 'MANUAL') => {
+    void store.setGameHandlerAsync(gameKey, { mode }).catch(() => {});
+  };
   const setProb = (v: number) => store.setGameHandler(gameKey, { targetWinProbability: v });
   const setEdge = (v: number) => store.setGameHandler(gameKey, { houseEdge: v });
 
-  const refreshPreview = () => {
-    const h = store.getGameHandler(gameKey);
-    if (h.mode === 'AUTO') setPreview(computeAutoOutcome(gameKey, h));
-    else if (h.mode === 'MANUAL' && h.manualResult) {
-      let detail = 'Manual override active';
-      if (gameKey === 'wingo') detail = 'Manual digit: ' + h.manualResult;
-      else if (gameKey === 'k3') detail = 'Manual dice: ' + h.manualResult;
-      else if (gameKey === 'fived') detail = 'Manual digits: ' + h.manualResult;
-      else if (gameKey === 'sunvsmoon') detail = 'Manual side: ' + h.manualResult;
-      setPreview({ outcome: h.manualResult, detail });
-    } else setPreview(null);
-  };
-
-  useEffect(() => { refreshPreview(); }, [handler.mode, handler.targetWinProbability, handler.houseEdge, handler.manualResult, handler.manualTargetRoundId]);
-
-  // Core async save — used by both setMode and applyManual
-  const doSave = async (patch: Partial<typeof handler>) => {
-    setSaveStatus('saving');
-    setSaveMsg('');
-    try {
-      await store.setGameHandlerAsync(gameKey, patch);
-      await store.loadAdminConfigFromSupabase();
-      refreshPreview();
-      setSaveStatus('saved');
-      setSaveMsg('Supabase confirmed ✓');
-    } catch (e) {
-      setSaveStatus('error');
-      setSaveMsg((e as Error).message ?? 'Save failed');
-    }
-    setTimeout(() => setSaveStatus('idle'), 5000);
-  };
-
-  // Mode toggle — async, Supabase confirmed
-  const setMode = (mode: 'AUTO' | 'MANUAL') => { void doSave({ mode }); };
-
-  // Apply manual override — async, Supabase confirmed
-  const applyManual = () => {
+  // applyManual: for Sun vs Moon — use async save so Supabase is confirmed before round ends
+  const applyManual = async (outcome?: string) => {
+    const finalOutcome = outcome ?? manual.trim();
     const target = parseInt(targetRound, 10);
     const resolvedTarget = Number.isFinite(target) && target > currentRound ? target : upcomingRound;
+    setManual(finalOutcome);
     setTargetRound(String(resolvedTarget));
     userEditedRoundRef.current = false;
-    void doSave({ manualResult: manual.trim(), manualTargetRoundId: resolvedTarget, mode: 'MANUAL' });
+
+    if (isSunMoon) {
+      setManualSaveStatus('saving');
+      try {
+        await store.setGameHandlerAsync(gameKey, {
+          manualResult: finalOutcome,
+          manualTargetRoundId: resolvedTarget,
+          mode: 'MANUAL',
+        });
+        await store.loadAdminConfigFromSupabase();
+        setManualSaveStatus('saved');
+        setTimeout(() => setManualSaveStatus('idle'), 3000);
+      } catch (e) {
+        setManualSaveStatus('error');
+        cms.toast({ title: 'Save failed', body: (e as Error).message ?? 'Could not save to Supabase', kind: 'alert' });
+        setTimeout(() => setManualSaveStatus('idle'), 4000);
+      }
+    } else {
+      store.setGameHandler(gameKey, { manualResult: finalOutcome, manualTargetRoundId: resolvedTarget, mode: 'MANUAL' });
+    }
   };
 
   // Save quick stakes to Supabase (async, confirmed)
@@ -134,94 +129,127 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   };
 
   return (
-    <div className="panel space-y-4">
+    <div className="panel p-4 space-y-4 border-neon-500/30">
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Icon className="w-4 h-4 text-neon-400" />
-          <span className="font-semibold text-sm">{label} Handling</span>
+        <div>
+          <h2 className="font-display font-bold text-lg text-white flex items-center gap-2"><Icon className="w-5 h-5 text-neon-300" /> {label} Handling</h2>
+          <p className="text-xs text-slate-500">Auto engine · admin override for the next round.</p>
         </div>
-        <div className="text-xs text-gray-400">Auto engine · admin override for the next round.</div>
-        <span className={`badge text-xs px-2 py-0.5 rounded ${handler.mode === 'MANUAL' ? 'bg-coral-400/20 text-coral-300' : 'bg-neon-400/20 text-neon-300'}`}>
-          Mode <b>{handler.mode}</b>
-        </span>
+        <div className="text-right">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Mode</p>
+          <p className={`tabular font-display font-extrabold text-lg ${handler.mode === 'MANUAL' ? 'text-coral-400' : 'text-neon-300'}`}>{handler.mode}</p>
+        </div>
       </div>
-
-      {/* Save feedback */}
-      {saveStatus !== 'idle' && (
-        <div className={`flex items-center gap-2 text-xs px-3 py-2 rounded-lg ${saveStatus === 'saved' ? 'bg-neon-400/10 text-neon-300' : saveStatus === 'error' ? 'bg-coral-400/10 text-coral-300' : 'bg-white/5 text-gray-300'}`}>
-          {saveStatus === 'saving' && <RefreshCw className="w-3 h-3 animate-spin" />}
-          {saveStatus === 'saved' && <CheckCircle className="w-3 h-3" />}
-          {saveStatus === 'error' && <AlertCircle className="w-3 h-3" />}
-          {saveStatus === 'saving' && 'Saving to Supabase…'}
-          {saveStatus === 'saved' && saveMsg}
-          {saveStatus === 'error' && `Save failed: ${saveMsg}`}
-        </div>
-      )}
-
       <div className="grid grid-cols-2 gap-2">
-        <button onClick={() => setMode('AUTO')} disabled={saveStatus === 'saving'} className={`panel p-3 text-left transition-all disabled:opacity-50 ${handler.mode === 'AUTO' ? 'border-neon-400 ring-1 ring-neon-400/40' : 'opacity-70 hover:opacity-100'}`}>
-          <div className="text-xs font-semibold">Automated</div>
-          <div className="text-[11px] text-gray-400 mt-0.5">Win-probability safeguards revenue.</div>
+        <button onClick={() => setMode('AUTO')} className={`panel p-3 text-left transition-all ${handler.mode === 'AUTO' ? 'border-neon-400 ring-1 ring-neon-400/40' : 'opacity-70 hover:opacity-100'}`}>
+          <div className="flex items-center gap-2 mb-1"><Shield className={`w-4 h-4 ${handler.mode === 'AUTO' ? 'text-neon-300' : 'text-slate-500'}`} /><span className="font-display font-bold text-white text-sm">Automated</span></div>
+          <p className="text-[11px] text-slate-400">Win-probability safeguards revenue.</p>
         </button>
-        <button onClick={() => setMode('MANUAL')} disabled={saveStatus === 'saving'} className={`panel p-3 text-left transition-all disabled:opacity-50 ${handler.mode === 'MANUAL' ? 'border-coral-400 ring-1 ring-coral-400/40' : 'opacity-70 hover:opacity-100'}`}>
-          <div className="text-xs font-semibold">Manual Override</div>
-          <div className="text-[11px] text-gray-400 mt-0.5">Hardcode outcome for one queued round.</div>
+        <button onClick={() => setMode('MANUAL')} className={`panel p-3 text-left transition-all ${handler.mode === 'MANUAL' ? 'border-coral-400 ring-1 ring-coral-400/40' : 'opacity-70 hover:opacity-100'}`}>
+          <div className="flex items-center gap-2 mb-1"><Cpu className={`w-4 h-4 ${handler.mode === 'MANUAL' ? 'text-coral-400' : 'text-slate-500'}`} /><span className="font-display font-bold text-white text-sm">Manual Override</span></div>
+          <p className="text-[11px] text-slate-400">Hardcode outcome for one queued round.</p>
         </button>
       </div>
       {handler.mode === 'AUTO' && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between text-xs"><span>Target Win Probability</span><span className="font-mono text-neon-300">{handler.targetWinProbability}%</span></div>
-          <input type="range" value={handler.targetWinProbability} min={10} max={90} onChange={(e) => setProb(parseInt(e.target.value))} className="w-full accent-neon-400 h-2" />
-          <div className="flex items-center justify-between text-xs"><span>House Edge</span><span className="font-mono text-neon-300">{handler.houseEdge}%</span></div>
-          <input type="range" value={handler.houseEdge} min={1} max={20} onChange={(e) => setEdge(parseInt(e.target.value))} className="w-full accent-amberx-400 h-2" />
+        <div className="space-y-4 animate-fade-in">
+          <div><div className="flex items-center justify-between mb-1"><label className="text-sm font-semibold text-white flex items-center gap-2"><Sliders className="w-4 h-4 text-neon-300" /> Target Win Probability</label><span className="tabular font-display font-extrabold text-lg text-neon-300">{handler.targetWinProbability}%</span></div>
+          <input type="range" min={0} max={100} value={handler.targetWinProbability} onChange={(e) => setProb(parseInt(e.target.value))} className="w-full accent-neon-400 h-2" /></div>
+          <div><div className="flex items-center justify-between mb-1"><label className="text-sm font-semibold text-white flex items-center gap-2"><Zap className="w-4 h-4 text-amberx-400" /> House Edge</label><span className="tabular font-bold text-amberx-400">{handler.houseEdge}%</span></div>
+          <input type="range" min={0} max={20} value={handler.houseEdge} onChange={(e) => setEdge(parseInt(e.target.value))} className="w-full accent-amberx-400 h-2" /></div>
         </div>
       )}
       {handler.mode === 'MANUAL' && (
-        <div className="space-y-2">
-          <div className="text-xs font-medium text-gray-300">{manualLabel}</div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[11px] text-gray-400 mb-1 block">Outcome</label>
-              <input type="text" value={manual} onChange={(e) => setManual(e.target.value)} placeholder={manualPlaceholder} className="input tabular" />
+        <div className="space-y-3 animate-fade-in">
+          <label className="text-sm font-semibold text-white flex items-center gap-2"><Target className="w-4 h-4 text-coral-400" /> {manualLabel}</label>
+
+          {/* Sun vs Moon — icon buttons with async save */}
+          {isSunMoon ? (
+            <div className="space-y-2">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Select Next Round Outcome</p>
+              <div className="grid grid-cols-3 gap-2">
+                {SUN_MOON_OPTIONS.map((opt) => {
+                  const BtnIcon = opt.icon;
+                  // Active = matches current saved value in Supabase (handler.manualResult) OR locally selected
+                  const isActive = manual === opt.value || handler.manualResult === opt.value;
+                  const isSaving = manualSaveStatus === 'saving' && manual === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      onClick={() => { void applyManual(opt.value); }}
+                      disabled={manualSaveStatus === 'saving'}
+                      className={`flex flex-col items-center gap-2 py-4 rounded-xl border-2 font-bold text-sm transition-all disabled:opacity-60 ${
+                        isActive
+                          ? `${opt.color} ring-2 ring-offset-1 ring-offset-slate-900 scale-105`
+                          : 'border-slate-700 text-slate-400 hover:border-slate-500 bg-slate-800/50'
+                      }`}
+                    >
+                      <BtnIcon className={`w-7 h-7 ${isActive ? '' : 'opacity-50'}`} />
+                      {opt.label}
+                      {isSaving ? (
+                        <span className="text-[9px] uppercase tracking-widest font-semibold opacity-80">
+                          <RefreshCw className="w-3 h-3 inline animate-spin" /> Saving…
+                        </span>
+                      ) : isActive && manualSaveStatus === 'saved' ? (
+                        <span className="text-[9px] uppercase tracking-widest font-semibold opacity-80 text-emerald-400">
+                          ✓ Saved
+                        </span>
+                      ) : isActive ? (
+                        <span className="text-[9px] uppercase tracking-widest font-semibold opacity-80">Queued ✓</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Status row */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {manualSaveStatus === 'saving' && (
+                  <span className="text-[11px] text-amber-300 font-semibold flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3 animate-spin" /> Saving to Supabase…
+                  </span>
+                )}
+                {manualSaveStatus === 'saved' && (
+                  <span className="text-[11px] text-emerald-400 font-semibold flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" /> Saved to Supabase ✓
+                  </span>
+                )}
+                {manualSaveStatus === 'error' && (
+                  <span className="text-[11px] text-coral-400 font-semibold flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" /> Save failed — retry
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Queued: <span className="text-coral-300 font-semibold">{handler.manualResult || '—'}</span>
+                {'  '}· <span className="text-emeraldwin-300 font-semibold">✓ Auto-reverts to AUTO after the manual round.</span>
+              </p>
             </div>
-            <div>
-              <label className="text-[11px] text-gray-400 mb-1 block">Apply to Round #</label>
-              <input type="number" value={targetRound} onChange={(e) => { userEditedRoundRef.current = true; setTargetRound(e.target.value); }} min={upcomingRound} step={1} placeholder={String(upcomingRound)} className="input tabular" />
+          ) : (
+            /* Other games — text input */
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div><p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Outcome</p><input type="text" value={manual} onChange={(e) => setManual(e.target.value)} placeholder={manualPlaceholder} className="input tabular" /></div>
+                <div><p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Apply to Round #</p><input type="number" value={targetRound} onChange={(e) => { userEditedRoundRef.current = true; setTargetRound(e.target.value); }} min={upcomingRound} step={1} placeholder={String(upcomingRound)} className="input tabular" /></div>
+              </div>
+              <button onClick={() => { void applyManual(); }} className="btn-coral w-full py-2">Apply Manual Override</button>
+              <p className="text-[11px] text-slate-500">
+                {manualHint} Queued: <span className="text-coral-300 font-semibold">{handler.manualResult || '—'}</span>.
+                <br /><span className="text-emeraldwin-300 font-semibold">✓ Auto-reverts to AUTO after the manual round.</span>
+              </p>
             </div>
-          </div>
-          <button onClick={applyManual} disabled={saveStatus === 'saving'} className="btn-primary w-full py-2 text-xs disabled:opacity-50">
-            {saveStatus === 'saving' ? <RefreshCw className="w-3 h-3 animate-spin inline mr-1" /> : null}
-            Apply Manual Override
-          </button>
-          <p className="text-[11px] text-gray-500">
-            {manualHint} Queued: <b className="text-coral-300">{handler.manualResult || '—'}</b>.
-            {' '}✓ Auto-reverts to AUTO after the manual round.
-          </p>
+          )}
         </div>
       )}
 
-      <div className="panel bg-black/20 space-y-1 p-3">
-        <div className="text-xs font-medium text-gray-300 flex items-center gap-1.5"><Target className="w-3 h-3" /> Next Round Preview</div>
-        <div className="text-xs text-gray-400 mt-1">
-          {preview ? (
-            <div className="grid grid-cols-2 gap-1 mt-1">
-              <span className="text-gray-500">Outcome</span><span className="font-mono text-neon-300">{preview.outcome}</span>
-              <span className="text-gray-500">Detail</span><span className="font-mono text-gray-300">{preview.detail}</span>
-            </div>
-          ) : (<span>Preview will appear automatically.</span>)}
-        </div>
-      </div>
-
       {/* Quick stakes — Supabase connected */}
-      <div className="space-y-2">
-        <div className="text-xs font-medium text-gray-300">Quick Stake Chips (4 presets)</div>
-        <div className="grid grid-cols-2 gap-2">
-          <div><label className="text-[11px] text-gray-400 mb-1 block">Stake 1</label><input type="number" value={stake1} onChange={(e) => setStake1(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
-          <div><label className="text-[11px] text-gray-400 mb-1 block">Stake 2</label><input type="number" value={stake2} onChange={(e) => setStake2(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
-          <div><label className="text-[11px] text-gray-400 mb-1 block">Stake 3</label><input type="number" value={stake3} onChange={(e) => setStake3(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
-          <div><label className="text-[11px] text-gray-400 mb-1 block">Stake 4</label><input type="number" value={stake4} onChange={(e) => setStake4(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
+      <div className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800 space-y-2">
+        <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider block">Quick Stake Chips (4 presets)</label>
+        <div className="grid grid-cols-4 gap-2">
+          <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 1</p><input type="number" value={stake1} onChange={(e) => setStake1(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
+          <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 2</p><input type="number" value={stake2} onChange={(e) => setStake2(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
+          <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 3</p><input type="number" value={stake3} onChange={(e) => setStake3(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
+          <div><p className="text-[9px] text-slate-500 mb-0.5">Stake 4</p><input type="number" value={stake4} onChange={(e) => setStake4(e.target.value)} min={1} className="input tabular text-sm py-1.5 w-full" /></div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             onClick={() => { void saveStakes(); }}
             disabled={stakesStatus === 'saving'}
@@ -231,18 +259,18 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
             Save Stakes
           </button>
           {stakesStatus === 'saved' && (
-            <span className="text-xs text-neon-300 flex items-center gap-1">
+            <span className="text-[11px] text-emeraldwin-300 font-semibold flex items-center gap-1">
               <CheckCircle className="w-3 h-3" />{stakesMsg}
             </span>
           )}
           {stakesStatus === 'error' && (
-            <span className="text-xs text-coral-300 flex items-center gap-1">
+            <span className="text-[11px] text-coral-300 font-semibold flex items-center gap-1">
               <AlertCircle className="w-3 h-3" />{stakesMsg}
             </span>
           )}
           {stakesStatus === 'idle' && (
-            <span className="text-xs text-gray-500">
-              Current: <span className="font-mono">{handler.quickStakes.join(' · ')}</span>
+            <span className="text-[11px] text-slate-500">
+              Current: <span className="text-white tabular">{handler.quickStakes.join(' · ')}</span>
             </span>
           )}
         </div>
@@ -251,20 +279,13 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   );
 }
 
-// ── Individual exported handler panels (lottery-style games only)
-export function WingoHandlingPanel() { return <GameHandlerPanel gameKey="wingo" label="Win Go" icon={Circle} manualLabel="Manual Digit (0–9)" manualPlaceholder="e.g. 5" manualHint="Enter 0–9." />; }
-export function K3HandlingPanel() { return <GameHandlerPanel gameKey="k3" label="K3" icon={Dices} manualLabel="Manual Dice (d1,d2,d3)" manualPlaceholder="e.g. 3,3,3" manualHint="Enter three comma-separated dice values 1–6." />; }
-export function FiveDHandlingPanel() { return <GameHandlerPanel gameKey="fived" label="5D" icon={Dices} manualLabel="Manual 5-Digit Result" manualPlaceholder="e.g. 12345" manualHint="Enter exactly 5 digits 0–9." />; }
-export function SunMoonHandlingPanel() { return <GameHandlerPanel gameKey="sunvsmoon" label="Sun vs Moon" icon={Sun} manualLabel="Manual Side (sun / moon / tie)" manualPlaceholder="sun, moon or tie" manualHint='Enter "sun", "moon", or "tie".' />; }
-export function MinesHandlingPanel() { return <GameHandlerPanel gameKey="mines" label="Mines" icon={Bomb} manualLabel="Manual Mine Positions" manualPlaceholder="e.g. 3,7,12" manualHint="Enter mine cell indices (0-based), comma-separated." />; }
-export function TradingHandlingPanel() { return <GameHandlerPanel gameKey="trading" label="Trading" icon={BarChart2} manualLabel="Manual Direction (UP / DOWN)" manualPlaceholder="UP or DOWN" manualHint='Enter "UP" or "DOWN".' />; }
+export function SunMoonHandlingPanel() { return <GameHandlerPanel gameKey="sunvsmoon" label="Sun vs Moon" icon={Sun} manualLabel="Winning Side" manualPlaceholder="sun / moon / eclipse" manualHint="Forces the round outcome to Sun, Eclipse, or Moon." />; }
+export function MinesHandlingPanel() { return <GameHandlerPanel gameKey="mines" label="Mines" icon={Bomb} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." />; }
+export function TradingHandlingPanel() { return <GameHandlerPanel gameKey="trading" label="Trading" icon={BarChart2} manualLabel="N/A" manualPlaceholder="N/A" manualHint="Quick stakes control only." />; }
 
 export function AllGameHandlersSection() {
   return (
     <div className="space-y-4">
-      <WingoHandlingPanel />
-      <K3HandlingPanel />
-      <FiveDHandlingPanel />
       <SunMoonHandlingPanel />
       <MinesHandlingPanel />
       <TradingHandlingPanel />
@@ -293,25 +314,26 @@ export function GlobalBetLimitsPanel() {
   };
 
   return (
-    <div className="panel space-y-4">
-      <div className="flex items-center gap-2">
-        <Shield className="w-4 h-4 text-neon-400" />
-        <span className="font-semibold text-sm">Global Bet Limits</span>
-        <span className="text-xs text-gray-400 ml-auto">Applies to every game as default · engine rejects out-of-range stakes.</span>
+    <div className="panel p-4 space-y-3">
+      <div>
+        <h2 className="font-display font-bold text-lg text-white flex items-center gap-2"><DollarSign className="w-5 h-5 text-emeraldwin-300" /> Global Bet Limits</h2>
+        <p className="text-xs text-slate-500">Applies to every game as default · engine rejects out-of-range stakes.</p>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-2">
         <div>
-          <label className="text-xs text-gray-400 mb-1 block">Min Bet ({store.currency})</label>
+          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Min Bet ({store.currency})</p>
           <input type="number" value={min} onChange={(e) => setMin(e.target.value)} min={1} step={1} className="input tabular" />
         </div>
         <div>
-          <label className="text-xs text-gray-400 mb-1 block">Max Bet ({store.currency})</label>
+          <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Max Bet ({store.currency})</p>
           <input type="number" value={max} onChange={(e) => setMax(e.target.value)} min={1} step={1} className="input tabular" />
         </div>
       </div>
-      <button onClick={save} className="btn-primary w-full py-2 text-xs">Save Global Limits</button>
-      {msg && <p className="text-xs text-neon-300">{msg}</p>}
-      <p className="text-xs text-gray-500">Active: {store.currency}{cfg.minBet} – {store.currency}{cfg.maxBet}</p>
+      <button onClick={save} className="btn-emerald w-full py-2">Save Global Limits</button>
+      {msg && <p className="text-[11px] text-emeraldwin-300 font-semibold">{msg}</p>}
+      <p className="text-[11px] text-slate-500">
+        Active: <span className="tabular text-white">{store.currency}{cfg.minBet}</span> – <span className="tabular text-white">{store.currency}{cfg.maxBet}</span>
+      </p>
     </div>
   );
 }
@@ -324,65 +346,313 @@ export function PerGameBetLimitsPanel() {
   const [expanded, setExpanded] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, { min: string; max: string }>>(() => {
     const result: Record<string, { min: string; max: string }> = {};
-    gameMeta.forEach(({ key }) => {
-      const lim = cfg.perGameLimits[key];
-      result[key] = { min: String(lim?.min ?? cfg.minBet), max: String(lim?.max ?? cfg.maxBet) };
+    gameMeta.forEach((g) => {
+      const override = cfg.perGameLimits[g.key];
+      result[g.key] = { min: override ? String(override.min) : '', max: override ? String(override.max) : '' };
     });
     return result;
   });
   const [msg, setMsg] = useState<string | null>(null);
 
-  const saveAll = () => {
-    const perGameLimits: typeof cfg.perGameLimits = {};
-    for (const { key } of gameMeta) {
-      const d = drafts[key];
-      const mn = parseFloat(d?.min ?? '');
-      const mx = parseFloat(d?.max ?? '');
-      if (Number.isFinite(mn) && Number.isFinite(mx) && mn > 0 && mx > mn) {
-        perGameLimits[key] = { min: mn, max: mx };
-      }
+  const save = (key: string) => {
+    const d = drafts[key];
+    const mn = parseFloat(d.min);
+    const mx = parseFloat(d.max);
+    if (d.min === '' && d.max === '') {
+      store.setGameLimit(key, null);
+      setMsg(`${key} cleared — using global limits.`);
+    } else if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn <= 0 || mx <= mn) {
+      setMsg('Invalid — max must exceed min.');
+    } else {
+      store.setGameLimit(key, { min: mn, max: mx });
+      setMsg(`${key} limits saved.`);
     }
-    store.setAdmin({ perGameLimits });
-    setMsg('Per-game limits saved.');
     setTimeout(() => setMsg(null), 2000);
   };
 
   return (
-    <div className="panel space-y-3">
-      <button onClick={() => setExpanded((v) => !v)} className="w-full flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <SlidersHorizontal className="w-4 h-4 text-neon-400" />
-          <span className="font-semibold text-sm">Per-Game Bet Limits</span>
-        </div>
-        {expanded ? <ChevronUp className="w-4 h-4 text-gray-400" /> : <ChevronDown className="w-4 h-4 text-gray-400" />}
+    <div className="panel p-4 space-y-3">
+      <button onClick={() => setExpanded(!expanded)} className="w-full flex items-center justify-between">
+        <h2 className="font-display font-bold text-lg text-white flex items-center gap-2">
+          <DollarSign className="w-5 h-5 text-neon-300" /> Per-Game Bet Limits
+        </h2>
+        {expanded ? <ChevronUp className="w-4 h-4 text-slate-500" /> : <ChevronDown className="w-4 h-4 text-slate-500" />}
       </button>
       {expanded && (
         <>
-          <div className="space-y-2">
-            {gameMeta.map(({ key, label }) => (
-              <div key={key} className="grid grid-cols-3 gap-2 items-center">
-                <span className="text-xs text-gray-300">{label}</span>
-                <input
-                  type="number" min={1}
-                  value={drafts[key]?.min ?? ''}
-                  onChange={(e) => setDrafts((d) => ({ ...d, [key]: { ...d[key], min: e.target.value } }))}
-                  className="input tabular text-xs py-1"
-                  placeholder="Min"
-                />
-                <input
-                  type="number" min={1}
-                  value={drafts[key]?.max ?? ''}
-                  onChange={(e) => setDrafts((d) => ({ ...d, [key]: { ...d[key], max: e.target.value } }))}
-                  className="input tabular text-xs py-1"
-                  placeholder="Max"
-                />
-              </div>
-            ))}
+          <p className="text-xs text-slate-500">Override global limits for individual games. Leave blank to inherit global min/max.</p>
+          <div className="space-y-3">
+            {gameMeta.map((g) => {
+              const draft = drafts[g.key];
+              const override = cfg.perGameLimits[g.key];
+              return (
+                <div key={g.key} className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs font-bold text-white">{g.label}</span>
+                    {override && <span className="text-[9px] bg-neon-500/20 text-neon-300 px-2 py-0.5 rounded-full border border-neon-400/30">Override active</span>}
+                  </div>
+                  <div className="flex gap-2 items-center">
+                    <div className="flex-1">
+                      <p className="text-[9px] text-slate-500 mb-0.5">Min ({store.currency})</p>
+                      <input type="number" value={draft.min} placeholder={String(cfg.minBet)} onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], min: e.target.value } }))} className="input tabular text-sm py-1.5 w-full" />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-[9px] text-slate-500 mb-0.5">Max ({store.currency})</p>
+                      <input type="number" value={draft.max} placeholder={String(cfg.maxBet)} onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], max: e.target.value } }))} className="input tabular text-sm py-1.5 w-full" />
+                    </div>
+                    <button onClick={() => save(g.key)} className="btn-primary px-3 py-1.5 text-xs mt-4">Save</button>
+                    {override && (
+                      <button onClick={() => { store.setGameLimit(g.key, null); setDrafts((prev) => ({ ...prev, [g.key]: { min: '', max: '' } })); }} className="p-1.5 mt-4 rounded-lg bg-coral-500/15 border border-coral-500/30 hover:bg-coral-500/25 transition-colors">
+                        <X className="w-3.5 h-3.5 text-coral-400" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <button onClick={saveAll} className="btn-primary w-full py-2 text-xs">Save Per-Game Limits</button>
-          {msg && <p className="text-xs text-neon-300">{msg}</p>}
+          {msg && <p className="text-[11px] text-emeraldwin-300 font-semibold">{msg}</p>}
         </>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Top Rankings
+// ─────────────────────────────────────────────────────────────────────────────
+type Range = 'day' | 'week' | 'month' | 'year';
+const RANGE_MS: Record<Range, number> = { day: 86400_000, week: 7 * 86400_000, month: 30 * 86400_000, year: 365 * 86400_000 };
+
+export function TopRankingsAdminPanel() {
+  const [range, setRange] = useState<Range>('day');
+  const [game, setGame] = useState<'crash' | 'mines' | 'aviator'>('crash');
+  const [sort, setSort] = useState<'earnings' | 'recent'>('earnings');
+
+  const rows = useMemo(() => {
+    const cutoff = Date.now() - RANGE_MS[range];
+    const src = game === 'mines' ? store.minesLeaderboard : store.crashLeaderboard;
+    const filtered = src.filter((r) => r.ts >= cutoff);
+    filtered.sort((a, b) => (sort === 'earnings' ? b.earnings - a.earnings : b.ts - a.ts));
+    return filtered.slice(0, 25);
+  }, [range, game, sort]);
+
+  return (
+    <div className="panel p-4 space-y-3">
+      <div>
+        <h2 className="font-display font-bold text-lg text-white flex items-center gap-2"><Trophy className="w-5 h-5 text-amberx-400" /> Top Rankings</h2>
+        <p className="text-xs text-slate-500">Global player metrics · mirrors the in-game leaderboard.</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <SelectModal value={game} options={[{value:'crash',label:'Crash'},{value:'mines',label:'Mines'},{value:'aviator',label:'Aviator'}]} onChange={(v) => setGame(v as 'crash' | 'mines' | 'aviator')} />
+        <SelectModal value={sort} options={[{value:'earnings',label:'Sort by Earnings'},{value:'recent',label:'Sort by Recency'}]} onChange={(v) => setSort(v as 'earnings' | 'recent')} />
+        <div className="flex gap-1 ml-auto">
+          {(['day', 'week', 'month', 'year'] as Range[]).map((r) => (
+            <button key={r} onClick={() => setRange(r)} className={`px-2.5 py-1 rounded-md text-[11px] font-bold uppercase ${range === r ? 'bg-neon-500/20 border border-neon-400/50 text-neon-300' : 'bg-slatepanel-800 border border-borderline-900 text-slate-400'}`}>{r}</button>
+          ))}
+        </div>
+      </div>
+      <div className="max-h-80 overflow-y-auto scrollbar-thin">
+        <table className="w-full text-[12px]">
+          <thead className="text-slate-500 uppercase tracking-wider text-[10px] sticky top-0 bg-slatepanel-900">
+            <tr><th className="text-left py-1.5">#</th><th className="text-left">Player</th><th className="text-right">Earnings</th><th className="text-right">Last Seen</th></tr>
+          </thead>
+          <tbody className="tabular">
+            {rows.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-slate-500">No data in selected range.</td></tr>}
+            {rows.map((r, i) => (
+              <tr key={i} className="border-t border-borderline-900/60">
+                <td className="py-1.5 text-slate-500">{i + 1}</td>
+                <td className="text-slate-200 font-semibold">{r.user}</td>
+                <td className="text-right text-emeraldwin-300 font-bold">{store.currency}{r.earnings.toFixed(2)}</td>
+                <td className="text-right text-slate-500 text-[10px]">{new Date(r.ts).toLocaleDateString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Online Users Count Panel
+// ─────────────────────────────────────────────────────────────────────────────
+export function OnlineCountPanel() {
+  const [baseCount, setBaseCount] = useState(150);
+  const [autoMode, setAutoMode] = useState(true);
+  const [displayCount, setDisplayCount] = useState(150);
+
+  useEffect(() => {
+    if (!autoMode) { setDisplayCount(baseCount); return; }
+    const tick = () => {
+      const delta = Math.round((Math.random() - 0.5) * 14);
+      setDisplayCount((prev) => {
+        const next = prev + delta;
+        return Math.max(Math.max(0, baseCount - 30), Math.min(baseCount + 30, next));
+      });
+    };
+    tick();
+    let timeoutId: ReturnType<typeof setTimeout>;
+    const schedule = () => { timeoutId = setTimeout(() => { tick(); schedule(); }, 2000 + Math.random() * 1000); };
+    schedule();
+    return () => clearTimeout(timeoutId);
+  }, [autoMode, baseCount]);
+
+  return (
+    <div className="panel p-4 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="font-display font-bold text-lg text-white flex items-center gap-2"><Users className="w-5 h-5 text-emeraldwin-300" /> Online Users</h2>
+          <p className="text-xs text-slate-500">Controls the online count shown to users.</p>
+        </div>
+        <div className="text-center flex-shrink-0">
+          <p className="font-display font-extrabold text-3xl text-emeraldwin-300 tabular">{displayCount.toLocaleString()}</p>
+          <p className="text-[10px] text-slate-500">currently online</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={() => setAutoMode(true)} className={`panel p-3 text-left transition-all ${autoMode ? 'border-emeraldwin-400 ring-1 ring-emeraldwin-400/40' : 'opacity-70 hover:opacity-100'}`}>
+          <div className="flex items-center gap-2 mb-1"><RefreshCw className={`w-4 h-4 ${autoMode ? 'text-emeraldwin-300' : 'text-slate-500'}`} /><span className="font-display font-bold text-white text-sm">Auto</span></div>
+          <p className="text-[11px] text-slate-400">Realistic ±fluctuation every 2–3 s</p>
+        </button>
+        <button onClick={() => setAutoMode(false)} className={`panel p-3 text-left transition-all ${!autoMode ? 'border-neon-400 ring-1 ring-neon-400/40' : 'opacity-70 hover:opacity-100'}`}>
+          <div className="flex items-center gap-2 mb-1"><SlidersHorizontal className={`w-4 h-4 ${!autoMode ? 'text-neon-300' : 'text-slate-500'}`} /><span className="font-display font-bold text-white text-sm">Fixed</span></div>
+          <p className="text-[11px] text-slate-400">Locked to slider value</p>
+        </button>
+      </div>
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <label className="text-sm font-semibold text-white flex items-center gap-2"><ChevronUp className="w-4 h-4 text-neon-300" /> Base Count</label>
+          <span className="tabular font-display font-extrabold text-lg text-neon-300">{baseCount}</span>
+        </div>
+        <input type="range" min={0} max={5000} step={10} value={baseCount} onChange={(e) => setBaseCount(parseInt(e.target.value))} className="w-full accent-neon-400 h-2" />
+        <div className="flex justify-between text-[10px] text-slate-500 mt-1"><span>0</span><span>1000</span><span>2500</span><span>5000</span></div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Top Win Paid Out Panel
+// ─────────────────────────────────────────────────────────────────────────────
+export function TopWinPaidOutPanel() {
+  const [topWins, setTopWins] = useState<{ username: string; game: string; amount: number; ts: number }[]>([]);
+
+  const loadWins = () => {
+    const wins = store.adminHistory.filter((r) => r.win > 0).sort((a, b) => b.win - a.win).slice(0, 10)
+      .map((r) => ({ username: r.username, game: r.game, amount: r.win, ts: r.ts }));
+    setTopWins(wins);
+  };
+
+  useEffect(() => { loadWins(); const id = setInterval(loadWins, 3000); return () => clearInterval(id); }, []);
+
+  return (
+    <div className="panel p-4 space-y-3">
+      <div>
+        <h2 className="font-display font-bold text-lg text-white flex items-center gap-2"><Trophy className="w-5 h-5 text-amberx-400" /> Top Win Paid Out</h2>
+        <p className="text-xs text-slate-500">Highest winnings paid to players · auto-updates every 3 s.</p>
+      </div>
+      {topWins.length === 0 ? (
+        <p className="text-xs text-slate-500 text-center py-4">No wins recorded yet.</p>
+      ) : (
+        <div className="space-y-2 max-h-72 overflow-y-auto">
+          {topWins.map((w, i) => (
+            <div key={i} className="flex items-center justify-between bg-slatepanel-800 rounded-xl p-3 border border-borderline-800">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-[10px] text-slate-500 font-bold w-5 flex-shrink-0">{i + 1}</span>
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-white truncate">{w.username}</p>
+                  <p className="text-[10px] text-slate-500 capitalize">{w.game}</p>
+                </div>
+              </div>
+              <div className="text-right flex-shrink-0">
+                <p className="text-sm font-bold text-emeraldwin-300">{store.currency}{w.amount.toFixed(2)}</p>
+                <p className="text-[10px] text-slate-500">{new Date(w.ts).toLocaleDateString()}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Default export — Game Algos Tab content
+// ─────────────────────────────────────────────────────────────────────────────
+export default function GameAlgosTab() {
+  const logos = useGameLogos();
+  const fileRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [uploading, setUploading] = useState<Record<string, boolean>>({});
+
+  const onUpload = async (key: GameKey, file: File) => {
+    if (!file.type.startsWith('image/')) {
+      cms.toast({ title: 'Invalid file', body: 'Please upload an image file.', kind: 'warn' });
+      return;
+    }
+    setUploading((prev) => ({ ...prev, [key]: true }));
+    try {
+      const url = await gameLogos.uploadAndSet(key, file);
+      if (url) {
+        cms.toast({ title: 'Logo updated', body: `${key} logo uploaded successfully.`, kind: 'success' });
+      } else {
+        cms.toast({ title: 'Upload failed', body: 'Could not save the logo. Try again.', kind: 'warn' });
+      }
+    } catch {
+      cms.toast({ title: 'Upload error', body: 'An error occurred. Please try again.', kind: 'warn' });
+    } finally {
+      setUploading((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="font-display font-bold text-lg text-white">Game Algorithms &amp; Assets</h2>
+        <p className="text-xs text-slate-500">Crash &amp; Aviator handling panels are in Game Handlers tab. Manage game logos here.</p>
+      </div>
+      <div className="panel p-4">
+        <h3 className="font-display font-bold text-sm text-white mb-1 flex items-center gap-2">
+          <ImageIcon className="w-4 h-4 text-neon-300" /> Game Logo Upload
+        </h3>
+        <p className="text-xs text-slate-500 mb-3">Upload custom logos for game cards. Replaces default icons instantly.</p>
+        <div className="grid grid-cols-4 gap-3">
+          {gameMeta.map((g) => {
+            const Icon = g.icon;
+            const logo = logos[g.key];
+            const isUploading = uploading[g.key];
+            return (
+              <div key={g.key} className="panel-tight p-3 text-center">
+                <div className="w-14 h-14 mx-auto rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center overflow-hidden mb-2">
+                  {logo ? <img src={logo} alt={g.label} className="w-full h-full object-contain" /> : <Icon className="w-7 h-7 text-slate-500" strokeWidth={1.5} />}
+                </div>
+                <p className="text-[10px] font-semibold text-white mb-2 truncate">{g.label}</p>
+                <div className="flex gap-1 justify-center">
+                  <button
+                    onClick={() => fileRefs.current[g.key]?.click()}
+                    disabled={isUploading}
+                    className="btn-ghost px-2 py-1 text-[10px] disabled:opacity-50"
+                  >
+                    <Upload className="w-3 h-3" /> {isUploading ? '…' : 'Upload'}
+                  </button>
+                  {logo && (
+                    <button onClick={() => gameLogos.remove(g.key)} className="w-7 h-7 rounded-lg bg-coral-500/15 border border-coral-500/40 grid place-items-center">
+                      <Trash2 className="w-3 h-3 text-coral-400" />
+                    </button>
+                  )}
+                </div>
+                <input
+                  ref={(el) => { fileRefs.current[g.key] = el; }}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => { if (e.target.files?.[0]) { void onUpload(g.key, e.target.files[0]); e.target.value = ''; } }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
