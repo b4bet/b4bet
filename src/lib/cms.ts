@@ -538,8 +538,6 @@ class Cms {
       const statusLabel = status === 'approved' ? 'Successful' : status === 'cancelled' ? 'Cancelled' : status === 'processing' ? 'Processing' : status === 'rejected' ? 'Failed' : status;
       const reasonText = reason ? `: ${reason}` : '';
       this.pushFromTemplate('nt_deposit_ok', `Deposit ${statusLabel}`, `Your deposit of ${store.currency}${before.amount.toFixed(2)} via ${before.method} is ${status}${reasonText}.`, status === 'approved' ? 'success' : status === 'processing' ? 'info' : 'warn');
-
-      // Send deposit email (edge function resolves email by userId server-side)
       if ((status === 'approved' || status === 'rejected') && before.userId) {
         emailService.sendDepositEmail(before.userId, before.user, `${store.currency}${before.amount.toFixed(2)}`, `${store.currency}0.00`, id, status);
       }
@@ -561,8 +559,6 @@ class Cms {
       const utrText = utr ? ` (UTR: ${utr})` : '';
       const reasonText = reason ? `: ${reason}` : '';
       this.pushFromTemplate('nt_withdrawal_ok', `Withdrawal ${status}`, `Your withdrawal of ${store.currency}${before.amount.toFixed(2)} to ${before.destination} is ${status}${utrText}${reasonText}.`, status === 'approved' ? 'success' : 'info');
-
-      // Send withdrawal email (edge function resolves email by userId server-side)
       if (before.userId) {
         emailService.sendWithdrawalEmail(before.userId, before.user, `${store.currency}${before.amount.toFixed(2)}`, status, id);
       }
@@ -761,8 +757,7 @@ class Cms {
   sendStaffDM(toId: string, body: string) {
     const me = this.currentStaff();
     if (!me) return;
-    const dmId = Math.random().toString(36).slice(2);
-    const rec: StaffDM = { id: dmId, fromId: me.id, toId, body, ts: Date.now(), read: false };
+    const rec: StaffDM = { id: Math.random().toString(36).slice(2), fromId: me.id, toId, body, ts: Date.now(), read: false };
     this.staffDMs = [...this.staffDMs, rec]; this.emitDMs();
   }
 
@@ -776,14 +771,92 @@ class Cms {
     return this.staffDMs.filter(d => d.toId === me && !d.read).length;
   }
 
+  staffConversation(otherId: string): StaffDM[] {
+    const meId = this.staffSessionId;
+    if (!meId) return [];
+    return this.staffDMs.filter(m => (m.fromId === meId && m.toId === otherId) || (m.fromId === otherId && m.toId === meId));
+  }
+
+  // ---- Countries / Geo ----
+  addCountry(c: Omit<Country, 'id'>) {
+    this.countries = [...this.countries, { ...c, id: 'c_' + Math.random().toString(36).slice(2, 7) }];
+    bus.emit(Topics.Countries, this.countries);
+  }
+  updateCountry(id: string, patch: Partial<Country>) {
+    this.countries = this.countries.map(c => c.id === id ? { ...c, ...patch } : c);
+    bus.emit(Topics.Countries, this.countries);
+  }
+
+  /** Returns the currently detected Country object (or undefined if not set). */
+  detectedCountry(): Country | undefined {
+    return this.countries.find(c => c.id === this.detectedCountryId);
+  }
+
+  /** Update which country was detected for the current visitor. */
+  setDetectedCountry(id: string) {
+    this.detectedCountryId = id;
+    bus.emit(Topics.Countries, this.countries);
+  }
+
+  /** Returns true if the detected country is inactive (geo-blocked). */
+  isGeoBlocked(): boolean {
+    const c = this.detectedCountry();
+    if (!c) return false;
+    return !c.isActive;
+  }
+
+  // ---- IP Signup Bonus Check ----
+  async hasIpAlreadySignedUp(ip: string): Promise<boolean> {
+    try {
+      const { data, error } = await supabase.rpc('check_ip_signup_bonus', { p_ip: ip });
+      if (error) return false;
+      return !!data;
+    } catch { return false; }
+  }
+
+  // ---- Referrals ----
   addReferral(r: Referral) { this.referrals = [...this.referrals, r]; this.emitReferrals(); }
 
+  /** Record a new referral signup — called by auth.ts after a successful registration. */
+  recordReferralSignup(user: AuthUser, referrerId: string) {
+    const cfg = this.referralConfig;
+    const referral: Referral = {
+      id: 'ref_' + Math.random().toString(36).slice(2),
+      referrerId,
+      referredUserId: user.id,
+      referredUsername: user.username,
+      depositAmount: 0,
+      firstDepositApproved: false,
+      rewardPaid: false,
+      rewardCredited: false,
+      rewardAmount: cfg.rewardAmount,
+      createdAt: Date.now(),
+      ts: Date.now(),
+    };
+    this.referrals = [...this.referrals, referral];
+    this.emitReferrals();
+    // Persist to Supabase
+    supabase.from('referrals').insert({
+      referrer_id: referrerId,
+      referred_user_id: user.id,
+      referred_username: user.username,
+      reward_amount: cfg.rewardAmount,
+    }).then(() => {}).catch(() => {});
+  }
+
+  updateReferralReward(referralId: string, patch: Partial<Referral>) {
+    this.referrals = this.referrals.map(r => r.id === referralId ? { ...r, ...patch } : r);
+    this.emitReferrals();
+  }
+
+  // ---- Affiliates ----
   addAffiliate(app: AffiliateApplication) { this.affiliates = [...this.affiliates, app]; bus.emit(Topics.Affiliates, this.affiliates); }
   updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
     this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
     bus.emit(Topics.Affiliates, this.affiliates);
   }
 
+  // ---- Gateways / Manual Methods ----
   setAutoGateways(gws: AutoGateway[]) { this.autoGateways = gws; this.emitGateways(); }
 
   async saveManualMethod(method: ManualMethod) {
