@@ -371,10 +371,30 @@ class Store {
     if (session) {
       this.balancesByUser[session.username.toLowerCase()] = next;
       this.persistBalances();
-      // Do NOT write to Supabase — the Edge Function handles the DB deduction
+      // Do NOT write to Supabase — the caller handles the DB write
     }
     bus.emit(Topics.Balance, this.balance);
     return true;
+  }
+
+  /**
+   * Credit balance locally (in-memory + localStorage) WITHOUT writing to Supabase.
+   *
+   * Use this when the caller is responsible for writing the updated balance to
+   * Supabase (e.g. withdrawal refund in cms.setWithdrawalStatus). Avoids a
+   * double-write: once here and once in the caller.
+   */
+  creditLocalOnly(amount: number): void {
+    if (amount <= 0 || !isFinite(amount)) return;
+    const next = Math.max(0, Math.round((this.balance + amount) * 100) / 100);
+    this.balance = next;
+    const session = auth.getSession();
+    if (session) {
+      this.balancesByUser[session.username.toLowerCase()] = next;
+      this.persistBalances();
+      // Do NOT write to Supabase — the caller handles the DB write
+    }
+    bus.emit(Topics.Balance, this.balance);
   }
 
   addBalance(amount: number) { this.credit(amount); }
