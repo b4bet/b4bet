@@ -1,8 +1,7 @@
 /**
  * SunVsMoonView — server-side outcome version.
  * FIX: Persist bet state (choice, placed, amount, round) to localStorage
- * so navigating away mid-round and coming back shows the placed bet.
- * FEAT: My Bets tab loads full history from Supabase on mount.
+ * FIX: Persist last 20 my-bets to localStorage so they survive navigation
  * FIX: Use overlayResult (server-confirmed) to prevent image flash on result reveal.
  */
 
@@ -31,8 +30,9 @@ const QUICK_STAKES = [100, 200, 500, 1000];
 const CHOICE_IMAGES: Record<BetChoice, string> = { sun: '/sun.png', moon: '/moon.png', tie: '/eclipse.png' };
 const CHOICE_LABELS: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
 
-// ── Persistence helpers ──────────────────────────────────────────────────────
-const SM_BET_KEY = 'b4bet_sunmoon_active_bet';
+// ── Active bet persistence ────────────────────────────────────────────────────
+const SM_BET_KEY    = 'b4bet_sunmoon_active_bet';
+const SM_MYBETS_KEY = 'b4bet_sunmoon_my_bets';
 
 interface SunMoonSavedBet {
   roundNumber: number;
@@ -63,6 +63,21 @@ function loadSunMoonBet(): SunMoonSavedBet | null {
     }
     return parsed;
   } catch { return null; }
+}
+
+// ── My Bets localStorage helpers ──────────────────────────────────────────────
+function saveMyBets(bets: MyBetEntry[]) {
+  try {
+    localStorage.setItem(SM_MYBETS_KEY, JSON.stringify(bets.slice(0, 20)));
+  } catch { /* ignore */ }
+}
+
+function loadMyBets(): MyBetEntry[] {
+  try {
+    const raw = localStorage.getItem(SM_MYBETS_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw) as MyBetEntry[];
+  } catch { return []; }
 }
 
 // ── Supabase bet record shape ─────────────────────────────────────────────────
@@ -263,9 +278,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const [secondsLeft,    setSecondsLeft]    = useState(initEng.secondsLeft);
   const [roundNumber,    setRoundNumber]    = useState(YEAR_PREFIX * 10 + initEng.roundId);
   const [result,         setResult]         = useState<BetChoice | null>(initEng.result);
-  // overlayResult is the CONFIRMED result shown in the overlay.
-  // When a bet is placed, this stays null until the server confirms (prevents image flash).
-  // When no bet is placed, this is set immediately from the engine.
+  // overlayResult: confirmed by server before showing (no flash)
   const [overlayResult,  setOverlayResult]  = useState<BetChoice | null>(null);
   const [lastWon,        setLastWon]        = useState(false);
   const [lastPayout,     setLastPayout]     = useState(0);
@@ -273,7 +286,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     const h = sunMoonLoop.getHistory();
     return h.map((r, i) => ({ round: YEAR_PREFIX * 10 + initEng.roundId - (i + 1), result: r }));
   });
-  const [myBets, setMyBets] = useState<MyBetEntry[]>([]);
+  // Initialize myBets from localStorage so they persist across navigation
+  const [myBets, setMyBets] = useState<MyBetEntry[]>(() => loadMyBets());
   const [myBetsLoading, setMyBetsLoading] = useState(false);
   const [historyTab, setHistoryTab] = useState<'rounds' | 'my'>('rounds');
   const [settling,   setSettling]   = useState(false);
@@ -287,6 +301,9 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
   useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
 
+  // Persist myBets to localStorage whenever they change
+  useEffect(() => { saveMyBets(myBets); }, [myBets]);
+
   // ── Load full bet history from Supabase on mount ──────────────────────────
   useEffect(() => {
     const session = auth.getSession();
@@ -299,11 +316,13 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       .eq('user_id', session.userId)
       .contains('bet_details', { game: 'sunvsmoon' })
       .order('placed_at', { ascending: false })
-      .limit(100)
+      .limit(20)
       .then(({ data, error }) => {
         if (!error && data) {
           const rows = (data as SupabaseBetRow[]).map(rowToMyBet).filter((r): r is MyBetEntry => r !== null);
-          setMyBets(rows);
+          if (rows.length > 0) {
+            setMyBets(rows);
+          }
         }
       })
       .finally(() => setMyBetsLoading(false));
@@ -361,8 +380,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         saveSunMoonBet(null);
 
         if (sb !== null && placed) {
-          // Bet was placed: wait for server confirmation before showing overlay.
-          // overlayResult stays null until server responds — no image flash.
+          // Wait for server before showing overlay — no image flash
           const stake = betAmountRef.current;
           const session = auth.getSession();
           if (!session) return;
@@ -374,12 +392,11 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               const serverOutcome = res.result as BetChoice;
               const actuallyWon = res.won;
 
-              // Update history entry with server-confirmed result
               setHistory((prev) =>
                 prev.map((h) => h.round === rn ? { ...h, result: serverOutcome } : h)
               );
               setResult(serverOutcome);
-              // Set overlayResult ONCE from server — prevents flash from local→server result
+              // Show overlay only after server confirms — single stable image
               setOverlayResult(serverOutcome);
               setLastWon(actuallyWon);
               setLastPayout(res.profit);
@@ -390,23 +407,20 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               };
               store.recordSunMoonRound(record);
 
-              // Prepend to my bets list
               const newEntry: MyBetEntry = {
                 id: Math.random().toString(36).slice(2),
                 round: rn, bet: sb, result: serverOutcome, stake,
                 win: actuallyWon ? res.profit : 0, ts: Date.now(),
               };
-              setMyBets((prev) => [newEntry, ...prev].slice(0, 100));
+              setMyBets((prev) => [newEntry, ...prev].slice(0, 20));
             })
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : 'Server error';
               cms.toast({ title: 'Settle failed', body: msg, kind: 'alert' });
-              // On error, fall back to local engine result so overlay doesn't stay blank
               setOverlayResult(localOutcome);
             })
             .finally(() => setSettling(false));
         } else {
-          // No bet placed: show local engine result immediately in overlay
           setOverlayResult(localOutcome);
         }
       }
@@ -467,7 +481,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
   const canPlaceBet     = phase === 'betting' && !betPlaced && !settling && selectedChoice !== null && betAmount >= limits.min;
   const canSelectChoice = phase === 'betting' && !betPlaced;
-  // Show settling spinner when phase is revealed but overlayResult not yet available (server pending)
   const isAwaitingServer = phase === 'revealed' && overlayResult === null;
 
   return (
@@ -506,7 +519,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         {/* ── Game card ── */}
         <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden min-h-[420px]">
 
-          {/* Result overlay — only shows after server confirms result (no flash) */}
           <ResultOverlay
             visible={phase === 'revealed' && overlayResult !== null}
             result={overlayResult}
@@ -517,7 +529,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
           <div className="p-4 space-y-4">
 
-            {/* Timer / Processing spinner */}
+            {/* Timer / Processing */}
             <div className="flex flex-col items-center gap-2">
               {phase === 'betting' ? (
                 <TimerCircle secondsLeft={secondsLeft} total={BETTING_DURATION} />
@@ -585,7 +597,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               </div>
             )}
 
-            {/* PLACE BET */}
+            {/* PLACE BET button */}
             {phase === 'betting' && !betPlaced && (
               <button
                 onClick={handlePlaceBet}
@@ -600,12 +612,12 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                 {selectedChoice === null
                   ? 'Select SUN / ECLIPSE / MOON first'
                   : betAmount < limits.min
-                    ? `Min bet is \u20b9${limits.min}`
-                    : `PLACE BET \u2014 \u20b9${betAmount.toLocaleString()}`}
+                    ? `Min bet is ₹${limits.min}`
+                    : `PLACE BET — ₹${betAmount.toLocaleString()}`}
               </button>
             )}
 
-            {/* Bet placed bar */}
+            {/* Bet placed confirmation bar */}
             {phase === 'betting' && betPlaced && (
               <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
                 <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
@@ -638,7 +650,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
           {historyTab === 'my' && (
             <div className="space-y-2">
-              {myBetsLoading ? (
+              {myBetsLoading && myBets.length === 0 ? (
                 <div className="flex flex-col gap-2">
                   {[1, 2, 3].map((i) => (
                     <div key={i} className="h-14 rounded-xl bg-slatepanel-800/60 border border-borderline-900 animate-pulse" />
@@ -651,16 +663,16 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
                     <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-white">#{b.round || '\u2014'}</p>
+                      <p className="text-xs font-bold text-white">#{b.round || '—'}</p>
                       <p className="text-[10px] text-slate-400">
-                        Bet {CHOICE_LABELS[b.bet]} \u00b7 Result {CHOICE_LABELS[b.result]}
+                        Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
                       <p className={`text-sm font-black ${b.win > 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
-                        {b.win > 0 ? `+\u20b9${b.win.toLocaleString()}` : `-\u20b9${b.stake.toLocaleString()}`}
+                        {b.win > 0 ? `+₹${b.win.toLocaleString()}` : `-₹${b.stake.toLocaleString()}`}
                       </p>
-                      <p className="text-[9px] text-slate-500">Stake \u20b9{b.stake.toLocaleString()}</p>
+                      <p className="text-[9px] text-slate-500">Stake ₹{b.stake.toLocaleString()}</p>
                     </div>
                   </div>
                 ))
