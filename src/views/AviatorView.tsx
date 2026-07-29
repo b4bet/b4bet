@@ -4,7 +4,9 @@ interface Props { onBack?: () => void; }
 
 export default function AviatorView({ onBack }: Props) {
   return (
-    <div style={{ minHeight: 'calc(100dvh - 62px - 64px)' }}>
+    // Fixed height — not minHeight — so the inner flex+overflow container
+    // gets a real constrained height and sticky positioning works.
+    <div style={{ height: 'calc(100dvh - 62px - 64px)', overflow: 'hidden' }}>
       <AviatorGame onBack={onBack} />
     </div>
   );
