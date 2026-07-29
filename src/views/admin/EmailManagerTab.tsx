@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Mail, Save, Eye, Code2, Send } from 'lucide-react';
 import { cms } from '../../lib/cms';
 import { useEmailTemplates } from '../../lib/cmsHooks';
@@ -61,14 +61,24 @@ export default function EmailManagerTab() {
   const templates = useEmailTemplates();
   const [active, setActive] = useState<keyof EmailTemplates>('welcome');
   const [preview, setPreview] = useState(false);
+  // draft syncs with latest templates from Supabase on first load
   const [draft, setDraft] = useState<EmailTemplates>(templates);
+  const [synced, setSynced] = useState(false);
+
+  // When Supabase templates load (non-empty), sync draft once
+  useEffect(() => {
+    if (!synced && templates.welcome) {
+      setDraft(templates);
+      setSynced(true);
+    }
+  }, [templates, synced]);
 
   const current = tabs.find((t) => t.key === active)!;
-  const html = draft[active] ?? '';
+  const html = (draft[active] as string | undefined) ?? '';
 
   const save = () => {
     cms.setEmailTemplate(active, html);
-    cms.toast({ title: 'Template saved', body: `${current.label} mapped to ${current.smtpFn}.`, kind: 'success' });
+    cms.toast({ title: 'Template saved', body: `${current.label} saved successfully.`, kind: 'success' });
   };
 
   const test = () => {
@@ -144,7 +154,7 @@ export default function EmailManagerTab() {
         </div>
       </div>
 
-      {/* Available Variables - with description and copy button */}
+      {/* Available Variables */}
       <div className="panel p-4">
         <h3 className="font-display font-bold text-sm text-white mb-3">Available Variables</h3>
         <p className="text-xs text-slate-500 mb-3">Variable par click karo — clipboard me copy ho jayega. Template me paste karo.</p>
