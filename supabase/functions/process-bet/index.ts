@@ -23,6 +23,10 @@ async function safeInsert(queryBuilder: PromiseLike<unknown>): Promise<void> {
 /**
  * Reads the admin-configured manual result for sunvsmoon from Supabase settings.
  * Returns null if no manual override is configured or mode is AUTO.
+ *
+ * FIX: checks BOTH cfg.gameHandlers.sunvsmoon AND cfg.sunvsmoon (top-level).
+ * The frontend's loadAdminConfigFromSupabase gives priority to the top-level key,
+ * so both must agree. We treat either one being MANUAL as an active override.
  */
 async function getAdminSunMoonManualResult(
   supabase: ReturnType<typeof createClient>
@@ -34,15 +38,29 @@ async function getAdminSunMoonManualResult(
     const row = rows.find((r) => r.key === "admin_config");
     if (!row?.value || typeof row.value !== "object") return null;
     const cfg = row.value as Record<string, unknown>;
+
+    // Helper: parse a sunvsmoon config object into a valid result or null
+    function parseSunMoonResult(obj: unknown): "sun" | "moon" | "tie" | null {
+      if (!obj || typeof obj !== "object") return null;
+      const sm = obj as Record<string, unknown>;
+      if (sm.mode !== "MANUAL") return null;
+      const result = sm.manualResult as string | undefined;
+      if (result === "sun" || result === "moon" || result === "tie") return result;
+      if (result === "eclipse") return "tie";
+      return null;
+    }
+
+    // Check gameHandlers.sunvsmoon first
     const handlers = cfg.gameHandlers as Record<string, unknown> | undefined;
-    if (!handlers) return null;
-    const sunmoon = handlers["sunvsmoon"] as Record<string, unknown> | undefined;
-    if (!sunmoon) return null;
-    if (sunmoon.mode !== "MANUAL") return null;
-    const result = sunmoon.manualResult as string | undefined;
-    if (result === "sun" || result === "moon" || result === "tie") return result;
-    // Also accept "eclipse" as alias for "tie"
-    if (result === "eclipse") return "tie";
+    if (handlers) {
+      const fromHandlers = parseSunMoonResult(handlers["sunvsmoon"]);
+      if (fromHandlers) return fromHandlers;
+    }
+
+    // Fallback: check top-level cfg.sunvsmoon (this is what the frontend prioritises)
+    const fromTopLevel = parseSunMoonResult(cfg["sunvsmoon"]);
+    if (fromTopLevel) return fromTopLevel;
+
     return null;
   } catch {
     return null;
@@ -52,6 +70,9 @@ async function getAdminSunMoonManualResult(
 /**
  * After using a manual result for a round, revert the sunvsmoon handler back to AUTO
  * so the next round uses random outcome.
+ *
+ * FIX: updates BOTH cfg.gameHandlers.sunvsmoon AND cfg.sunvsmoon (top-level key)
+ * so the frontend sees AUTO mode immediately after the revert.
  */
 async function revertSunMoonToAuto(
   supabase: ReturnType<typeof createClient>
@@ -63,13 +84,21 @@ async function revertSunMoonToAuto(
     const row = rows.find((r) => r.key === "admin_config");
     if (!row?.value || typeof row.value !== "object") return;
     const cfg = { ...(row.value as Record<string, unknown>) };
+
+    const autoState = { mode: "AUTO", manualResult: "", manualTargetRoundId: null };
+
+    // Update gameHandlers.sunvsmoon
     const handlers = { ...(cfg.gameHandlers as Record<string, unknown> ?? {}) };
     const sunmoon = { ...(handlers["sunvsmoon"] as Record<string, unknown> ?? {}) };
-    sunmoon.mode = "AUTO";
-    sunmoon.manualResult = "";
-    sunmoon.manualTargetRoundId = null;
+    Object.assign(sunmoon, autoState);
     handlers["sunvsmoon"] = sunmoon;
     cfg.gameHandlers = handlers;
+
+    // Also update top-level cfg.sunvsmoon (what the frontend reads last / prioritises)
+    const topLevelSunMoon = { ...(cfg["sunvsmoon"] as Record<string, unknown> ?? {}) };
+    Object.assign(topLevelSunMoon, autoState);
+    cfg["sunvsmoon"] = topLevelSunMoon;
+
     await supabase.rpc("admin_update_setting", { p_key: "admin_config", p_value: cfg });
   } catch {
     // Non-fatal — revert best-effort
@@ -304,14 +333,24 @@ serve(async (req) => {
     }
 
     // ── sunvsmoon_result ─────────────────────────────────────────────────────
+    // FIX: now respects admin manual override (and reverts to AUTO after use),
+    // consistent with sunvsmoon_settle behaviour.
     if (action === "sunvsmoon_result") {
       const round_id = payload.round_id;
       const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
       if (existing) {
         return new Response(JSON.stringify({ success: true, result: existing.result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
-      const rand = getSecureRandom();
-      const result = rand < 0.45 ? "sun" : rand < 0.90 ? "moon" : "tie";
+      // Check admin manual override
+      const adminManual = await getAdminSunMoonManualResult(supabase);
+      let result: string;
+      if (adminManual) {
+        result = adminManual;
+        await revertSunMoonToAuto(supabase);
+      } else {
+        const rand = getSecureRandom();
+        result = rand < 0.45 ? "sun" : rand < 0.90 ? "moon" : "tie";
+      }
       await supabase.from("sunvsmoon_rounds").insert({ round_id, result });
       return new Response(JSON.stringify({ success: true, result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
@@ -328,7 +367,7 @@ serve(async (req) => {
       let roundResult: string;
       const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
       if (existing) {
-        // Round result already fixed (another player settled first) — use it
+        // Round result already fixed (another player settled first or sunvsmoon_result was called) — use it
         roundResult = existing.result;
       } else {
         // First settler: check admin manual override from Supabase settings
