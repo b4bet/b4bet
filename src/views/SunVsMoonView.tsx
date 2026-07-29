@@ -26,6 +26,10 @@ const PAYOUTS: Record<BetChoice, number> = { sun: 1, moon: 1, tie: 8 };
 // Quick stake denominations
 const QUICK_STAKES = [100, 200, 500, 1000];
 
+// Image and label helpers — "tie" is always shown as "ECLIPSE" with eclipse.png
+const CHOICE_IMAGES: Record<BetChoice, string> = { sun: '/sun.png', moon: '/moon.png', tie: '/eclipse.png' };
+const CHOICE_LABELS: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
+
 // ── Persistence helpers ──────────────────────────────────────────────────────
 const SM_BET_KEY = 'b4bet_sunmoon_active_bet';
 
@@ -52,7 +56,6 @@ function loadSunMoonBet(): SunMoonSavedBet | null {
     const raw = localStorage.getItem(SM_BET_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as SunMoonSavedBet;
-    // Only valid if saved less than 25 seconds ago (one full cycle + buffer)
     if (Date.now() - parsed.savedAt > 25000) {
       localStorage.removeItem(SM_BET_KEY);
       return null;
@@ -92,10 +95,10 @@ function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: numbe
 }
 
 function BetButton({
-  choice, payout, imageSrc, glowColor,
+  choice, payout, glowColor,
   selected, disabled, onSelect,
 }: {
-  choice: BetChoice; payout: string; imageSrc: string; glowColor: string;
+  choice: BetChoice; payout: string; glowColor: string;
   selected: boolean; disabled: boolean; onSelect: (c: BetChoice) => void;
 }) {
   return (
@@ -115,7 +118,7 @@ function BetButton({
         touchAction: 'manipulation',
       }}
     >
-      <img src={imageSrc} alt={choice} className="w-14 h-14 object-contain drop-shadow-lg pointer-events-none" />
+      <img src={CHOICE_IMAGES[choice]} alt={CHOICE_LABELS[choice]} className="w-14 h-14 object-contain drop-shadow-lg pointer-events-none" />
       <span className="text-[10px] text-slate-400 font-semibold pointer-events-none">{payout}</span>
     </button>
   );
@@ -128,16 +131,13 @@ function ResultOverlay({
 }) {
   if (!visible || !result) return null;
 
-  const images: Record<BetChoice, string> = { sun: '/sun.png', moon: '/moon.png', tie: '/eclipse.png' };
-  const labels: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
-
   return (
     <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-3xl overflow-hidden bg-black/80 backdrop-blur-sm">
       <div className="flex flex-col items-center gap-6 px-6 py-10 w-full">
-        <img src={images[result]} alt={labels[result]} className="w-28 h-28 object-contain drop-shadow-2xl" />
+        <img src={CHOICE_IMAGES[result]} alt={CHOICE_LABELS[result]} className="w-28 h-28 object-contain drop-shadow-2xl" />
         <div className="text-center">
           <p className="text-slate-400 text-xs uppercase tracking-widest mb-2">Result</p>
-          <p className="text-4xl font-black text-white">{labels[result]}</p>
+          <p className="text-4xl font-black text-white">{CHOICE_LABELS[result]}</p>
         </div>
 
         {choice ? (
@@ -165,9 +165,7 @@ function ResultOverlay({
 }
 
 function HistoryStrip({ history }: { history: Array<{ round: number; result: BetChoice }> }) {
-  const images: Record<BetChoice, string> = { sun: '/sun.png', moon: '/moon.png', tie: '/eclipse.png' };
   const colors: Record<BetChoice, string> = { sun: '#FFB627', moon: '#818CF8', tie: '#F59E0B' };
-  const labels: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
 
   return (
     <div>
@@ -186,9 +184,9 @@ function HistoryStrip({ history }: { history: Array<{ round: number; result: Bet
               style={{ background: `${colors[h.result]}18`, border: `1px solid ${colors[h.result]}33` }}
             >
               <span className="text-[9px] font-bold text-white/60">#{h.round}</span>
-              <img src={images[h.result]} alt={labels[h.result]} className="w-8 h-8 object-contain" />
+              <img src={CHOICE_IMAGES[h.result]} alt={CHOICE_LABELS[h.result]} className="w-8 h-8 object-contain" />
               <span className="text-[8px] font-bold uppercase" style={{ color: colors[h.result] }}>
-                {labels[h.result]}
+                {CHOICE_LABELS[h.result]}
               </span>
             </div>
           ))}
@@ -203,11 +201,9 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const balance   = useBalance();
   const limits    = store.getGameLimits('sunvsmoon');
 
-  // ── Amount state ──
   const [betAmount, setBetAmount] = useState(limits.min > 0 ? limits.min : 100);
   const [lastQuickStake, setLastQuickStake] = useState<number | null>(null);
 
-  // ── Game state ──
   const initEng = sunMoonLoop.getState();
   const [selectedChoice, setSelectedChoice] = useState<BetChoice | null>(null);
   const [betPlaced,      setBetPlaced]      = useState(false);
@@ -228,7 +224,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const [settling,   setSettling]   = useState(false);
 
   const settledRoundRef    = useRef<number>(-1);
-  // Track the round we've already reset for — prevents repeated resets on each bus tick
   const resetForRoundRef   = useRef<number>(-1);
   const selectedChoiceRef  = useRef<BetChoice | null>(null);
   const betAmountRef       = useRef<number>(betAmount);
@@ -255,13 +250,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   // ── Persist bet when placed ──
   useEffect(() => {
     if (betPlaced && selectedChoice) {
-      saveSunMoonBet({
-        roundNumber,
-        selectedChoice,
-        betAmount,
-        betPlaced: true,
-        savedAt: Date.now(),
-      });
+      saveSunMoonBet({ roundNumber, selectedChoice, betAmount, betPlaced: true, savedAt: Date.now() });
     }
   }, [betPlaced, selectedChoice, betAmount, roundNumber]);
 
@@ -276,7 +265,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       setResult(s.result);
 
       // Reset bet state ONCE when a new betting round begins.
-      // resetForRoundRef prevents this from firing on every tick of the same round.
       if (s.phase === 'betting' && resetForRoundRef.current !== rn) {
         resetForRoundRef.current = rn;
         setSelectedChoice(null);
@@ -287,11 +275,13 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
         settledRoundRef.current = rn;
-        const sb      = selectedChoiceRef.current;
-        const placed  = betPlacedRef.current;
-        const outcome = s.result;
+        const sb     = selectedChoiceRef.current;
+        const placed = betPlacedRef.current;
 
-        setHistory((prev) => [{ round: rn, result: outcome }, ...prev].slice(0, 20));
+        // Use the engine's local result for display in history immediately.
+        // The server will confirm the authoritative result during settle.
+        const localOutcome = s.result;
+        setHistory((prev) => [{ round: rn, result: localOutcome }, ...prev].slice(0, 20));
         saveSunMoonBet(null);
 
         if (sb !== null && placed) {
@@ -303,18 +293,28 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
           void GameService.sunMoonSettle(session.userId, rn, sb, stake)
             .then((res) => {
               store.setBalance(res.balance_after);
-              setLastWon(res.won);
+              // FIX: Use server's authoritative result for won/lost display.
+              // The local engine RNG may differ from the server's stored result.
+              const serverOutcome = res.result as BetChoice;
+              const actuallyWon = res.won;
+
+              // Update history entry with server-confirmed result
+              setHistory((prev) =>
+                prev.map((h) => h.round === rn ? { ...h, result: serverOutcome } : h)
+              );
+              setResult(serverOutcome);
+              setLastWon(actuallyWon);
               setLastPayout(res.profit);
 
               const record: Omit<SunMoonRoundRecord, 'id' | 'ts'> = {
-                roundNumber: rn, stake, bet: sb, result: outcome,
-                payout: PAYOUTS[sb], win: res.won ? res.profit : 0,
+                roundNumber: rn, stake, bet: sb, result: serverOutcome,
+                payout: PAYOUTS[sb], win: actuallyWon ? res.profit : 0,
               };
               store.recordSunMoonRound(record);
               setMyBets((prev) => [{
                 id: Math.random().toString(36).slice(2),
-                round: rn, bet: sb, result: outcome, stake,
-                win: res.won ? res.profit : 0, ts: Date.now(),
+                round: rn, bet: sb, result: serverOutcome, stake,
+                win: actuallyWon ? res.profit : 0, ts: Date.now(),
               }, ...prev].slice(0, 50));
             })
             .catch((err: unknown) => {
@@ -440,16 +440,16 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               ) : null}
             </div>
 
-            {/* 1. Choice buttons */}
+            {/* Choice buttons */}
             {phase !== 'processing' && (
               <div className="flex items-stretch gap-2">
-                <BetButton choice="sun"  payout="1:1" imageSrc="/sun.png"     glowColor="#FFB627" selected={selectedChoice === 'sun'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
-                <BetButton choice="tie"  payout="8:1" imageSrc="/eclipse.png" glowColor="#F59E0B" selected={selectedChoice === 'tie'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
-                <BetButton choice="moon" payout="1:1" imageSrc="/moon.png"    glowColor="#818CF8" selected={selectedChoice === 'moon'} disabled={!canSelectChoice} onSelect={handleSelectChoice} />
+                <BetButton choice="sun"  payout="1:1" glowColor="#FFB627" selected={selectedChoice === 'sun'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
+                <BetButton choice="tie"  payout="8:1" glowColor="#F59E0B" selected={selectedChoice === 'tie'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
+                <BetButton choice="moon" payout="1:1" glowColor="#818CF8" selected={selectedChoice === 'moon'} disabled={!canSelectChoice} onSelect={handleSelectChoice} />
               </div>
             )}
 
-            {/* 2. Amount controls */}
+            {/* Amount controls */}
             {phase === 'betting' && !betPlaced && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -471,7 +471,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   <button onClick={increaseAmount} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">+</button>
                 </div>
 
-                {/* Quick stake buttons */}
                 <div className="flex gap-2">
                   {QUICK_STAKES.map((s) => {
                     const isActive = lastQuickStake === s;
@@ -520,7 +519,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
                 <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
                 <p className="text-xs font-bold text-amber-300">
-                  ₹{betAmount.toLocaleString()} on {selectedChoice === 'tie' ? 'ECLIPSE' : selectedChoice?.toUpperCase()} — waiting for result
+                  ₹{betAmount.toLocaleString()} on {selectedChoice ? CHOICE_LABELS[selectedChoice] : ''} — waiting for result
                 </p>
               </div>
             )}
@@ -553,11 +552,12 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               ) : (
                 myBets.map((b) => (
                   <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
-                    <img src={`/${b.result}.png`} alt={b.result} className="w-8 h-8 object-contain flex-shrink-0" />
+                    {/* FIX: use CHOICE_IMAGES so tie shows eclipse.png not tie.png */}
+                    <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-bold text-white">#{b.round}</p>
                       <p className="text-[10px] text-slate-400">
-                        Bet {b.bet === 'tie' ? 'ECLIPSE' : b.bet.toUpperCase()} · Result {b.result === 'tie' ? 'ECLIPSE' : b.result.toUpperCase()}
+                        Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
