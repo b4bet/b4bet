@@ -1,9 +1,8 @@
 /**
  * SunVsMoonView — server-side outcome version.
+ * FIX: round_number stored in bet_details (round_id DB col is UUID type)
  * FIX: My Bets fetched from Supabase on mount + after each settle.
- * FIX: bet_details format is {bet, result} not {game, bet_choice, result}
  * FIX: overlayResult prevents image flash on result reveal.
- * FIX: Show date/time when round_id is null in DB.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -58,20 +57,32 @@ function loadSunMoonBet(): SunMoonSavedBet | null {
 }
 
 // ── Supabase types ─────────────────────────────────────────────────────────────
-// Actual DB format: bet_details = { bet: 'sun'|'moon'|'tie', result: 'sun'|'moon'|'tie' }
+// bet_details = { game:'sunvsmoon', round_number:20261, result:'sun', bet:'sun', bet_choice:'sun' }
+// Older rows (before this fix) have: { bet:'sun', result:'sun' } with no round_number
 interface SupabaseBetRow {
   id: string;
-  round_id: number | null;
+  round_id: string | null;  // UUID in DB, always null for sunvsmoon
   bet_amount: number;
   win_amount: number;
   status: string;
   placed_at: string;
-  bet_details: { bet?: string; result?: string } | null;
+  bet_details: {
+    game?: string;
+    round_number?: number;
+    result?: string;
+    bet?: string;
+    bet_choice?: string;
+  } | null;
 }
 
 type MyBetEntry = {
-  id: string; round: number | null; bet: BetChoice; result: BetChoice;
-  stake: number; win: number; ts: number;
+  id: string;
+  round: number | null;
+  bet: BetChoice;
+  result: BetChoice;
+  stake: number;
+  win: number;
+  ts: number;
 };
 
 function isBetChoice(v: unknown): v is BetChoice {
@@ -81,25 +92,19 @@ function isBetChoice(v: unknown): v is BetChoice {
 function rowToMyBet(row: SupabaseBetRow): MyBetEntry | null {
   const d = row.bet_details;
   if (!d) return null;
-  if (!isBetChoice(d.bet) || !isBetChoice(d.result)) return null;
+  // Support both new format (bet_choice) and old format (bet)
+  const betChoice = d.bet_choice ?? d.bet;
+  if (!isBetChoice(betChoice) || !isBetChoice(d.result)) return null;
   return {
     id: row.id,
-    round: row.round_id ?? null,
-    bet: d.bet,
+    // New rows store int round in bet_details.round_number; old rows have null
+    round: typeof d.round_number === 'number' && d.round_number > 0 ? d.round_number : null,
+    bet: betChoice,
     result: d.result,
     stake: Number(row.bet_amount),
     win: Number(row.win_amount),
     ts: new Date(row.placed_at).getTime(),
   };
-}
-
-function formatBetTime(ts: number): string {
-  const d = new Date(ts);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mo = String(d.getMonth() + 1).padStart(2, '0');
-  return `${dd}/${mo} ${hh}:${mm}`;
 }
 
 async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
@@ -110,6 +115,7 @@ async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
     .order('placed_at', { ascending: false })
     .limit(20);
   if (error || !data) return [];
+  // Only sunvsmoon bets have result field as BetChoice in bet_details
   return (data as SupabaseBetRow[]).map(rowToMyBet).filter((r): r is MyBetEntry => r !== null);
 }
 
@@ -562,9 +568,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                   <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
                     <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
                     <div className="flex-1 min-w-0">
-                      {/* Show round# if available, else show date/time */}
                       <p className="text-xs font-bold text-white">
-                        {b.round !== null && b.round > 0 ? `#${b.round}` : formatBetTime(b.ts)}
+                        {b.round !== null ? `#${b.round}` : '—'}
                       </p>
                       <p className="text-[10px] text-slate-400">Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}</p>
                     </div>
