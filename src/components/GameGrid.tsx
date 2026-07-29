@@ -24,6 +24,10 @@ const games: GameCardDef[] = [
 export default function GameGrid({ onPlay }: { onPlay: (r: Route) => void }) {
   const logos = useGameLogos();
 
+  // Split: 3 on top row, 2 on bottom row
+  const topRow = games.slice(0, 3);
+  const bottomRow = games.slice(3);
+
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
@@ -32,8 +36,9 @@ export default function GameGrid({ onPlay }: { onPlay: (r: Route) => void }) {
           View all <ArrowRight className="w-3 h-3" />
         </button>
       </div>
-      <div className="grid grid-cols-5 gap-2">
-        {games.map((g) => {
+      {/* Top row: 3 games */}
+      <div className="grid grid-cols-3 gap-2">
+        {topRow.map((g) => {
           const Icon = g.icon;
           const logo = logos[g.key as GameKey];
           return (
@@ -45,16 +50,47 @@ export default function GameGrid({ onPlay }: { onPlay: (r: Route) => void }) {
               }}
               aria-label={g.title}
               className={`group relative rounded-xl border border-borderline-900 bg-slatepanel-900 overflow-hidden transition-all duration-200 ${g.ring} hover:shadow-neon-glow active:scale-[0.97]`}
-              style={{ height: '72px' }}
+              style={{ height: '100px' }}
             >
               {logo ? (
                 <img src={logo} alt={g.title} className="absolute inset-0 w-full h-full object-cover" />
               ) : (
                 <>
                   <div className={`absolute inset-0 bg-gradient-to-br ${g.gradient}`} />
-                  <div className="relative flex flex-col items-center justify-center h-full gap-1 p-1">
-                    <Icon className="w-8 h-8 text-white/90" />
-                    <span className="text-[9px] font-bold text-white/90 text-center leading-tight">{g.title}</span>
+                  <div className="relative flex flex-col items-center justify-center h-full gap-1.5 p-2">
+                    <Icon className="w-10 h-10 text-white/90" />
+                    <span className="text-[10px] font-bold text-white/90 text-center leading-tight">{g.title}</span>
+                  </div>
+                </>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {/* Bottom row: 2 games (centered with wider cards) */}
+      <div className="grid grid-cols-2 gap-2">
+        {bottomRow.map((g) => {
+          const Icon = g.icon;
+          const logo = logos[g.key as GameKey];
+          return (
+            <button
+              key={g.key}
+              onClick={() => {
+                if (g.key === 'aviator') startAviatorBackgroundMusic();
+                onPlay(g.key);
+              }}
+              aria-label={g.title}
+              className={`group relative rounded-xl border border-borderline-900 bg-slatepanel-900 overflow-hidden transition-all duration-200 ${g.ring} hover:shadow-neon-glow active:scale-[0.97]`}
+              style={{ height: '100px' }}
+            >
+              {logo ? (
+                <img src={logo} alt={g.title} className="absolute inset-0 w-full h-full object-cover" />
+              ) : (
+                <>
+                  <div className={`absolute inset-0 bg-gradient-to-br ${g.gradient}`} />
+                  <div className="relative flex flex-col items-center justify-center h-full gap-1.5 p-2">
+                    <Icon className="w-10 h-10 text-white/90" />
+                    <span className="text-[10px] font-bold text-white/90 text-center leading-tight">{g.title}</span>
                   </div>
                 </>
               )}
