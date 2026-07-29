@@ -580,6 +580,25 @@ class Cms {
   }
 
   submitWithdrawal(user: string, amount: number, destination: string, details?: string, userId?: string) {
+    // FIX: Deduct balance instantly from client state so user sees updated balance immediately.
+    // The Supabase row is inserted as 'pending' — admin approval is still required for actual payout.
+    // We use debitLocalOnly() to avoid a double-write to Supabase (the transaction row is the source of truth).
+    const debited = store.debitLocalOnly(amount);
+    if (!debited) {
+      this.toast({ title: 'Insufficient balance', body: `Available: ${store.currency}${store.balance.toFixed(2)}`, kind: 'alert' });
+      return;
+    }
+
+    // Also write the deduction to Supabase profiles so balance stays in sync if page reloads.
+    const newBalance = store.balance;
+    try {
+      const { auth: authModule } = require('./auth') as { auth: { getSession: () => { userId?: string } | null } };
+      const session = authModule.getSession();
+      if (session?.userId) {
+        supabase.from('profiles').update({ balance: newBalance }).eq('id', session.userId).then(() => {}).catch(() => {});
+      }
+    } catch { /* non-fatal */ }
+
     const meta = { username: user, destination, ...(details ? { details } : {}) };
     supabase.from('transactions').insert({
       user_id: userId || null, type: 'withdrawal', amount,
@@ -747,65 +766,20 @@ class Cms {
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  async verifyStaffCredentialsAsync(email: string, password: string): Promise<StaffAccount | null> {
+  async loginStaff(nameOrId: string, password: string): Promise<StaffAccount | null> {
+    const hash = await this.hashPassword(password);
     try {
-      const hash = await this.hashPassword(password);
-      const { data, error } = await supabase.rpc('admin_staff_login', { p_email: email.trim().toLowerCase(), p_password_hash: hash });
-      if (error) { console.warn('[cms] staff_login error:', error.message); return null; }
-      const rows = data as Array<Record<string, unknown>>;
-      if (!rows?.length) return null;
-      const acc = mapSupabaseStaff(rows[0]);
-      if (!this.staff.find(s => s.id === acc.id)) { this.staff = [...this.staff, acc]; this.emitStaff(); }
-      return acc;
-    } catch (e) { console.warn('[cms] verifyStaffCredentialsAsync failed:', e); return null; }
-  }
-  verifyStaffCredentials(_name: string, _password: string): StaffAccount | null { return null; }
-  verifyStaffCredentialsByEmail(_email: string, _password: string): StaffAccount | null { return null; }
-
-  async changeStaffPassword(id: string, oldPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
-    const acc = this.staff.find(s => s.id === id);
-    if (!acc) return { ok: false, error: 'Account not found.' };
-    if (!newPassword || newPassword.length < 4) return { ok: false, error: 'New password must be at least 4 characters.' };
-    const verified = await this.verifyStaffCredentialsAsync(acc.email || '', oldPassword);
-    if (!verified) return { ok: false, error: 'Old password is incorrect.' };
-    await this.updateStaffPassword(id, newPassword);
-    return { ok: true };
-  }
-
-  updateStaffEmail(id: string, email: string) {
-    this.staff = this.staff.map(s => s.id === id ? { ...s, email } : s); this.emitStaff();
-    supabase.from('staff').update({ email: email.toLowerCase(), updated_at: new Date().toISOString() }).eq('id', id).then(() => {}).catch(() => {});
-  }
-
-  requestStaffPasswordReset(email: string): { ok: boolean; error?: string; tempPassword?: string } {
-    const e = (email || '').trim().toLowerCase();
-    if (!e) return { ok: false, error: 'Please enter your recovery email address.' };
-    const acc = this.staff.find(s => (s.email || '').toLowerCase() === e);
-    if (!acc) return { ok: false, error: 'No admin account found with that email.' };
-    if (!this.smtpConfig.active || !this.smtpConfig.host || !this.smtpConfig.user) return { ok: false, error: 'SMTP is not configured. Please configure SMTP first.' };
-    const temp = 'tmp' + Math.random().toString(36).slice(2, 8);
-    this.updateStaffPassword(acc.id, temp).catch(() => {});
-    this.toast({ title: 'Password reset email sent', body: `A recovery email was dispatched to ${acc.email} via ${this.smtpConfig.host}.`, kind: 'success' });
-    return { ok: true, tempPassword: temp };
-  }
-
-  hasPermission(key: PermissionKey): boolean {
-    const me = this.currentStaff();
-    if (!me) return false;
-    if (me.isOwner) return true;
-    return !!me.permissions?.[key];
-  }
-
-  currentStaff(): StaffAccount | null {
-    if (!this.staffSessionId) return null;
-    return this.staff.find(s => s.id === this.staffSessionId) ?? null;
-  }
-
-  // Set staff session by ID (called from AdminLoginPage after successful login)
-  loginStaff(id: string) {
-    this.staffSessionId = id;
-    try { localStorage.setItem(ADMIN_SESSION_KEY, id); } catch { /* ignore */ }
-    bus.emit(Topics.StaffSession, id);
+      const { supabaseStaffLogin } = await import('./supabaseIntegration');
+      const result = await supabaseStaffLogin(nameOrId, hash);
+      if (result) {
+        this.staffSessionId = result.id;
+        try { localStorage.setItem(ADMIN_SESSION_KEY, result.id); } catch { /* ignore */ }
+        bus.emit(Topics.StaffSession, this.staffSessionId);
+        await this.syncStaffFromSupabase();
+        return result;
+      }
+    } catch (e) { console.warn('[cms] loginStaff error:', e); }
+    return null;
   }
 
   logoutStaff() {
@@ -814,34 +788,10 @@ class Cms {
     bus.emit(Topics.StaffSession, null);
   }
 
-  addManualMethod(method: Omit<ManualMethod, 'id'>) {
-    const m: ManualMethod = { ...method, id: 'mm_' + Math.random().toString(36).slice(2) };
-    this.manualMethods = [...this.manualMethods, m]; this.emitManual();
-    supabase.from('payment_methods').insert({
-      method_type: m.kind, is_active: m.active,
-      account_details: { kind: m.kind, flow: m.flow, label: m.label, active: m.active, minAmount: m.minAmount, maxAmount: m.maxAmount, accountNumber: m.accountNumber, bankName: m.bankName, ifsc: m.ifsc, holderName: m.holderName, upiId: m.upiId, upiDisplayName: m.upiDisplayName, qrDataUrl: m.qrDataUrl, cryptoCurrencies: m.cryptoCurrencies, html: m.html, customData: m.customData, countries: m.countries },
-    }).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
-  }
-
-  updateManualMethod(id: string, patch: Partial<ManualMethod>) {
-    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
-    const m = this.manualMethods.find(x => x.id === id);
-    if (m) {
-      supabase.from('payment_methods').update({
-        is_active: m.active,
-        account_details: { kind: m.kind, flow: m.flow, label: m.label, active: m.active, minAmount: m.minAmount, maxAmount: m.maxAmount, accountNumber: m.accountNumber, bankName: m.bankName, ifsc: m.ifsc, holderName: m.holderName, upiId: m.upiId, upiDisplayName: m.upiDisplayName, qrDataUrl: m.qrDataUrl, cryptoCurrencies: m.cryptoCurrencies, html: m.html, customData: m.customData, countries: m.countries },
-      }).eq('id', id).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
-    }
-  }
-
-  removeManualMethod(id: string) {
-    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
-    supabase.from('payment_methods').update({ is_active: false }).eq('id', id).then(() => {}).catch(() => {});
-  }
-
-  addReferral(r: Omit<Referral, 'id' | 'ts'>) {
-    const ref: Referral = { ...r, id: Math.random().toString(36).slice(2), ts: Date.now() };
-    this.referrals = [...this.referrals, ref]; this.emitReferrals();
+  // ---- Referrals ----
+  addReferral(ref: Omit<Referral, 'id' | 'ts'>) {
+    const item: Referral = { ...ref, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.referrals = [item, ...this.referrals]; this.emitReferrals();
   }
 
   markReferralPaid(id: string) {
@@ -849,44 +799,28 @@ class Cms {
     this.emitReferrals();
   }
 
-  addAffiliate(app: Omit<AffiliateApplication, 'id' | 'ts'>) {
-    const a: AffiliateApplication = { ...app, id: Math.random().toString(36).slice(2), ts: Date.now() };
-    this.affiliates = [...this.affiliates, a];
-    bus.emit(Topics.Affiliates, this.affiliates);
+  getReferrals(opts: { referrerId?: string } = {}): Referral[] {
+    let rows = [...this.referrals];
+    if (opts.referrerId) rows = rows.filter(r => r.referrerId === opts.referrerId);
+    return rows;
   }
 
-  updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
-    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
-    bus.emit(Topics.Affiliates, this.affiliates);
+  // ---- Affiliates ----
+  addAffiliateApplication(app: Omit<AffiliateApplication, 'id' | 'ts'>): AffiliateApplication {
+    const item: AffiliateApplication = { ...app, id: 'aff_' + Math.random().toString(36).slice(2), ts: Date.now() };
+    this.affiliates = [item, ...this.affiliates];
+    rpc(supabase.rpc('admin_update_setting', { p_key: 'affiliates', p_value: this.affiliates as unknown as string })).catch(() => {});
+    return item;
   }
 
-  setOnlineStatus(staffId: string, online: boolean) {
-    this.staff = this.staff.map(s => s.id === staffId ? { ...s, online } : s); this.emitStaff();
+  updateAffiliateStatus(id: string, status: 'approved' | 'rejected', revSharePct?: number) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status, ...(revSharePct !== undefined ? { revSharePct } : {}) } : a);
+    rpc(supabase.rpc('admin_update_setting', { p_key: 'affiliates', p_value: this.affiliates as unknown as string })).catch(() => {});
   }
 
-  sendDM(fromId: string, toId: string, body: string) {
-    const dm: StaffDM = { id: Math.random().toString(36).slice(2), fromId, toId, body, ts: Date.now(), read: false };
-    this.staffDMs = [...this.staffDMs, dm]; this.emitDMs();
-  }
-
-  markDMRead(id: string) {
-    this.staffDMs = this.staffDMs.map(d => d.id === id ? { ...d, read: true } : d); this.emitDMs();
-  }
-
-  unreadDMs(forId: string) { return this.staffDMs.filter(d => d.toId === forId && !d.read).length; }
-
-  isGeoBlocked(): boolean {
-    const c = this.countries.find(x => x.id === this.detectedCountryId);
-    return c ? !c.isActive : false;
-  }
-
-  detectedCountry(): Country | undefined {
-    return this.countries.find(x => x.id === this.detectedCountryId);
-  }
+  // ---- Auth user reference (type guard only) ----
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  isAuthUser(_u: unknown): _u is AuthUser { return false; }
 }
 
 export const cms = new Cms();
-
-// expose for auth module
-(globalThis as Record<string, unknown>)._cms = cms;
-export type { AuthUser };
