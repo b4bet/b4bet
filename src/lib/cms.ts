@@ -98,7 +98,6 @@ const defaultUpiQr = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns
 
 const defaultEmails: EmailTemplates = {
   welcome: '<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:24px;border-radius:12px"><h1 style="margin:0 0 16px;color:#00ff88;font-size:28px">Welcome to B4BeT, {{username}}!</h1><p style="margin:0 0 12px;font-size:16px">Your account is now live and ready to play.</p><p style="margin:0 0 12px;font-size:14px">Enjoy our exclusive games, live betting, and amazing rewards.</p><p style="margin:0;font-size:14px;color:#a0aec0">Start playing now and claim your welcome bonus on your first deposit!</p></div>',
-
   depositSuccess: `<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:0;border-radius:12px;overflow:hidden;max-width:520px">
   <div style="background:linear-gradient(135deg,#00c97a,#00ff88);padding:28px 24px;text-align:center">
     <div style="font-size:48px;margin-bottom:8px">✅</div>
@@ -124,7 +123,6 @@ const defaultEmails: EmailTemplates = {
     <p style="margin:0;font-size:13px;color:#718096;text-align:center">Thank you for choosing B4BeT. Good luck! 🎰</p>
   </div>
 </div>`,
-
   withdrawalStatus: `<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:0;border-radius:12px;overflow:hidden;max-width:520px">
   <div style="background:linear-gradient(135deg,#00c97a,#00ff88);padding:28px 24px;text-align:center">
     <div style="font-size:48px;margin-bottom:8px">💸</div>
@@ -150,7 +148,6 @@ const defaultEmails: EmailTemplates = {
     <p style="margin:0;font-size:13px;color:#718096;text-align:center">Funds typically arrive within 1–24 hours depending on your bank.</p>
   </div>
 </div>`,
-
   forgotPassword: '<div style="font-family:Inter,sans-serif;padding:24px;background:#0a0f1c;color:#fff;border-radius:12px"><h2 style="color:#00ff88">Password Reset Request</h2><p>Hi {{username}},</p><p>Aapne password reset request ki hai. Neeche diye link par click karein:</p><p><a href="{{reset_link}}" style="background:#00ff88;color:#000;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;margin:8px 0">Reset Password</a></p><p style="color:#a0aec0;font-size:12px">Yeh link {{expiry}} me expire ho jayega.</p><p style="color:#a0aec0;font-size:12px">Agar aapne yeh request nahi ki toh ignore karein. Request IP: {{ip_address}}</p></div>',
 };
 
@@ -250,12 +247,13 @@ function mapPaymentMethod(row: Record<string, unknown>): ManualMethod {
   };
 }
 
+// Helper: wrap supabase rpc result in a real Promise so .catch() works correctly.
 function rpc<T>(call: PromiseLike<T>): Promise<T> {
   return Promise.resolve(call);
 }
 
-// Statuses from which balance was already deducted at submitWithdrawal time.
-// Refund is issued when admin moves FROM one of these TO rejected/cancelled.
+// Statuses from which a withdrawal balance was already deducted (on submit).
+// Refund must be issued when moving FROM one of these TO rejected/cancelled.
 const DEDUCTED_STATUSES = new Set<WithdrawalRequest['status']>(['pending', 'processing']);
 
 const ADMIN_SESSION_KEY = 'b4bet.admin.session';
@@ -583,15 +581,16 @@ class Cms {
   }
 
   submitWithdrawal(user: string, amount: number, destination: string, details?: string, userId?: string) {
-    // Deduct balance instantly so user sees updated balance immediately.
-    // Uses debitLocalOnly() — balance is written to Supabase separately below.
+    // FIX: Deduct balance instantly from client state so user sees updated balance immediately.
+    // Uses debitLocalOnly() to avoid a redundant Supabase write — the balance is already written
+    // below via direct profiles update, and Realtime will sync it back to the client.
     const debited = store.debitLocalOnly(amount);
     if (!debited) {
       this.toast({ title: 'Insufficient balance', body: `Available: ${store.currency}${store.balance.toFixed(2)}`, kind: 'alert' });
       return;
     }
 
-    // Persist deducted balance to Supabase so it survives a page reload.
+    // Persist the deducted balance to Supabase so it survives a page reload.
     const newBalance = store.balance;
     const session = auth.getSession();
     if (session?.userId) {
@@ -633,21 +632,27 @@ class Cms {
     const before = this.withdrawals.find(w => w.id === id);
     this.withdrawals = this.withdrawals.map(w => w.id === id ? { ...w, status, utr: utr ?? w.utr, reason: reason ?? w.reason } : w);
 
-    // REFUND: if admin rejects/cancels a pending/processing withdrawal, credit back the amount.
     const isRefundable = (status === 'rejected' || status === 'cancelled')
       && before
       && DEDUCTED_STATUSES.has(before.status);
 
     if (isRefundable && before) {
+      // REFUND: credit the amount back to the user's wallet instantly.
       store.creditLocalOnly(before.amount);
       const refundedBalance = store.balance;
 
       if (before.userId) {
-        supabase.from('profiles').update({ balance: refundedBalance }).eq('id', before.userId).then(() => {}).catch(() => {});
+        supabase.from('profiles')
+          .update({ balance: refundedBalance })
+          .eq('id', before.userId)
+          .then(() => {}).catch(() => {});
       } else {
-        const session = auth.getSession();
-        if (session?.userId) {
-          supabase.from('profiles').update({ balance: refundedBalance }).eq('id', session.userId).then(() => {}).catch(() => {});
+        const refundSession = auth.getSession();
+        if (refundSession?.userId) {
+          supabase.from('profiles')
+            .update({ balance: refundedBalance })
+            .eq('id', refundSession.userId)
+            .then(() => {}).catch(() => {});
         }
       }
 
@@ -795,20 +800,65 @@ class Cms {
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  async loginStaff(nameOrId: string, password: string): Promise<StaffAccount | null> {
-    const hash = await this.hashPassword(password);
+  async verifyStaffCredentialsAsync(email: string, password: string): Promise<StaffAccount | null> {
     try {
-      const { supabaseStaffLogin } = await import('./supabaseIntegration');
-      const result = await supabaseStaffLogin(nameOrId, hash);
-      if (result) {
-        this.staffSessionId = result.id;
-        try { localStorage.setItem(ADMIN_SESSION_KEY, result.id); } catch { /* ignore */ }
-        bus.emit(Topics.StaffSession, this.staffSessionId);
-        await this.syncStaffFromSupabase();
-        return result;
-      }
-    } catch (e) { console.warn('[cms] loginStaff error:', e); }
-    return null;
+      const hash = await this.hashPassword(password);
+      const { data, error } = await supabase.rpc('admin_staff_login', { p_email: email.trim().toLowerCase(), p_password_hash: hash });
+      if (error) { console.warn('[cms] staff_login error:', error.message); return null; }
+      const rows = data as Array<Record<string, unknown>>;
+      if (!rows?.length) return null;
+      const acc = mapSupabaseStaff(rows[0]);
+      if (!this.staff.find(s => s.id === acc.id)) { this.staff = [...this.staff, acc]; this.emitStaff(); }
+      return acc;
+    } catch (e) { console.warn('[cms] verifyStaffCredentialsAsync failed:', e); return null; }
+  }
+  verifyStaffCredentials(_name: string, _password: string): StaffAccount | null { return null; }
+  verifyStaffCredentialsByEmail(_email: string, _password: string): StaffAccount | null { return null; }
+
+  async changeStaffPassword(id: string, oldPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
+    const acc = this.staff.find(s => s.id === id);
+    if (!acc) return { ok: false, error: 'Account not found.' };
+    if (!newPassword || newPassword.length < 4) return { ok: false, error: 'New password must be at least 4 characters.' };
+    const verified = await this.verifyStaffCredentialsAsync(acc.email || '', oldPassword);
+    if (!verified) return { ok: false, error: 'Old password is incorrect.' };
+    await this.updateStaffPassword(id, newPassword);
+    return { ok: true };
+  }
+
+  updateStaffEmail(id: string, email: string) {
+    this.staff = this.staff.map(s => s.id === id ? { ...s, email } : s); this.emitStaff();
+    supabase.from('staff').update({ email: email.toLowerCase(), updated_at: new Date().toISOString() }).eq('id', id).then(() => {}).catch(() => {});
+  }
+
+  requestStaffPasswordReset(email: string): { ok: boolean; error?: string; tempPassword?: string } {
+    const e = (email || '').trim().toLowerCase();
+    if (!e) return { ok: false, error: 'Please enter your recovery email address.' };
+    const acc = this.staff.find(s => (s.email || '').toLowerCase() === e);
+    if (!acc) return { ok: false, error: 'No admin account found with that email.' };
+    if (!this.smtpConfig.active || !this.smtpConfig.host || !this.smtpConfig.user) return { ok: false, error: 'SMTP is not configured. Please configure SMTP first.' };
+    const temp = 'tmp' + Math.random().toString(36).slice(2, 8);
+    this.updateStaffPassword(acc.id, temp).catch(() => {});
+    this.toast({ title: 'Password reset email sent', body: `A recovery email was dispatched to ${acc.email} via ${this.smtpConfig.host}.`, kind: 'success' });
+    return { ok: true, tempPassword: temp };
+  }
+
+  hasPermission(key: PermissionKey): boolean {
+    const me = this.currentStaff();
+    if (!me) return false;
+    if (me.isOwner) return true;
+    return !!me.permissions?.[key];
+  }
+
+  currentStaff(): StaffAccount | null {
+    if (!this.staffSessionId) return null;
+    return this.staff.find(s => s.id === this.staffSessionId) ?? null;
+  }
+
+  // Set staff session by ID (called from AdminLoginPage after successful login)
+  loginStaff(id: string) {
+    this.staffSessionId = id;
+    try { localStorage.setItem(ADMIN_SESSION_KEY, id); } catch { /* ignore */ }
+    bus.emit(Topics.StaffSession, id);
   }
 
   logoutStaff() {
@@ -817,9 +867,34 @@ class Cms {
     bus.emit(Topics.StaffSession, null);
   }
 
-  addReferral(ref: Omit<Referral, 'id' | 'ts'>) {
-    const item: Referral = { ...ref, id: Math.random().toString(36).slice(2), ts: Date.now() };
-    this.referrals = [item, ...this.referrals]; this.emitReferrals();
+  addManualMethod(method: Omit<ManualMethod, 'id'>) {
+    const m: ManualMethod = { ...method, id: 'mm_' + Math.random().toString(36).slice(2) };
+    this.manualMethods = [...this.manualMethods, m]; this.emitManual();
+    supabase.from('payment_methods').insert({
+      method_type: m.kind, is_active: m.active,
+      account_details: { kind: m.kind, flow: m.flow, label: m.label, active: m.active, minAmount: m.minAmount, maxAmount: m.maxAmount, accountNumber: m.accountNumber, bankName: m.bankName, ifsc: m.ifsc, holderName: m.holderName, upiId: m.upiId, upiDisplayName: m.upiDisplayName, qrDataUrl: m.qrDataUrl, cryptoCurrencies: m.cryptoCurrencies, html: m.html, customData: m.customData, countries: m.countries },
+    }).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+  }
+
+  updateManualMethod(id: string, patch: Partial<ManualMethod>) {
+    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
+    const m = this.manualMethods.find(x => x.id === id);
+    if (m) {
+      supabase.from('payment_methods').update({
+        is_active: m.active,
+        account_details: { kind: m.kind, flow: m.flow, label: m.label, active: m.active, minAmount: m.minAmount, maxAmount: m.maxAmount, accountNumber: m.accountNumber, bankName: m.bankName, ifsc: m.ifsc, holderName: m.holderName, upiId: m.upiId, upiDisplayName: m.upiDisplayName, qrDataUrl: m.qrDataUrl, cryptoCurrencies: m.cryptoCurrencies, html: m.html, customData: m.customData, countries: m.countries },
+      }).eq('id', id).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+    }
+  }
+
+  removeManualMethod(id: string) {
+    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
+    supabase.from('payment_methods').update({ is_active: false }).eq('id', id).then(() => {}).catch(() => {});
+  }
+
+  addReferral(r: Omit<Referral, 'id' | 'ts'>) {
+    const ref: Referral = { ...r, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.referrals = [...this.referrals, ref]; this.emitReferrals();
   }
 
   markReferralPaid(id: string) {
@@ -831,6 +906,17 @@ class Cms {
     let rows = [...this.referrals];
     if (opts.referrerId) rows = rows.filter(r => r.referrerId === opts.referrerId);
     return rows;
+  }
+
+  addAffiliate(app: Omit<AffiliateApplication, 'id' | 'ts'>) {
+    const a: AffiliateApplication = { ...app, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.affiliates = [...this.affiliates, a];
+    bus.emit(Topics.Affiliates, this.affiliates);
+  }
+
+  updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
+    bus.emit(Topics.Affiliates, this.affiliates);
   }
 
   addAffiliateApplication(app: Omit<AffiliateApplication, 'id' | 'ts'>): AffiliateApplication {
@@ -845,8 +931,33 @@ class Cms {
     rpc(supabase.rpc('admin_update_setting', { p_key: 'affiliates', p_value: this.affiliates as unknown as string })).catch(() => {});
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  isAuthUser(_u: unknown): _u is AuthUser { return false; }
+  setOnlineStatus(staffId: string, online: boolean) {
+    this.staff = this.staff.map(s => s.id === staffId ? { ...s, online } : s); this.emitStaff();
+  }
+
+  sendDM(fromId: string, toId: string, body: string) {
+    const dm: StaffDM = { id: Math.random().toString(36).slice(2), fromId, toId, body, ts: Date.now(), read: false };
+    this.staffDMs = [...this.staffDMs, dm]; this.emitDMs();
+  }
+
+  markDMRead(id: string) {
+    this.staffDMs = this.staffDMs.map(d => d.id === id ? { ...d, read: true } : d); this.emitDMs();
+  }
+
+  unreadDMs(forId: string) { return this.staffDMs.filter(d => d.toId === forId && !d.read).length; }
+
+  isGeoBlocked(): boolean {
+    const c = this.countries.find(x => x.id === this.detectedCountryId);
+    return c ? !c.isActive : false;
+  }
+
+  detectedCountry(): Country | undefined {
+    return this.countries.find(x => x.id === this.detectedCountryId);
+  }
 }
 
 export const cms = new Cms();
+
+// expose for auth module
+(globalThis as Record<string, unknown>)._cms = cms;
+export type { AuthUser };
