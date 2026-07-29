@@ -4,10 +4,59 @@ import { cms } from '../../lib/cms';
 import { useEmailTemplates } from '../../lib/cmsHooks';
 import type { EmailTemplates } from '../../lib/cms';
 
-const tabs: { key: keyof EmailTemplates; label: string; vars: string[]; smtpFn: string }[] = [
-  { key: 'welcome', label: 'Welcome Email', vars: ['{{username}}', '{{date}}'], smtpFn: 'sendWelcomeEmail()' },
-  { key: 'depositSuccess', label: 'Deposit Success', vars: ['{{username}}', '{{amount}}', '{{balance}}', '{{txn_id}}'], smtpFn: 'sendDepositEmail()' },
-  { key: 'withdrawalStatus', label: 'Withdrawal Status', vars: ['{{username}}', '{{amount}}', '{{status}}', '{{txn_id}}'], smtpFn: 'sendWithdrawalEmail()' },
+const tabs: { key: keyof EmailTemplates; label: string; vars: { name: string; desc: string }[]; smtpFn: string }[] = [
+  {
+    key: 'welcome',
+    label: 'Welcome Email',
+    smtpFn: 'sendWelcomeEmail()',
+    vars: [
+      { name: '{{username}}', desc: 'User ka naam' },
+      { name: '{{date}}', desc: 'Registration date' },
+      { name: '{{site_name}}', desc: 'Site naam (B4BeT)' },
+    ],
+  },
+  {
+    key: 'depositSuccess',
+    label: 'Deposit Success',
+    smtpFn: 'sendDepositEmail()',
+    vars: [
+      { name: '{{username}}', desc: 'User ka naam' },
+      { name: '{{amount}}', desc: 'Deposit amount (e.g. ₹500)' },
+      { name: '{{balance}}', desc: 'Nayi wallet balance' },
+      { name: '{{txn_id}}', desc: 'Transaction ID' },
+      { name: '{{status}}', desc: 'Status: approved / rejected' },
+      { name: '{{date}}', desc: 'Transaction date/time' },
+      { name: '{{method}}', desc: 'Payment method (UPI, Bank etc.)' },
+    ],
+  },
+  {
+    key: 'withdrawalStatus',
+    label: 'Withdrawal Status',
+    smtpFn: 'sendWithdrawalEmail()',
+    vars: [
+      { name: '{{username}}', desc: 'User ka naam' },
+      { name: '{{amount}}', desc: 'Withdrawal amount (e.g. ₹500)' },
+      { name: '{{status}}', desc: 'Status: approved / rejected / processing' },
+      { name: '{{txn_id}}', desc: 'Transaction ID' },
+      { name: '{{destination}}', desc: 'UPI ID ya bank account' },
+      { name: '{{date}}', desc: 'Transaction date/time' },
+      { name: '{{utr}}', desc: 'UTR number (agar available ho)' },
+    ],
+  },
+  {
+    key: 'forgotPassword',
+    label: 'Forgot Password',
+    smtpFn: 'sendForgotPasswordEmail()',
+    vars: [
+      { name: '{{username}}', desc: 'User ka naam' },
+      { name: '{{reset_link}}', desc: 'Password reset link' },
+      { name: '{{otp}}', desc: 'OTP code (agar use ho)' },
+      { name: '{{expiry}}', desc: 'Link expiry time (e.g. 30 minutes)' },
+      { name: '{{date}}', desc: 'Request date/time' },
+      { name: '{{site_name}}', desc: 'Site naam (B4BeT)' },
+      { name: '{{ip_address}}', desc: 'Request karne wale ka IP' },
+    ],
+  },
 ];
 
 export default function EmailManagerTab() {
@@ -17,7 +66,7 @@ export default function EmailManagerTab() {
   const [draft, setDraft] = useState<EmailTemplates>(templates);
 
   const current = tabs.find((t) => t.key === active)!;
-  const html = draft[active];
+  const html = draft[active] ?? '';
 
   const save = () => {
     cms.setEmailTemplate(active, html);
@@ -26,6 +75,11 @@ export default function EmailManagerTab() {
 
   const test = () => {
     cms.toast({ title: 'Test email queued', body: `${current.label} dispatched via SMTP.`, kind: 'info' });
+  };
+
+  const copyVar = (v: string) => {
+    navigator.clipboard.writeText(v).catch(() => {});
+    cms.toast({ title: 'Copied!', body: `${v} clipboard me copy ho gaya.`, kind: 'success' });
   };
 
   return (
@@ -92,11 +146,21 @@ export default function EmailManagerTab() {
         </div>
       </div>
 
+      {/* Available Variables - with description and copy button */}
       <div className="panel p-4">
-        <h3 className="font-display font-bold text-sm text-white mb-2">Available Variables</h3>
-        <div className="flex flex-wrap gap-2">
+        <h3 className="font-display font-bold text-sm text-white mb-3">Available Variables</h3>
+        <p className="text-xs text-slate-500 mb-3">Variable par click karo — clipboard me copy ho jayega. Template me paste karo.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           {current.vars.map((v) => (
-            <span key={v} className="chip bg-midnight-850 border border-borderline-900 text-neon-300 font-mono text-xs">{v}</span>
+            <button
+              key={v.name}
+              onClick={() => copyVar(v.name)}
+              title="Click to copy"
+              className="flex items-center gap-3 px-3 py-2 rounded-xl bg-midnight-850 border border-borderline-900 hover:border-neon-500 hover:bg-midnight-800 transition-all text-left group"
+            >
+              <code className="text-neon-300 font-mono text-xs shrink-0 group-hover:text-neon-200">{v.name}</code>
+              <span className="text-slate-500 text-xs truncate">{v.desc}</span>
+            </button>
           ))}
         </div>
       </div>
