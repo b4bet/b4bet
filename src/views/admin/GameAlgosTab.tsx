@@ -1,16 +1,15 @@
 import { useMemo, useState, useRef, useEffect } from 'react';
 import SelectModal from '../../components/SelectModal';
 import { cms } from '../../lib/cms';
-import { useAdminConfig, useGameLogos, useCrashState, useGameRound } from '../../lib/hooks';
-import { store, computeAutoOutcome } from '../../lib/store';
-import type { RoundOutcomePreview } from '../../lib/store';
+import { useAdminConfig, useGameLogos, useGameRound } from '../../lib/hooks';
+import { store } from '../../lib/store';
 import { gameLogos } from '../../lib/gameLogos';
 import type { GameKey } from '../../lib/gameLogos';
 import {
   Shield, Sliders, Target, Cpu, Zap, Upload, Image as ImageIcon, Trash2,
   Rocket, Bomb, Trophy, DollarSign, BarChart2, Sun, Plane,
   Plus, X, ChevronDown, ChevronUp, Users, RefreshCw, SlidersHorizontal,
-  CheckCircle, AlertCircle,
+  CheckCircle, AlertCircle, Moon, Cloudy,
 } from 'lucide-react';
 
 // CrashHandlingPanel — dedicated async Supabase-connected panel
@@ -28,6 +27,13 @@ const gameMeta: { key: GameKey; label: string; icon: typeof Rocket }[] = [
   { key: 'trading',   label: 'Trading',    icon: BarChart2 },
 ];
 
+// Sun vs Moon outcome buttons
+const SUN_MOON_OPTIONS: { value: string; label: string; icon: typeof Sun; color: string }[] = [
+  { value: 'sun',     label: 'Sun',     icon: Sun,    color: 'text-yellow-400 border-yellow-500/60 bg-yellow-500/10' },
+  { value: 'eclipse', label: 'Eclipse', icon: Cloudy, color: 'text-purple-400 border-purple-500/60 bg-purple-500/10' },
+  { value: 'moon',    label: 'Moon',    icon: Moon,   color: 'text-blue-400 border-blue-500/60 bg-blue-500/10' },
+];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Generic Game Handler Panel (shared by lottery-style games)
 // Quick stakes are Supabase-connected via setGameHandlerAsync for all games.
@@ -43,6 +49,8 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   const [manual, setManual] = useState(handler.manualResult);
   const [targetRound, setTargetRound] = useState<string>(String(handler.manualTargetRoundId ?? upcomingRound));
   const userEditedRoundRef = useRef(false);
+  const isSunMoon = gameKey === 'sunvsmoon';
+
   useEffect(() => {
     if (userEditedRoundRef.current) return;
     if (handler.manualTargetRoundId && handler.manualTargetRoundId > currentRound) return;
@@ -57,32 +65,18 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
   const [stakesStatus, setStakesStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [stakesMsg, setStakesMsg] = useState('');
 
-  const [preview, setPreview] = useState<RoundOutcomePreview | null>(null);
-
   const setMode = (mode: 'AUTO' | 'MANUAL') => store.setGameHandler(gameKey, { mode });
   const setProb = (v: number) => store.setGameHandler(gameKey, { targetWinProbability: v });
   const setEdge = (v: number) => store.setGameHandler(gameKey, { houseEdge: v });
 
-  const refreshPreview = () => {
-    const h = store.getGameHandler(gameKey);
-    if (h.mode === 'AUTO') setPreview(computeAutoOutcome(gameKey, h));
-    else if (h.mode === 'MANUAL' && h.manualResult) {
-      const detail = h.manualResult === 'sun' || h.manualResult === 'moon' || h.manualResult === 'eclipse'
-        ? 'Manual side: ' + h.manualResult
-        : 'Manual override active';
-      setPreview({ outcome: h.manualResult, detail });
-    } else setPreview(null);
-  };
-
-  useEffect(() => { refreshPreview(); }, [handler.mode, handler.targetWinProbability, handler.houseEdge, handler.manualResult, handler.manualTargetRoundId]);
-
-  const applyManual = () => {
+  const applyManual = (outcome?: string) => {
+    const finalOutcome = outcome ?? manual.trim();
     const target = parseInt(targetRound, 10);
     const resolvedTarget = Number.isFinite(target) && target > currentRound ? target : upcomingRound;
-    store.setGameHandler(gameKey, { manualResult: manual.trim(), manualTargetRoundId: resolvedTarget, mode: 'MANUAL' });
+    store.setGameHandler(gameKey, { manualResult: finalOutcome, manualTargetRoundId: resolvedTarget, mode: 'MANUAL' });
+    setManual(finalOutcome);
     setTargetRound(String(resolvedTarget));
     userEditedRoundRef.current = false;
-    refreshPreview();
   };
 
   // Save quick stakes to Supabase (async, confirmed)
@@ -135,33 +129,57 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
         </div>
       )}
       {handler.mode === 'MANUAL' && (
-        <div className="space-y-2 animate-fade-in">
+        <div className="space-y-3 animate-fade-in">
           <label className="text-sm font-semibold text-white flex items-center gap-2"><Target className="w-4 h-4 text-coral-400" /> {manualLabel}</label>
-          <div className="grid grid-cols-2 gap-2">
-            <div><p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Outcome</p><input type="text" value={manual} onChange={(e) => setManual(e.target.value)} placeholder={manualPlaceholder} className="input tabular" /></div>
-            <div><p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Apply to Round #</p><input type="number" value={targetRound} onChange={(e) => { userEditedRoundRef.current = true; setTargetRound(e.target.value); }} min={upcomingRound} step={1} placeholder={String(upcomingRound)} className="input tabular" /></div>
-          </div>
-          <button onClick={applyManual} className="btn-coral w-full py-2">Apply Manual Override</button>
-          <p className="text-[11px] text-slate-500">
-            {manualHint} Queued: <span className="text-coral-300 font-semibold">{handler.manualResult || '—'}</span>.
-            <br /><span className="text-emeraldwin-300 font-semibold">✓ Auto-reverts to AUTO after the manual round.</span>
-          </p>
+
+          {/* Sun vs Moon — icon buttons */}
+          {isSunMoon ? (
+            <div className="space-y-2">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Select Next Round Outcome</p>
+              <div className="grid grid-cols-3 gap-2">
+                {SUN_MOON_OPTIONS.map((opt) => {
+                  const BtnIcon = opt.icon;
+                  const isActive = manual === opt.value;
+                  return (
+                    <button
+                      key={opt.value}
+                      onClick={() => applyManual(opt.value)}
+                      className={`flex flex-col items-center gap-2 py-4 rounded-xl border-2 font-bold text-sm transition-all ${
+                        isActive
+                          ? `${opt.color} ring-2 ring-offset-1 ring-offset-slate-900 scale-105`
+                          : 'border-slate-700 text-slate-400 hover:border-slate-500 bg-slate-800/50'
+                      }`}
+                    >
+                      <BtnIcon className={`w-7 h-7 ${isActive ? '' : 'opacity-50'}`} />
+                      {opt.label}
+                      {isActive && (
+                        <span className="text-[9px] uppercase tracking-widest font-semibold opacity-80">Queued ✓</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Queued: <span className="text-coral-300 font-semibold">{handler.manualResult || '—'}</span>
+                {'  '}· <span className="text-emeraldwin-300 font-semibold">✓ Auto-reverts to AUTO after the manual round.</span>
+              </p>
+            </div>
+          ) : (
+            /* Other games — text input */
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div><p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Outcome</p><input type="text" value={manual} onChange={(e) => setManual(e.target.value)} placeholder={manualPlaceholder} className="input tabular" /></div>
+                <div><p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Apply to Round #</p><input type="number" value={targetRound} onChange={(e) => { userEditedRoundRef.current = true; setTargetRound(e.target.value); }} min={upcomingRound} step={1} placeholder={String(upcomingRound)} className="input tabular" /></div>
+              </div>
+              <button onClick={() => applyManual()} className="btn-coral w-full py-2">Apply Manual Override</button>
+              <p className="text-[11px] text-slate-500">
+                {manualHint} Queued: <span className="text-coral-300 font-semibold">{handler.manualResult || '—'}</span>.
+                <br /><span className="text-emeraldwin-300 font-semibold">✓ Auto-reverts to AUTO after the manual round.</span>
+              </p>
+            </div>
+          )}
         </div>
       )}
-      <div className="bg-slatepanel-800 rounded-xl p-3 border border-neon-400/30">
-        <div className="flex items-center mb-2">
-          <label className="text-xs font-semibold text-neon-300 uppercase tracking-wider flex items-center gap-2">
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
-            Next Round Preview
-          </label>
-        </div>
-        {preview ? (
-          <div className="space-y-1.5">
-            <div className="flex items-center gap-2"><span className="text-[10px] text-slate-400 uppercase tracking-wider w-16">Outcome</span><span className="font-display font-extrabold text-xl text-white tabular">{preview.outcome}</span></div>
-            <div className="flex items-center gap-2"><span className="text-[10px] text-slate-400 uppercase tracking-wider w-16">Detail</span><span className="text-xs text-slate-300">{preview.detail}</span></div>
-          </div>
-        ) : (<p className="text-xs text-slate-500">Preview will appear automatically.</p>)}
-      </div>
 
       {/* Quick stakes — Supabase connected */}
       <div className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800 space-y-2">
