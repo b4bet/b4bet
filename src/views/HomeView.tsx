@@ -15,10 +15,10 @@ export default function HomeView({ onNavigate }: Props) {
   }, []);
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
+    <div className="flex flex-col" style={{ height: 'calc(100dvh - 62px - 60px)', overflow: 'hidden' }}>
       {/* Banner */}
       <div className="px-3 pt-3 flex-shrink-0">
-        <SliderBanner onSlideClick={(i) => {
+        <SliderBanner onCta={(i) => {
           if (i === 1) onNavigate('crash');
           else if (i === 2) onNavigate('mines');
           else onNavigate('deposit');
@@ -31,35 +31,35 @@ export default function HomeView({ onNavigate }: Props) {
       </div>
 
       {/* Flexible spacer — pushes strips to bottom */}
-      <div className="flex-1 min-h-[12px]" />
+      <div className="flex-1 min-h-[8px]" />
 
-      {/* Live stats strip */}
+      {/* Live stats strip — positioned just above bottom nav */}
       <div className="mx-3 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
-        <div className="flex flex-col items-center py-2.5 gap-0.5">
+        <div className="flex flex-col items-center py-2 gap-0.5">
           <span className="text-[10px] text-slate-500 font-medium">Online</span>
           <span className="text-sm font-bold text-emeraldwin-400">{stats.onlineUsers.toLocaleString()}</span>
         </div>
-        <div className="flex flex-col items-center py-2.5 gap-0.5 border-x border-borderline-900">
+        <div className="flex flex-col items-center py-2 gap-0.5 border-x border-borderline-900">
           <span className="text-[10px] text-slate-500 font-medium">Top Win</span>
           <span className="text-sm font-bold text-neon-400">{stats.topWin.toFixed(1)}x</span>
         </div>
-        <div className="flex flex-col items-center py-2.5 gap-0.5">
+        <div className="flex flex-col items-center py-2 gap-0.5">
           <span className="text-[10px] text-slate-500 font-medium">Paid Out</span>
           <span className="text-sm font-bold text-violet-400">₹{(stats.paidOut / 100000).toFixed(1)}M</span>
         </div>
       </div>
 
       {/* Trust strip */}
-      <div className="mx-3 mt-2 mb-3 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
-        <div className="flex flex-col items-center py-2.5 gap-1">
+      <div className="mx-3 mt-1.5 mb-2 flex-shrink-0 rounded-xl bg-slatepanel-900 border border-borderline-900 grid grid-cols-3">
+        <div className="flex flex-col items-center py-2 gap-1">
           <ShieldCheck className="w-4 h-4 text-emeraldwin-400" />
           <span className="text-[10px] text-slate-400 font-medium">Provably Fair</span>
         </div>
-        <div className="flex flex-col items-center py-2.5 gap-1 border-x border-borderline-900">
+        <div className="flex flex-col items-center py-2 gap-1 border-x border-borderline-900">
           <Zap className="w-4 h-4 text-neon-400" />
           <span className="text-[10px] text-slate-400 font-medium">Instant Payout</span>
         </div>
-        <div className="flex flex-col items-center py-2.5 gap-1">
+        <div className="flex flex-col items-center py-2 gap-1">
           <TrendingUp className="w-4 h-4 text-violet-400" />
           <span className="text-[10px] text-slate-400 font-medium">Secure Wallet</span>
         </div>

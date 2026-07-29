@@ -112,23 +112,23 @@ export default function CrashView() {
         }
       </div>
 
-      {/* ── Canvas — takes all remaining vertical space ── */}
-      <div className="relative" style={{ flex: '1 1 0', minHeight: 0, overflow: 'hidden' }}>
+      {/* ── Canvas — fixed height, never overlapped ── */}
+      <div className="relative" style={{ flexShrink: 0 }}>
         <CrashCanvas state={state} />
         <CashoutPopupOverlay />
       </div>
 
-      {/* ── Bet Panel — fixed height below canvas, never overlaps ── */}
+      {/* ── Bet Panel + History tabs — scrollable section below canvas ── */}
       <div
         className="border-t border-borderline-900 overflow-y-auto"
-        style={{ flexShrink: 0, maxHeight: '260px' }}
+        style={{ flex: '1 1 0', minHeight: 0 }}
       >
-        <DualBetPanel />
-      </div>
-
-      {/* ── History tabs ── */}
-      <div style={{ flexShrink: 0 }}>
-        <CrashHistoryTabs />
+        <div className="p-2">
+          <DualBetPanel />
+        </div>
+        <div className="px-2 pb-2">
+          <CrashHistoryTabs />
+        </div>
       </div>
     </div>
   );
