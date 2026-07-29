@@ -36,7 +36,6 @@ interface AviatorSavedBets {
 
 function saveAviatorBets(bet0: BetState, bet1: BetState, roundId: number) {
   try {
-    // Only save if at least one bet is placed
     if (bet0.placed || bet1.placed || bet0.pendingNextRound || bet1.pendingNextRound || bet0.autoBetEnabled || bet1.autoBetEnabled) {
       localStorage.setItem(AV_BETS_KEY, JSON.stringify({ bet0, bet1, roundId, savedAt: Date.now() }));
     } else {
@@ -50,7 +49,6 @@ function loadAviatorBets(): AviatorSavedBets | null {
     const raw = localStorage.getItem(AV_BETS_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as AviatorSavedBets;
-    // Only valid if saved less than 60 seconds ago (aviator rounds can be long)
     if (Date.now() - parsed.savedAt > 60000) {
       localStorage.removeItem(AV_BETS_KEY);
       return null;
@@ -63,7 +61,6 @@ function clearAviatorBets() {
   try { localStorage.removeItem(AV_BETS_KEY); } catch { /* ignore */ }
 }
 
-// Fetch all bets for the current round from the server
 async function fetchRoundBets(roundUuid: string): Promise<BetRecord[]> {
   try {
     const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
@@ -107,7 +104,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   const { playCashOut } = useGameAudio(phase, soundOn, musicOn);
 
-  // Load persisted bets on mount
   const [bet0, setBet0] = useState<BetState>(() => {
     const saved = loadAviatorBets();
     return saved?.bet0 ?? createInitialBet(1);
@@ -117,12 +113,10 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     return saved?.bet1 ?? createInitialBet(1);
   });
 
-  // Persist bets whenever they change
   useEffect(() => {
     saveAviatorBets(bet0, bet1, roundId);
   }, [bet0, bet1, roundId]);
 
-  // Clear persisted bets when round crashes and no active bets remain
   useEffect(() => {
     if (phase === 'crashed' && !bet0.placed && !bet1.placed && !bet0.pendingNextRound && !bet1.pendingNextRound && !bet0.autoBetEnabled && !bet1.autoBetEnabled) {
       clearAviatorBets();
@@ -136,13 +130,11 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const [insufficientBalanceNotices, setInsufficientBalanceNotices] = useState<InsufficientBalanceNotice[]>([]);
   const [timeoutNotices, setTimeoutNotices] = useState<TimeoutNotice[]>([]);
 
-  // Poll server bets every 2s during waiting/flying
   const lastFetchedRoundUuid = useRef<string | null>(null);
   useEffect(() => {
     const roundUuid = aviatorLoop.getRoundUuid();
     if (!roundUuid) return;
 
-    // Reset on new round
     if (roundUuid !== lastFetchedRoundUuid.current) {
       lastFetchedRoundUuid.current = roundUuid;
       setAllBets([]);
@@ -265,7 +257,7 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, [showCashoutNotice]);
 
   const handleWin = useCallback((_win: number) => {
-    // Balance is already updated via store.setBalance(res.balance_after) in doCashOut.
+    // Balance updated via store.setBalance in doCashOut.
   }, []);
 
   const wrapSetBet = useCallback(
@@ -315,9 +307,9 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   return (
-    <div className="aviator-root flex flex-col h-full w-full bg-aviator-bg overflow-hidden">
-      {/* Sticky header + history bar — these never scroll */}
-      <div className="sticky top-0 z-20 flex flex-col bg-aviator-bg">
+    <div className="w-full bg-aviator-bg">
+      {/* Sticky header + history bar — sticks to the top of the page scroll */}
+      <div className="sticky top-0 z-20 bg-aviator-bg">
         <Header
           balance={balance}
           soundOn={soundOn}
@@ -331,63 +323,61 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         <HistoryBar history={history} />
       </div>
 
-      <div className="flex flex-col flex-1 overflow-y-auto overflow-x-hidden">
-        <FlightCanvas
+      {/* All game content below scrolls naturally — nothing is clipped */}
+      <FlightCanvas
+        phase={phase}
+        multiplier={multiplier}
+        countdown={countdown}
+        lastCrash={lastCrash}
+        animationOn={animationOn}
+        cashouts={cashoutNotices}
+        insufficientBalanceNotices={insufficientBalanceNotices}
+        timeoutNotices={timeoutNotices}
+      />
+
+      <div className="flex flex-col gap-2 p-2">
+        <BettingPanel
+          bet={bet0}
+          setBet={wrapSetBet(0)}
           phase={phase}
           multiplier={multiplier}
           countdown={countdown}
-          lastCrash={lastCrash}
-          animationOn={animationOn}
-          cashouts={cashoutNotices}
-          insufficientBalanceNotices={insufficientBalanceNotices}
-          timeoutNotices={timeoutNotices}
+          roundId={roundId}
+          balance={balance}
+          onPlaceBet={handlePlaceBet}
+          onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
+          onCashOut={handleCashOut}
+          onWin={handleWin}
+          onInsufficientBalance={showInsufficientBalanceNotice}
+          onTimeout={showTimeoutNotice}
         />
-
-        {/* Betting panels — Panel 1 on top, Panel 2 below */}
-        <div className="flex flex-col gap-2 p-2">
-          <BettingPanel
-            bet={bet0}
-            setBet={wrapSetBet(0)}
-            phase={phase}
-            multiplier={multiplier}
-            countdown={countdown}
-            roundId={roundId}
-            balance={balance}
-            onPlaceBet={handlePlaceBet}
-            onCancelBet={(amount, betId) => handleCancelBet(0, amount, betId)}
-            onCashOut={handleCashOut}
-            onWin={handleWin}
-            onInsufficientBalance={showInsufficientBalanceNotice}
-            onTimeout={showTimeoutNotice}
-          />
-          <BettingPanel
-            bet={bet1}
-            setBet={wrapSetBet(1)}
-            phase={phase}
-            multiplier={multiplier}
-            countdown={countdown}
-            roundId={roundId}
-            balance={balance}
-            onPlaceBet={handlePlaceBet}
-            onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
-            onCashOut={handleCashOut}
-            onWin={handleWin}
-            onInsufficientBalance={showInsufficientBalanceNotice}
-            onTimeout={showTimeoutNotice}
-          />
-        </div>
-
-        <Sidebar
+        <BettingPanel
+          bet={bet1}
+          setBet={wrapSetBet(1)}
           phase={phase}
           multiplier={multiplier}
-          allBets={allBets}
-          myBets={myBets}
-          chat={chat}
-          canShareBet={canShareBet}
-          onSendChat={handleSendChat}
-          onShareBet={handleShareBet}
+          countdown={countdown}
+          roundId={roundId}
+          balance={balance}
+          onPlaceBet={handlePlaceBet}
+          onCancelBet={(amount, betId) => handleCancelBet(1, amount, betId)}
+          onCashOut={handleCashOut}
+          onWin={handleWin}
+          onInsufficientBalance={showInsufficientBalanceNotice}
+          onTimeout={showTimeoutNotice}
         />
       </div>
+
+      <Sidebar
+        phase={phase}
+        multiplier={multiplier}
+        allBets={allBets}
+        myBets={myBets}
+        chat={chat}
+        canShareBet={canShareBet}
+        onSendChat={handleSendChat}
+        onShareBet={handleShareBet}
+      />
 
       <div className="text-center text-xs text-aviator-muted py-1 opacity-50">
         🔒 Official Live Game&nbsp;·&nbsp;Secure &amp; Provably Fair&nbsp;·&nbsp;18+ Responsible Play
