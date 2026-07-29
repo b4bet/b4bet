@@ -1,12 +1,22 @@
 import { useState, useEffect } from 'react';
 import { Users, TrendingUp, IndianRupee, Save } from 'lucide-react';
-import { supabaseGetSettings, supabaseUpdateSetting } from '../../lib/supabaseIntegration';
+import { supabase } from '../../integrations/supabase/client';
+import { supabaseGetSettings } from '../../lib/supabaseIntegration';
 
 interface StatsConfig {
   onlineMin: number;
   onlineMax: number;
   topWin: number;
   paidOut: number;
+}
+
+// Save directly via supabase.rpc with the object (not stringified) — same pattern as other tabs
+async function saveHomeStats(config: StatsConfig): Promise<void> {
+  const { error } = await supabase.rpc('admin_update_setting', {
+    p_key: 'home_stats',
+    p_value: config as unknown as string,
+  });
+  if (error) throw error;
 }
 
 export default function StatsSettingsTab() {
@@ -18,6 +28,7 @@ export default function StatsSettingsTab() {
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
     supabaseGetSettings().then((settings) => {
@@ -35,11 +46,14 @@ export default function StatsSettingsTab() {
 
   const handleSave = async () => {
     setSaving(true);
+    setSaveError('');
     try {
-      await supabaseUpdateSetting('home_stats', JSON.stringify(config));
+      await saveHomeStats(config);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Save failed';
+      setSaveError(msg);
       console.error('Failed to save stats settings', e);
     } finally {
       setSaving(false);
@@ -202,13 +216,19 @@ export default function StatsSettingsTab() {
         </p>
       </div>
 
+      {saveError && (
+        <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/30 rounded-lg px-3 py-2">
+          Error: {saveError}
+        </p>
+      )}
+
       <button
         onClick={handleSave}
         disabled={saving}
         className="btn-primary flex items-center gap-2 px-5 py-2.5 text-sm font-bold"
       >
         <Save className="w-4 h-4" />
-        {saving ? 'Saving…' : saved ? '✓ Saved to Supabase!' : 'Save Changes'}
+        {saving ? 'Saving…' : saved ? '✓ Saved!' : 'Save Changes'}
       </button>
     </div>
   );
