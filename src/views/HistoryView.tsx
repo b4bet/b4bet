@@ -3,7 +3,6 @@ import { X, ArrowDownLeft, ArrowUpRight, Clock, CheckCircle2, XCircle, Loader2 }
 import type { Route } from '../components/BottomNav';
 import { useAuth } from '../lib/hooks';
 import { useFinance } from '../lib/cmsHooks';
-import { store } from '../lib/store';
 
 function fmt(n: number) {
   return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -16,15 +15,15 @@ function fmtDate(ts: number) {
 function statusConfig(status: string) {
   switch (status) {
     case 'approved':
-      return { label: 'Success', icon: CheckCircle2, color: 'text-emeraldwin-300', bg: 'bg-emeraldwin-500/15', border: 'border-emeraldwin-500/30' };
+      return { label: 'Success', icon: CheckCircle2, color: 'text-emerald-300', bg: 'bg-emerald-500/15', border: 'border-emerald-500/30' };
     case 'processing':
-      return { label: 'Processing', icon: Loader2, color: 'text-amberx-300', bg: 'bg-amberx-500/15', border: 'border-amberx-500/30' };
+      return { label: 'Processing', icon: Loader2, color: 'text-amber-300', bg: 'bg-amber-500/15', border: 'border-amber-500/30' };
     case 'cancelled':
-      return { label: 'Cancelled', icon: XCircle, color: 'text-coral-300', bg: 'bg-coral-500/15', border: 'border-coral-500/30' };
+      return { label: 'Cancelled', icon: XCircle, color: 'text-orange-300', bg: 'bg-orange-500/15', border: 'border-orange-500/30' };
     case 'rejected':
-      return { label: 'Failed', icon: XCircle, color: 'text-coral-300', bg: 'bg-coral-500/15', border: 'border-coral-500/30' };
+      return { label: 'Failed', icon: XCircle, color: 'text-red-300', bg: 'bg-red-500/15', border: 'border-red-500/30' };
     default:
-      return { label: 'Pending', icon: Clock, color: 'text-slate-300', bg: 'bg-slatepanel-800', border: 'border-borderline-900' };
+      return { label: 'Pending', icon: Clock, color: 'text-slate-300', bg: 'bg-slate-800', border: 'border-slate-700' };
   }
 }
 
@@ -52,50 +51,53 @@ export default function HistoryView({ onNavigate }: { onNavigate: (r: Route) => 
   }, [deposits, withdrawals, user]);
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <div className="min-h-screen bg-slatebg-950 text-white">
       {/* Header row */}
-      <div className="flex items-center justify-between gap-2 pl-3">
-        <h1 className="font-display font-extrabold text-xl text-white">History</h1>
+      <div className="flex items-center justify-between px-4 pt-5 pb-3">
+        <h2 className="font-display font-bold text-lg text-white">History</h2>
         <button onClick={() => onNavigate('home')} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
-          <X className="w-5 h-5 text-slate-300" />
+          <X className="w-4 h-4 text-slate-400" />
         </button>
       </div>
 
       {items.length === 0 ? (
-        <div className="panel p-6 text-center text-sm text-slate-500">No transactions yet.</div>
+        <p className="text-slate-500 text-sm text-center py-10">No transactions yet.</p>
       ) : (
-        <div className="panel p-4 space-y-3">
+        <div className="px-4 pb-6 space-y-3">
           {items.map((t) => {
             const cfg = statusConfig(t.status);
             const Icon = cfg.icon;
             return (
-              <div key={`${t.type}-${t.id}`} className="rounded-xl bg-midnight-850 border border-borderline-900 p-3 flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-xl ${cfg.bg} ${cfg.border} border grid place-items-center flex-shrink-0`}>
-                  {t.type === 'deposit' ? (
-                    <ArrowDownLeft className="w-5 h-5 text-emeraldwin-400" />
-                  ) : (
-                    <ArrowUpRight className="w-5 h-5 text-coral-400" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold text-white capitalize">{t.type}</span>
-                    <span className={`tabular font-bold text-sm ${t.type === 'deposit' ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
-                      {t.sign}{fmt(t.amount)}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] text-slate-400 mt-1">
-                    <span>{fmtDate(t.ts)}</span>
-                    <span className={`chip text-[10px] flex items-center gap-1 ${cfg.bg} ${cfg.color} ${cfg.border}`}>
-                      <Icon className={`w-3 h-3 ${t.status === 'processing' ? 'animate-spin' : ''}`} /> {cfg.label}
-                    </span>
-                  </div>
-                  {(t.reason || t.utr) && (
-                    <div className="text-[11px] text-slate-500 mt-1">
-                      {t.utr && <span className="block">UTR: {t.utr}</span>}
-                      {t.reason && <span className="block">{t.reason}</span>}
+              <div key={t.id} className="bg-slatepanel-800 border border-borderline-900 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`w-8 h-8 rounded-lg grid place-items-center flex-shrink-0 ${
+                      t.type === 'deposit' ? 'bg-emerald-500/15 border border-emerald-500/30' : 'bg-red-500/15 border border-red-500/30'
+                    }`}>
+                      {t.type === 'deposit' ? (
+                        <ArrowDownLeft className="w-4 h-4 text-emerald-400" />
+                      ) : (
+                        <ArrowUpRight className="w-4 h-4 text-red-400" />
+                      )}
                     </div>
-                  )}
+                    <div>
+                      <p className="text-xs font-semibold text-white capitalize">{t.type}</p>
+                      <p className="text-[10px] text-slate-500">{fmtDate(t.ts)}</p>
+                    </div>
+                  </div>
+                  <span className={`text-sm font-bold ${
+                    t.type === 'deposit' ? 'text-emerald-400' : 'text-red-400'
+                  }`}>
+                    {t.sign}{fmt(t.amount)}
+                  </span>
+                </div>
+
+                {/* Status badge — NO UTR, NO reason shown to user */}
+                <div className="flex items-center gap-1.5">
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cfg.bg} ${cfg.border} ${cfg.color}`}>
+                    <Icon className={`w-3 h-3 ${t.status === 'processing' ? 'animate-spin' : ''}`} />
+                    {cfg.label}
+                  </span>
                 </div>
               </div>
             );
