@@ -1,10 +1,6 @@
 /**
  * SunVsMoonView — server-side outcome version.
- * FIX: round_number stored in bet_details (round_id DB col is UUID type)
- * FIX: My Bets fetched from Supabase on mount + after each settle.
- * FIX: overlayResult prevents image flash on result reveal.
- * FIX: My Bets row shows only round# — no date/time.
- * FIX: round_number parsed via Number() to handle JSONB string/number type.
+ * FIX: filter My Bets by game:'sunvsmoon' to exclude duplicate legacy rows.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -30,7 +26,6 @@ const QUICK_STAKES = [100, 200, 500, 1000];
 const CHOICE_IMAGES: Record<BetChoice, string> = { sun: '/sun.png', moon: '/moon.png', tie: '/eclipse.png' };
 const CHOICE_LABELS: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
 
-// ── Active bet persistence (localStorage, expires 25s) ──────────────────────
 const SM_BET_KEY = 'b4bet_sunmoon_active_bet';
 
 interface SunMoonSavedBet {
@@ -58,7 +53,6 @@ function loadSunMoonBet(): SunMoonSavedBet | null {
   } catch { return null; }
 }
 
-// ── Supabase types ────────────────────────────────────────────────────────────
 interface SupabaseBetRow {
   id: string;
   round_id: string | null;
@@ -91,9 +85,10 @@ function isBetChoice(v: unknown): v is BetChoice {
 function rowToMyBet(row: SupabaseBetRow): MyBetEntry | null {
   const d = row.bet_details;
   if (!d) return null;
+  // Only process rows explicitly tagged as sunvsmoon (excludes legacy duplicates)
+  if (d.game !== 'sunvsmoon') return null;
   const betChoice = d.bet_choice ?? d.bet;
   if (!isBetChoice(betChoice) || !isBetChoice(d.result)) return null;
-  // Use Number() to handle both number and string from JSONB
   const rn = d.round_number != null ? Number(d.round_number) : NaN;
   return {
     id: row.id,
@@ -111,9 +106,12 @@ async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
     .select('id, round_id, bet_amount, win_amount, status, placed_at, bet_details')
     .eq('user_id', userId)
     .order('placed_at', { ascending: false })
-    .limit(20);
+    .limit(40);  // fetch more since we filter duplicates client-side
   if (error || !data) return [];
-  return (data as SupabaseBetRow[]).map(rowToMyBet).filter((r): r is MyBetEntry => r !== null);
+  return (data as SupabaseBetRow[])
+    .map(rowToMyBet)
+    .filter((r): r is MyBetEntry => r !== null)
+    .slice(0, 20);
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -225,8 +223,6 @@ function HistoryStrip({ history }: { history: Array<{ round: number; result: Bet
   );
 }
 
-// ── Main View ─────────────────────────────────────────────────────────────────
-
 export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const gameLogos = useGameLogos();
   const balance   = useBalance();
@@ -263,7 +259,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
   useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
 
-  // ── Fetch My Bets from Supabase on mount ──
   useEffect(() => {
     const session = auth.getSession();
     if (!session?.userId) return;
@@ -273,7 +268,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       .finally(() => setMyBetsLoading(false));
   }, []);
 
-  // ── Restore active bet from localStorage on mount ──
   useEffect(() => {
     const saved = loadSunMoonBet();
     if (!saved) return;
@@ -287,7 +281,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
     }
   }, []);
 
-  // ── Persist active bet when placed ──
   useEffect(() => {
     if (betPlaced && selectedChoice) {
       saveSunMoonBet({ roundNumber, selectedChoice, betAmount, betPlaced: true, savedAt: Date.now() });
@@ -409,8 +402,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
   return (
     <div className="flex flex-col min-h-screen animate-fade-in">
-
-      {/* Header */}
       <div className="sticky top-0 z-10 bg-midnight-950 px-3 pt-3 pb-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -439,8 +430,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
       </div>
 
       <div className="flex-1 space-y-4 px-3 pb-4">
-
-        {/* Game card */}
         <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden min-h-[420px]">
           <ResultOverlay
             visible={phase === 'revealed' && overlayResult !== null}
@@ -534,7 +523,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
           </div>
         </div>
 
-        {/* History tabs */}
         <div className="rounded-2xl bg-slatepanel-900 border border-borderline-900 p-4 space-y-4">
           <div className="flex gap-1 bg-slatepanel-800/60 rounded-xl p-1">
             {(['rounds', 'my'] as const).map((tab) => (
