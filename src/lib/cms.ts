@@ -96,7 +96,6 @@ const defaultBanners: BannerSlide[] = [
 const defaultDepositHtml = `<div style="font-family:Inter,sans-serif;padding:16px;background:#0f1225;color:#fff;border-radius:14px"><h2 style="margin:0 0 8px;color:#00ff88">Manual UPI Deposit</h2><p style="margin:0 0 8px">1. Scan the UPI QR above with any UPI app.</p><p style="margin:0 0 8px">2. Pay the exact amount you entered.</p><p style="margin:0">3. Submit the UTR / Transaction ID below for credit.</p></div>`;
 const defaultUpiQr = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="white"/><g fill="black"><rect x="10" y="10" width="60" height="60"/><rect x="20" y="20" width="40" height="40" fill="white"/><rect x="30" y="30" width="20" height="20"/><rect x="130" y="10" width="60" height="60"/><rect x="140" y="20" width="40" height="40" fill="white"/><rect x="150" y="30" width="20" height="20"/><rect x="10" y="130" width="60" height="60"/><rect x="20" y="140" width="40" height="40" fill="white"/><rect x="30" y="150" width="20" height="20"/><rect x="90" y="90" width="20" height="20"/><rect x="120" y="120" width="10" height="10"/><rect x="140" y="100" width="10" height="10"/></g></svg>');
 
-// ---- Default Email Templates (updated: both show Successful clearly) ----
 const defaultEmails: EmailTemplates = {
   welcome: '<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:24px;border-radius:12px"><h1 style="margin:0 0 16px;color:#00ff88;font-size:28px">Welcome to B4BeT, {{username}}!</h1><p style="margin:0 0 12px;font-size:16px">Your account is now live and ready to play.</p><p style="margin:0 0 12px;font-size:14px">Enjoy our exclusive games, live betting, and amazing rewards.</p><p style="margin:0;font-size:14px;color:#a0aec0">Start playing now and claim your welcome bonus on your first deposit!</p></div>',
 
@@ -251,14 +250,12 @@ function mapPaymentMethod(row: Record<string, unknown>): ManualMethod {
   };
 }
 
-// Helper: wrap supabase rpc result in a real Promise so .catch() works correctly.
-// supabase.rpc() returns a PostgrestFilterBuilder which is only "thenable" (no .catch method).
 function rpc<T>(call: PromiseLike<T>): Promise<T> {
   return Promise.resolve(call);
 }
 
-// Statuses from which a withdrawal balance was already deducted (on submit).
-// Refund must be issued when moving FROM one of these TO rejected/cancelled.
+// Statuses from which balance was already deducted at submitWithdrawal time.
+// Refund is issued when admin moves FROM one of these TO rejected/cancelled.
 const DEDUCTED_STATUSES = new Set<WithdrawalRequest['status']>(['pending', 'processing']);
 
 const ADMIN_SESSION_KEY = 'b4bet.admin.session';
@@ -435,7 +432,7 @@ class Cms {
       const { data, error } = await supabase.rpc('admin_get_support_tickets');
       if (error) { console.warn('[cms] syncTickets error:', error.message); return; }
       if (data && Array.isArray(data)) { this.tickets = (data as Array<Record<string, unknown>>).map(mapTicket); this.emitTickets(); }
-    } catch (e) { console.warn('[cms] syncTickets failed:', e); }\
+    } catch (e) { console.warn('[cms] syncTickets failed:', e); }
   }
 
   async syncPaymentMethodsFromSupabase() {
@@ -586,16 +583,15 @@ class Cms {
   }
 
   submitWithdrawal(user: string, amount: number, destination: string, details?: string, userId?: string) {
-    // FIX: Deduct balance instantly from client state so user sees updated balance immediately.
-    // Uses debitLocalOnly() to avoid a redundant Supabase write — the balance is already written
-    // below via direct profiles update, and Realtime will sync it back to the client.
+    // Deduct balance instantly so user sees updated balance immediately.
+    // Uses debitLocalOnly() — balance is written to Supabase separately below.
     const debited = store.debitLocalOnly(amount);
     if (!debited) {
       this.toast({ title: 'Insufficient balance', body: `Available: ${store.currency}${store.balance.toFixed(2)}`, kind: 'alert' });
       return;
     }
 
-    // Persist the deducted balance to Supabase so it survives a page reload.
+    // Persist deducted balance to Supabase so it survives a page reload.
     const newBalance = store.balance;
     const session = auth.getSession();
     if (session?.userId) {
@@ -637,30 +633,21 @@ class Cms {
     const before = this.withdrawals.find(w => w.id === id);
     this.withdrawals = this.withdrawals.map(w => w.id === id ? { ...w, status, utr: utr ?? w.utr, reason: reason ?? w.reason } : w);
 
+    // REFUND: if admin rejects/cancels a pending/processing withdrawal, credit back the amount.
     const isRefundable = (status === 'rejected' || status === 'cancelled')
       && before
       && DEDUCTED_STATUSES.has(before.status);
 
     if (isRefundable && before) {
-      // REFUND: credit the amount back to the user's wallet instantly.
-      // The balance was deducted at submitWithdrawal time; reverting it here.
       store.creditLocalOnly(before.amount);
       const refundedBalance = store.balance;
 
-      // Persist refunded balance to Supabase profiles.
       if (before.userId) {
-        supabase.from('profiles')
-          .update({ balance: refundedBalance })
-          .eq('id', before.userId)
-          .then(() => {}).catch(() => {});
+        supabase.from('profiles').update({ balance: refundedBalance }).eq('id', before.userId).then(() => {}).catch(() => {});
       } else {
-        // Try via auth session if userId not stored on withdrawal record.
         const session = auth.getSession();
         if (session?.userId) {
-          supabase.from('profiles')
-            .update({ balance: refundedBalance })
-            .eq('id', session.userId)
-            .then(() => {}).catch(() => {});
+          supabase.from('profiles').update({ balance: refundedBalance }).eq('id', session.userId).then(() => {}).catch(() => {});
         }
       }
 
@@ -830,7 +817,6 @@ class Cms {
     bus.emit(Topics.StaffSession, null);
   }
 
-  // ---- Referrals ----
   addReferral(ref: Omit<Referral, 'id' | 'ts'>) {
     const item: Referral = { ...ref, id: Math.random().toString(36).slice(2), ts: Date.now() };
     this.referrals = [item, ...this.referrals]; this.emitReferrals();
@@ -847,7 +833,6 @@ class Cms {
     return rows;
   }
 
-  // ---- Affiliates ----
   addAffiliateApplication(app: Omit<AffiliateApplication, 'id' | 'ts'>): AffiliateApplication {
     const item: AffiliateApplication = { ...app, id: 'aff_' + Math.random().toString(36).slice(2), ts: Date.now() };
     this.affiliates = [item, ...this.affiliates];
@@ -860,7 +845,6 @@ class Cms {
     rpc(supabase.rpc('admin_update_setting', { p_key: 'affiliates', p_value: this.affiliates as unknown as string })).catch(() => {});
   }
 
-  // ---- Auth user reference (type guard only) ----
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   isAuthUser(_u: unknown): _u is AuthUser { return false; }
 }
