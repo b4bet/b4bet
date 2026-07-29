@@ -539,7 +539,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
           {historyTab === 'rounds' && <HistoryStrip history={history} />}
 
           {historyTab === 'my' && (
-            <div className="space-y-2">
+            <div>
               {myBetsLoading ? (
                 <div className="flex flex-col gap-2">
                   {[1, 2, 3].map((i) => (
@@ -549,23 +549,26 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               ) : myBets.length === 0 ? (
                 <p className="text-xs text-slate-500 text-center py-4">Place a bet to see your history here</p>
               ) : (
-                myBets.map((b) => (
-                  <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
-                    <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-bold text-white">
-                        {b.round !== null ? `#${b.round}` : '—'}
-                      </p>
-                      <p className="text-[10px] text-slate-400">Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}</p>
+                /* Fixed-height scroll container — shows ~4 bets, rest scroll inside this box */
+                <div className="overflow-y-auto space-y-2 scrollbar-none" style={{ maxHeight: '240px' }}>
+                  {myBets.map((b) => (
+                    <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
+                      <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-white">
+                          {b.round !== null ? `#${b.round}` : '—'}
+                        </p>
+                        <p className="text-[10px] text-slate-400">Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}</p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className={`text-sm font-black ${b.win > 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
+                          {b.win > 0 ? `+₹${b.win.toLocaleString()}` : `-₹${b.stake.toLocaleString()}`}
+                        </p>
+                        <p className="text-[9px] text-slate-500">Stake ₹{b.stake.toLocaleString()}</p>
+                      </div>
                     </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className={`text-sm font-black ${b.win > 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
-                        {b.win > 0 ? `+₹${b.win.toLocaleString()}` : `-₹${b.stake.toLocaleString()}`}
-                      </p>
-                      <p className="text-[9px] text-slate-500">Stake ₹{b.stake.toLocaleString()}</p>
-                    </div>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
             </div>
           )}
