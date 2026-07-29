@@ -1,6 +1,8 @@
 /**
  * SunVsMoonView — server-side outcome version.
  * FIX: filter My Bets by game:'sunvsmoon' to exclude duplicate legacy rows.
+ * FIX: call sunMoonGetResult at round start (processing phase) to lock in
+ *      the admin MANUAL override BEFORE settle, so it cannot be bypassed.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -252,6 +254,8 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
   const settledRoundRef   = useRef<number>(-1);
   const resetForRoundRef  = useRef<number>(-1);
+  // FIX: track which rounds we've already called sunMoonGetResult on, to avoid duplicate calls
+  const resultFetchedRoundRef = useRef<number>(-1);
   const selectedChoiceRef = useRef<BetChoice | null>(null);
   const betAmountRef      = useRef<number>(betAmount);
   const betPlacedRef      = useRef(false);
@@ -304,6 +308,17 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         setLastQuickStake(null);
         setOverlayResult(null);
         saveSunMoonBet(null);
+      }
+
+      // FIX: When processing phase begins, call sunMoonGetResult to lock in the
+      // admin MANUAL override on the server BEFORE any player settles. This ensures
+      // the round row in sunvsmoon_rounds is created with the manual result, so that
+      // subsequent settle calls use it (instead of falling back to random).
+      if (s.phase === 'processing' && resultFetchedRoundRef.current !== rn) {
+        resultFetchedRoundRef.current = rn;
+        void GameService.sunMoonGetResult(rn).catch(() => {
+          // Non-fatal — if this fails, settle will still check the manual override.
+        });
       }
 
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
