@@ -238,7 +238,7 @@ export default function App() {
         )}
         {route === 'referral'  && <ReferralView onNavigate={navigate} onOpenMenu={openMenu} />}
         {route === 'admin'     && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
-        {route === 'history'   && <HistoryView />}
+        {route === 'history'   && <HistoryView onClose={() => { setRoute('home'); setWalletOpen(true); }} />}
         {route === 'crash'     && <CrashView />}
         {route === 'aviator'   && <AviatorView onExit={() => navigate('home')} />}
         {route === 'sunvsmoon' && <SunVsMoonView />}
