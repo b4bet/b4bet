@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Wallet, CheckCircle2, X, Info, Copy, Coins, AlertTriangle } from 'lucide-react';
 import { useAuth, useBalance } from '../lib/hooks';
@@ -33,6 +33,11 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alertFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Track history depth for back button
+  const historyDepthRef = useRef(0);
+  const selectedRef = useRef<ManualMethod | null>(null);
+  selectedRef.current = selected;
+
   const showAlert = (title: string, body: string) => {
     if (alertTimer.current) clearTimeout(alertTimer.current);
     if (alertFadeTimer.current) clearTimeout(alertFadeTimer.current);
@@ -60,6 +65,51 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       setDetails('');
     }
   }, [open]);
+
+  // ─── Mobile back button: push state when flow opens ───
+  useEffect(() => {
+    if (!open) {
+      historyDepthRef.current = 0;
+      return;
+    }
+    // Push initial history entry for the method list screen
+    window.history.pushState({ pmf: 'method-list' }, '');
+    historyDepthRef.current = 1;
+
+    return () => {
+      // Cleanup: no-op, popstate handler handles navigation
+    };
+  }, [open]);
+
+  // ─── Mobile back button: push state when method is selected ───
+  useEffect(() => {
+    if (!open) return;
+    if (selected) {
+      window.history.pushState({ pmf: 'method-form' }, '');
+      historyDepthRef.current = 2;
+    }
+  }, [selected, open]);
+
+  // ─── Mobile back button: handle popstate ───
+  const handlePopState = useCallback(() => {
+    if (!open) return;
+    if (selectedRef.current) {
+      // Go back from form to method list
+      setSelected(null);
+      setSelectedCrypto(null);
+      historyDepthRef.current = 1;
+    } else {
+      // Go back from method list — close the flow
+      historyDepthRef.current = 0;
+      onClose();
+    }
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [open, handlePopState]);
 
   if (!open) return null;
 
@@ -161,6 +211,22 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }).catch(() => {});
   };
 
+  // Handle close with history cleanup
+  const handleClose = () => {
+    // Go back in history to clean up pushed states
+    if (historyDepthRef.current > 0) {
+      window.history.go(-historyDepthRef.current);
+      historyDepthRef.current = 0;
+    }
+    onClose();
+  };
+
+  // Handle UI back button (from form to method list)
+  const handleBackToMethodList = () => {
+    // Pop the history entry we pushed for method-form
+    window.history.back();
+  };
+
   // Professional alert portal — rendered on document.body to escape stacking contexts
   const alertPortal = alertPopup
     ? createPortal(
@@ -233,7 +299,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             </div>
             <p className="font-display font-bold text-lg text-white">Request Submitted</p>
             <p className="text-sm text-slate-400">Please wait 5 minutes, your payment is processing...</p>
-            <button onClick={onClose} className="btn-primary w-full py-3">Done</button>
+            <button onClick={handleClose} className="btn-primary w-full py-3">Done</button>
           </div>
         </div>
       </>
@@ -249,7 +315,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             <h3 className="font-display font-bold text-white flex items-center gap-2">
               <Wallet className="w-4 h-4 text-neon-400" /> Select {title} Method
             </h3>
-            <button onClick={onClose} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors">
+            <button onClick={handleClose} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors">
               <X className="w-4 h-4 text-slate-300" />
             </button>
           </div>
@@ -309,7 +375,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       <div className="fixed inset-0 z-[210] pointer-events-auto flex flex-col bg-slatepanel-900">
         <div className="flex items-center justify-between px-4 py-3 border-b border-borderline-900 flex-shrink-0 bg-slatepanel-900">
           <div className="flex items-center gap-3">
-            <button onClick={() => { setSelected(null); setSelectedCrypto(null); }} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors">
+            <button onClick={handleBackToMethodList} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors">
               <ArrowLeft className="w-4 h-4 text-slate-300" />
             </button>
             <div>

@@ -328,6 +328,11 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
   const [floatToasts, setFloatToasts] = useState<FloatToast[]>([]);
   const prevPending = useRef({ deposits: 0, withdrawals: 0, support: 0 });
   const toastIdRef = useRef(0);
+  const activeTabRef = useRef<Tab>(activeTab);
+  activeTabRef.current = activeTab;
+
+  // Track tab history stack for back navigation
+  const tabHistoryRef = useRef<Tab[]>(['dashboard']);
 
   const currentStaff = staffSessionId ? staff.find(s => s.id === staffSessionId) ?? null : null;
 
@@ -361,6 +366,36 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
     setFloatToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
+  // ─── Mobile back button support for admin panel ───
+  // Push history state when navigating to a non-dashboard tab
+  useEffect(() => {
+    if (activeTab !== 'dashboard') {
+      window.history.pushState({ adminTab: activeTab }, '');
+    }
+  }, [activeTab]);
+
+  // Handle popstate (mobile back button)
+  useEffect(() => {
+    const handlePopState = () => {
+      const history = tabHistoryRef.current;
+      if (history.length > 1) {
+        // Pop the current tab and go to previous
+        history.pop();
+        const prevTab = history[history.length - 1];
+        setActiveTab(prevTab);
+      } else if (activeTabRef.current === 'dashboard') {
+        // Already on dashboard, go back to main app
+        onNavigate('home');
+      } else {
+        // Go back to dashboard
+        setActiveTab('dashboard');
+        tabHistoryRef.current = ['dashboard'];
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [onNavigate]);
+
   // If not logged in, show login page (stays on admin route, not user website)
   if (!staffSessionId) return <AdminLoginPage />;
 
@@ -372,7 +407,12 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
   };
 
   const visibleTabs = TABS.filter(t => canAccess(t.key));
-  const navigate = (tab: Tab) => { setActiveTab(tab); setSidebarOpen(false); };
+  const navigate = (tab: Tab) => {
+    // Track tab history for back navigation
+    tabHistoryRef.current.push(tab);
+    setActiveTab(tab);
+    setSidebarOpen(false);
+  };
 
   const renderTab = () => {
     switch (activeTab) {
