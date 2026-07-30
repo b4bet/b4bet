@@ -47,22 +47,37 @@ export default function HistoryTab() {
   const [rows, setRows] = useState<BetRecord[]>([]);
   const [profiles, setProfiles] = useState<SupabaseProfile[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    try {
-      const [{ data, error }, users] = await Promise.all([
-        supabase.rpc('admin_get_bet_history', { p_limit: 500 }),
-        supabaseGetUsers(),
-      ]);
-      if (error) throw error;
-      setRows((data ?? []) as BetRecord[]);
-      setProfiles(users);
-    } catch (e) {
-      console.error('[HistoryTab] load error:', e);
-    } finally {
-      setLoading(false);
+    setLoadError(null);
+
+    // Fetch bet history and profiles independently — one failure must not blank the other
+    const [betResult, users] = await Promise.allSettled([
+      supabase.rpc('admin_get_bet_history', { p_limit: 500 }),
+      supabaseGetUsers(),
+    ]);
+
+    if (betResult.status === 'fulfilled') {
+      const { data, error } = betResult.value;
+      if (error) {
+        console.error('[HistoryTab] bet history error:', error);
+        setLoadError(error.message);
+      } else {
+        setRows((data ?? []) as BetRecord[]);
+      }
+    } else {
+      console.error('[HistoryTab] bet history fetch failed:', betResult.reason);
+      setLoadError('Failed to load bet history.');
     }
+
+    if (users.status === 'fulfilled') {
+      setProfiles(users.value);
+    }
+    // If profiles fail, keep existing profiles — don't crash the table
+
+    setLoading(false);
   }, []);
 
   // user_id (uuid) -> 6-digit account_id lookup
@@ -188,6 +203,12 @@ export default function HistoryTab() {
           />
         </div>
       </div>
+
+      {loadError && (
+        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+          Error: {loadError}
+        </div>
+      )}
 
       <div className="panel overflow-hidden">
         <div className="overflow-x-auto scrollbar-thin">
