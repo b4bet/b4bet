@@ -1,7 +1,7 @@
-import { useMemo, useEffect } from 'react';
-import { X, ArrowDownLeft, ArrowUpRight, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { X, ArrowDownLeft, ArrowUpRight, Clock, CheckCircle2, XCircle, Loader2, RefreshCw } from 'lucide-react';
+import { supabase } from '../integrations/supabase/client';
 import { useAuth } from '../lib/hooks';
-import { useFinance } from '../lib/cmsHooks';
 
 function fmt(n: number) {
   return '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -9,6 +9,14 @@ function fmt(n: number) {
 
 function fmtDate(ts: number) {
   return new Date(ts).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function mapStatus(status: string): 'approved' | 'processing' | 'cancelled' | 'rejected' | 'pending' {
+  if (status === 'approved' || status === 'completed') return 'approved';
+  if (status === 'processing') return 'processing';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'rejected' || status === 'failed') return 'rejected';
+  return 'pending';
 }
 
 function statusConfig(status: string) {
@@ -26,10 +34,92 @@ function statusConfig(status: string) {
   }
 }
 
+interface TxRow {
+  id: string;
+  type: 'deposit' | 'withdrawal';
+  sign: '+' | '-';
+  amount: number;
+  status: string;
+  ts: number;
+  method?: string;
+}
+
 export default function HistoryView({ onClose }: { onClose: () => void }) {
   const session = useAuth();
-  const { deposits, withdrawals } = useFinance();
-  const user = session?.username ?? 'guest';
+  const [items, setItems] = useState<TxRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.rpc('get_my_transactions', { p_limit: 200 });
+      if (error) throw error;
+      const rows = (data ?? []) as Array<{
+        id: string;
+        type: string;
+        amount: number;
+        status: string;
+        metadata: Record<string, unknown>;
+        created_at: string;
+      }>;
+      const mapped: TxRow[] = rows
+        .filter(r => r.type === 'deposit' || r.type === 'withdrawal')
+        .map(r => ({
+          id: r.id,
+          type: r.type as 'deposit' | 'withdrawal',
+          sign: r.type === 'deposit' ? '+' as const : '-' as const,
+          amount: r.amount,
+          status: mapStatus(r.status),
+          ts: new Date(r.created_at).getTime(),
+          method: (r.metadata?.method as string) || (r.metadata?.destination as string) || undefined,
+        }));
+      setItems(mapped);
+    } catch (e) {
+      console.error('[HistoryView] load error:', e);
+      // Fallback: try direct table query with user_id filter
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) { setItems([]); return; }
+        const { data: fallback } = await supabase
+          .from('transactions')
+          .select('id, type, amount, status, metadata, created_at')
+          .eq('user_id', user.id)
+          .in('type', ['deposit', 'withdrawal'])
+          .order('created_at', { ascending: false })
+          .limit(200);
+        const rows2 = (fallback ?? []) as Array<{
+          id: string; type: string; amount: number; status: string;
+          metadata: Record<string, unknown>; created_at: string;
+        }>;
+        setItems(rows2.map(r => ({
+          id: r.id,
+          type: r.type as 'deposit' | 'withdrawal',
+          sign: r.type === 'deposit' ? '+' as const : '-' as const,
+          amount: r.amount,
+          status: mapStatus(r.status),
+          ts: new Date(r.created_at).getTime(),
+          method: (r.metadata?.method as string) || (r.metadata?.destination as string) || undefined,
+        })));
+      } catch {
+        setItems([]);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load]);
+
+  // Realtime updates — refresh on transaction changes
+  useEffect(() => {
+    const channel = supabase
+      .channel('history_view_rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => {
+        void load();
+      })
+      .subscribe();
+    return () => { void supabase.removeChannel(channel); };
+  }, [load]);
 
   // Mobile back button support — go back to menu (ProfileDrawer)
   useEffect(() => {
@@ -39,27 +129,33 @@ export default function HistoryView({ onClose }: { onClose: () => void }) {
     return () => { window.removeEventListener('popstate', handlePopstate); };
   }, [onClose]);
 
-  const items = useMemo(() => {
-    const d = deposits
-      .filter((t) => t.user === user)
-      .map((t) => ({ ...t, type: 'deposit' as const, sign: '+' as const }));
-    const w = withdrawals
-      .filter((t) => t.user === user)
-      .map((t) => ({ ...t, type: 'withdrawal' as const, sign: '-' as const }));
-    return [...d, ...w].sort((a, b) => b.ts - a.ts);
-  }, [deposits, withdrawals, user]);
+  // Suppress unused warning – session is kept for potential future use
+  void session;
 
   return (
     <div className="min-h-screen bg-slatebg-950 text-white">
       {/* Header row */}
       <div className="flex items-center justify-between px-4 pt-5 pb-3">
         <h2 className="font-display font-bold text-lg text-white">History</h2>
-        <button onClick={onClose} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
-          <X className="w-4 h-4 text-slate-400" />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void load()}
+            disabled={loading}
+            className="w-8 h-8 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-slate-400 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+          <button onClick={onClose} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
+            <X className="w-4 h-4 text-slate-400" />
+          </button>
+        </div>
       </div>
 
-      {items.length === 0 ? (
+      {loading ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="w-6 h-6 text-neon-400 animate-spin" />
+        </div>
+      ) : items.length === 0 ? (
         <p className="text-slate-500 text-sm text-center py-10">No transactions yet.</p>
       ) : (
         <div className="px-4 pb-6 space-y-3">
@@ -80,7 +176,9 @@ export default function HistoryView({ onClose }: { onClose: () => void }) {
                       )}
                     </div>
                     <div>
-                      <p className="text-xs font-semibold text-white capitalize">{t.type}</p>
+                      <p className="text-xs font-semibold text-white capitalize">
+                        {t.type}{t.method ? ` · ${t.method}` : ''}
+                      </p>
                       <p className="text-[10px] text-slate-500">{fmtDate(t.ts)}</p>
                     </div>
                   </div>
