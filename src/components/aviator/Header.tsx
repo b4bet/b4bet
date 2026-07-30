@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { HelpCircle, Menu, Volume2, Music, X, Wallet, Plane } from 'lucide-react';
 import { Toggle } from './Toggle';
 import { formatMoney } from './game/format';
@@ -35,45 +34,42 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
   }, [settingsOpen]);
 
   return (
-    <header className="flex items-center gap-2 px-3 py-2 bg-ink-900 border-b border-ink-700/60 relative z-10">
+    <header className="flex items-center justify-between px-3 h-[52px] bg-ink-900 border-b border-ink-700/60 flex-shrink-0">
       {/* Logo — round shape, bigger, left aligned */}
-      <div className="flex items-center gap-2 flex-1 min-w-0">
-        {aviatorLogo ? (
-          <img
-            src={aviatorLogo}
-            alt="Aviator"
-            className="w-12 h-12 rounded-full object-cover flex-shrink-0 ring-2 ring-red-500/40"
-          />
-        ) : (
-          <div className="w-12 h-12 rounded-full bg-gradient-to-br from-red-600 to-orange-500 flex items-center justify-center flex-shrink-0 ring-2 ring-red-500/40">
-            <Plane className="w-6 h-6 text-white" />
-          </div>
-        )}
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 bg-ink-700 border border-ink-500/60 grid place-items-center">
+          {aviatorLogo ? (
+            <img src={aviatorLogo} alt="Aviator" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full bg-gradient-to-br from-red-600 to-orange-500 grid place-items-center">
+              <Plane className="w-4 h-4 text-white" />
+            </div>
+          )}
+        </div>
         <div className="min-w-0">
           <p className="text-sm font-black text-white leading-none">Aviator</p>
-          <p className="text-[10px] text-slate-400 mt-0.5">Crash Game</p>
         </div>
       </div>
 
       {/* Right side controls */}
-      <div className="flex items-center gap-1.5 flex-shrink-0">
+      <div className="flex items-center gap-1.5">
         <button
           onClick={() => setHowToOpen(true)}
           className="flex items-center gap-1.5 rounded-lg bg-ink-700 hover:bg-ink-650 border border-ink-500/70 px-2 py-1.5 text-xs font-semibold text-gray-200 transition-colors"
         >
-          <HelpCircle className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">How to Play</span>
+          <HelpCircle className="w-3.5 h-3.5 text-blue-400" />
+          How to Play
         </button>
 
         {/* Balance */}
-        <div className="flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-ink-700 border border-ink-500/70">
+        <div className="flex items-center gap-1.5 bg-ink-700 border border-ink-500/70 rounded-lg px-2.5 py-1.5">
           <Wallet className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
-          <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
+          <span className="text-xs font-bold text-emerald-400 tabular-nums whitespace-nowrap">
             {formatMoney(balance)}
           </span>
         </div>
 
-        <div ref={menuRef} className="relative">
+        <div className="relative" ref={menuRef}>
           <button
             onClick={() => setSettingsOpen((v) => !v)}
             className="flex items-center justify-center rounded-lg bg-ink-700 hover:bg-ink-650 border border-ink-500/70 p-2 transition-colors"
@@ -83,27 +79,27 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
           </button>
 
           {settingsOpen && (
-            <div className="absolute right-0 top-full mt-1 w-52 bg-ink-800 border border-ink-600 rounded-xl shadow-2xl z-50 p-3 space-y-3">
+            <div className="absolute right-0 top-full mt-1.5 w-56 bg-ink-800 border border-ink-600 rounded-xl shadow-2xl z-50 p-3 space-y-3">
               <div className="flex items-center justify-between mb-1">
-                <p className="text-sm font-bold text-white">Settings</p>
+                <span className="text-xs font-bold text-white">Settings</span>
                 <button onClick={() => setSettingsOpen(false)} className="text-gray-400 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
               <SettingRow
-                icon={<Volume2 className="w-4 h-4" />}
+                icon={<Volume2 className="w-4 h-4 text-blue-400" />}
                 label="Sound Effects"
                 checked={soundOn}
                 onChange={onToggleSound}
               />
               <SettingRow
-                icon={<Music className="w-4 h-4" />}
+                icon={<Music className="w-4 h-4 text-purple-400" />}
                 label="Background Music"
                 checked={musicOn}
                 onChange={onToggleMusic}
               />
               <SettingRow
-                icon={<Plane className="w-4 h-4" />}
+                icon={<Plane className="w-4 h-4 text-orange-400" />}
                 label="Animation"
                 checked={animationOn}
                 onChange={onToggleAnimation}
@@ -113,12 +109,7 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
         </div>
       </div>
 
-      {/* Modal rendered via portal — outside header's stacking context so it
-          appears above the game canvas regardless of canvas z-index */}
-      {howToOpen && createPortal(
-        <HowToPlayModal onClose={() => setHowToOpen(false)} />,
-        document.body,
-      )}
+      {howToOpen && <HowToPlayModal onClose={() => setHowToOpen(false)} />}
     </header>
   );
 }
@@ -135,10 +126,10 @@ function SettingRow({
   onChange: (v: boolean) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3">
-      <div className="flex items-center gap-2 text-gray-300">
+    <div className="flex items-center justify-between">
+      <div className="flex items-center gap-2">
         {icon}
-        <span className="text-xs">{label}</span>
+        <span className="text-sm text-gray-200">{label}</span>
       </div>
       <Toggle checked={checked} onChange={onChange} />
     </div>
@@ -148,20 +139,20 @@ function SettingRow({
 function HowToPlayModal({ onClose }: { onClose: () => void }) {
   return (
     <div
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
       onClick={onClose}
     >
       <div
-        className="bg-ink-800 border border-ink-600 rounded-2xl p-6 max-w-sm w-full space-y-4"
+        className="bg-ink-800 border border-ink-600 rounded-2xl p-5 max-w-sm w-full shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <Plane className="w-5 h-5 text-red-400" />
-            <h2 className="font-bold text-white">How to Play</h2>
+            <Plane className="w-5 h-5 text-orange-400" />
+            <span className="font-black text-white text-base">How to Play</span>
           </div>
           <button onClick={onClose} className="text-gray-400 hover:text-white">
-            <X className="w-4 h-4" />
+            <X className="w-5 h-5" />
           </button>
         </div>
         <div className="space-y-3">
@@ -174,7 +165,7 @@ function HowToPlayModal({ onClose }: { onClose: () => void }) {
           <Step n={3} title="Cash Out in Time">
             Hit CASH OUT before the plane flies away. Your win = bet × multiplier at cash-out.
           </Step>
-          <Step n={4} title="Don't Wait Too Long">
+          <Step n={4} title="Risk of Flying Away">
             If the plane flies away before you cash out, your bet is lost for that round.
           </Step>
         </div>
@@ -186,8 +177,8 @@ function HowToPlayModal({ onClose }: { onClose: () => void }) {
 function Step({ n, title, children }: { n: number; title: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-3">
-      <div className="w-6 h-6 rounded-full bg-red-500/20 border border-red-500/40 flex items-center justify-center flex-shrink-0 mt-0.5">
-        <span className="text-red-400 text-xs font-bold">{n}</span>
+      <div className="w-6 h-6 rounded-full bg-orange-500/20 border border-orange-500/40 flex items-center justify-center flex-shrink-0 text-xs font-bold text-orange-400">
+        {n}
       </div>
       <div>
         <p className="text-sm font-semibold text-white">{title}</p>
