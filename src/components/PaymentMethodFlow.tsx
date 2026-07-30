@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Wallet, CheckCircle2, X, Info, Copy, Coins, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Wallet, X, Info, Copy, Coins, AlertTriangle } from 'lucide-react';
 import { useAuth, useBalance } from '../lib/hooks';
 import { cms } from '../lib/cms';
 import { useManualMethods } from '../lib/cmsHooks';
@@ -23,7 +23,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   );
   const [selected, setSelected] = useState<ManualMethod | null>(null);
   const [selectedCrypto, setSelectedCrypto] = useState<CryptoCurrency | null>(null);
-  const [submitted, setSubmitted] = useState(false);
   const [amount, setAmount] = useState('');
   const [utr, setUtr] = useState('');
   const [destination, setDestination] = useState('');
@@ -56,7 +55,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
   useEffect(() => {
     if (open) {
-      setSubmitted(false);
       setSelected(null);
       setSelectedCrypto(null);
       setAmount('');
@@ -66,33 +64,15 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   }, [open]);
 
-  // Auto-close submitted popup after 2.5 seconds
-  const autoCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (submitted) {
-      autoCloseTimer.current = setTimeout(() => {
-        handleClose();
-      }, 2500);
-    }
-    return () => {
-      if (autoCloseTimer.current) clearTimeout(autoCloseTimer.current);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [submitted]);
-
   // ─── Mobile back button: push state when flow opens ───
   useEffect(() => {
     if (!open) {
       historyDepthRef.current = 0;
       return;
     }
-    // Push initial history entry for the method list screen
     window.history.pushState({ pmf: 'method-list' }, '');
     historyDepthRef.current = 1;
-
-    return () => {
-      // Cleanup: no-op, popstate handler handles navigation
-    };
+    return () => {};
   }, [open]);
 
   // ─── Mobile back button: push state when method is selected ───
@@ -108,12 +88,10 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const handlePopState = useCallback(() => {
     if (!open) return;
     if (selectedRef.current) {
-      // Go back from form to method list
       setSelected(null);
       setSelectedCrypto(null);
       historyDepthRef.current = 1;
     } else {
-      // Go back from method list — close the flow
       historyDepthRef.current = 0;
       onClose();
     }
@@ -145,6 +123,15 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       }
     }
     return { min: selected.minAmount || 0, max: selected.maxAmount || Infinity };
+  };
+
+  // Handle close with history cleanup
+  const handleClose = () => {
+    if (historyDepthRef.current > 0) {
+      window.history.go(-historyDepthRef.current);
+      historyDepthRef.current = 0;
+    }
+    onClose();
   };
 
   const handleSubmit = (e?: React.FormEvent | React.MouseEvent) => {
@@ -216,7 +203,14 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     } else {
       cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails), session?.userId);
     }
-    setSubmitted(true);
+
+    // Show success toast (small notification-style popup) and close the flow
+    cms.toast({
+      title: flow === 'deposit' ? 'Deposit Request Submitted' : 'Withdrawal Request Submitted',
+      body: 'Please wait 5 minutes, your payment is processing...',
+      kind: 'success',
+    });
+    handleClose();
   };
 
   const copyToClipboard = (text: string) => {
@@ -225,23 +219,12 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }).catch(() => {});
   };
 
-  // Handle close with history cleanup
-  const handleClose = () => {
-    // Go back in history to clean up pushed states
-    if (historyDepthRef.current > 0) {
-      window.history.go(-historyDepthRef.current);
-      historyDepthRef.current = 0;
-    }
-    onClose();
-  };
-
   // Handle UI back button (from form to method list)
   const handleBackToMethodList = () => {
-    // Pop the history entry we pushed for method-form
     window.history.back();
   };
 
-  // Professional alert portal — rendered on document.body to escape stacking contexts
+  // Error alert portal
   const alertPortal = alertPopup
     ? createPortal(
         <div
@@ -257,80 +240,27 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
               transition: 'transform 0.3s cubic-bezier(0.34,1.56,0.64,1), opacity 0.3s ease',
             }}
           >
-            {/* Top accent bar */}
             <div className="h-[3px] w-full" style={{ background: 'linear-gradient(90deg, #ef4444, #f97316)' }} />
-
             <div className="px-6 py-5 flex flex-col items-center text-center gap-3">
-              {/* Icon */}
               <div className="w-12 h-12 rounded-full flex items-center justify-center"
                 style={{ background: 'rgba(239,68,68,0.12)', border: '1.5px solid rgba(239,68,68,0.3)' }}
               >
                 <AlertTriangle className="w-5 h-5" style={{ color: '#f87171' }} />
               </div>
-
-              {/* Text */}
               <div>
-                <p className="font-semibold text-white text-[15px] leading-snug tracking-tight">
-                  {alertPopup.title}
-                </p>
-                <p className="text-[13px] mt-1 leading-relaxed" style={{ color: '#94a3b8' }}>
-                  {alertPopup.body}
-                </p>
+                <p className="font-semibold text-white text-[15px] leading-snug tracking-tight">{alertPopup.title}</p>
+                <p className="text-[13px] mt-1 leading-relaxed" style={{ color: '#94a3b8' }}>{alertPopup.body}</p>
               </div>
-
-              {/* Progress bar */}
               <div className="w-full h-[3px] rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
-                <div
-                  className="h-full rounded-full"
-                  style={{
-                    background: 'linear-gradient(90deg, #ef4444, #f97316)',
-                    animation: 'shrink 2.5s linear forwards',
-                  }}
-                />
+                <div className="h-full rounded-full" style={{ background: 'linear-gradient(90deg, #ef4444, #f97316)', animation: 'shrink 2.5s linear forwards' }} />
               </div>
             </div>
-
-            <style>{`
-              @keyframes shrink {
-                from { width: 100%; }
-                to { width: 0%; }
-              }
-            `}</style>
+            <style>{`@keyframes shrink { from { width: 100%; } to { width: 0%; } }`}</style>
           </div>
         </div>,
         document.body,
       )
     : null;
-
-  if (submitted) {
-    return (
-      <>
-        {alertPortal}
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-none">
-          <div className="pointer-events-auto w-full max-w-sm bg-slatepanel-900 border border-borderline-900 rounded-2xl shadow-2xl p-8 text-center space-y-4">
-            <div className="w-16 h-16 mx-auto rounded-full bg-emeraldwin-500/15 border border-emeraldwin-500/40 grid place-items-center">
-              <CheckCircle2 className="w-8 h-8 text-emeraldwin-400" />
-            </div>
-            <p className="font-display font-bold text-lg text-white">Request Submitted</p>
-            <p className="text-sm text-slate-400">Please wait 5 minutes, your payment is processing...</p>
-            {/* Progress bar showing auto-close in 2.5s */}
-            <div className="w-full h-[3px] rounded-full overflow-hidden bg-white/10">
-              <div
-                className="h-full rounded-full bg-emeraldwin-400"
-                style={{ animation: 'shrink 2.5s linear forwards' }}
-              />
-            </div>
-            <style>{`
-              @keyframes shrink {
-                from { width: 100%; }
-                to { width: 0%; }
-              }
-            `}</style>
-          </div>
-        </div>
-      </>
-    );
-  }
 
   if (!selected) {
     return (
@@ -365,10 +295,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                     className={`w-full text-left px-4 py-4 rounded-xl border transition-all bg-slatepanel-800 text-white font-semibold hover:bg-slatepanel-700 text-base ${kindColor}`}
                   >
                     <div className="flex items-center justify-between">
-                      <div>
-                        <span className="mr-2">{kindIcon}</span>
-                        {m.label}
-                      </div>
+                      <div><span className="mr-2">{kindIcon}</span>{m.label}</div>
                       <div className="text-[10px] text-slate-500 font-normal">
                         {m.minAmount > 0 && `Min ${store.currency}${m.minAmount}`}
                         {m.maxAmount > 0 && m.maxAmount < Infinity && ` · Max ${store.currency}${m.maxAmount}`}
@@ -430,19 +357,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             />
             <div className="flex items-center gap-2 mt-2">
               {limits.min > 0 && (
-                <span className="chip text-[10px] bg-slatepanel-800 text-slate-400">
-                  Min: {store.currency}{limits.min}
-                </span>
+                <span className="chip text-[10px] bg-slatepanel-800 text-slate-400">Min: {store.currency}{limits.min}</span>
               )}
               {limits.max > 0 && limits.max < Infinity && (
-                <span className="chip text-[10px] bg-slatepanel-800 text-slate-400">
-                  Max: {store.currency}{limits.max}
-                </span>
+                <span className="chip text-[10px] bg-slatepanel-800 text-slate-400">Max: {store.currency}{limits.max}</span>
               )}
               {limits.gasFee && limits.gasFee > 0 && (
-                <span className="chip text-[10px] bg-amberx-500/15 text-amberx-300">
-                  ⛽ Gas Fee: {limits.gasFee}
-                </span>
+                <span className="chip text-[10px] bg-amberx-500/15 text-amberx-300">⛽ Gas Fee: {limits.gasFee}</span>
               )}
             </div>
             {flow === 'withdrawal' && limits.gasFee && limits.gasFee > 0 && Number(amount) > 0 && (
