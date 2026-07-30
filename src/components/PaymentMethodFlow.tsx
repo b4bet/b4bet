@@ -37,6 +37,9 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const selectedRef = useRef<ManualMethod | null>(null);
   selectedRef.current = selected;
 
+  // Flag to prevent popstate from firing after intentional close/submit
+  const closingRef = useRef(false);
+
   const showAlert = (title: string, body: string) => {
     if (alertTimer.current) clearTimeout(alertTimer.current);
     if (alertFadeTimer.current) clearTimeout(alertFadeTimer.current);
@@ -55,6 +58,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
   useEffect(() => {
     if (open) {
+      closingRef.current = false;
       setSelected(null);
       setSelectedCrypto(null);
       setAmount('');
@@ -86,6 +90,8 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
   // ─── Mobile back button: handle popstate ───
   const handlePopState = useCallback(() => {
+    // If we're intentionally closing (submit/X button), ignore this event
+    if (closingRef.current) return;
     if (!open) return;
     if (selectedRef.current) {
       setSelected(null);
@@ -125,8 +131,9 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     return { min: selected.minAmount || 0, max: selected.maxAmount || Infinity };
   };
 
-  // Handle close with history cleanup
+  // Handle close with history cleanup — set closingRef so popstate is ignored
   const handleClose = () => {
+    closingRef.current = true;
     if (historyDepthRef.current > 0) {
       window.history.go(-historyDepthRef.current);
       historyDepthRef.current = 0;
@@ -204,12 +211,14 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails), session?.userId);
     }
 
-    // Show success toast (small notification-style popup) and close the flow
+    // Show success toast BEFORE closing so it appears on top
     cms.toast({
       title: flow === 'deposit' ? 'Deposit Request Submitted' : 'Withdrawal Request Submitted',
       body: 'Please wait 5 minutes, your payment is processing...',
       kind: 'success',
     });
+
+    // Close the flow — closingRef prevents popstate from re-showing method list
     handleClose();
   };
 
