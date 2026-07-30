@@ -58,18 +58,11 @@ async function fetchMaintenanceConfig(): Promise<MaintenanceConfig | null> {
   return null;
 }
 
-// Check if current page was loaded while maintenance was OFF.
-// If maintenance is now ON and JS is from old cache, force a hard reload
-// so the browser fetches fresh JS bundle and shows the maintenance page.
 const MAINTENANCE_FLAG = 'b4bet_maint_v1';
 
 function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdmin: boolean) {
   if (!cfg?.enabled || isStaff || isAdmin) return false;
-
-  // If the maintenance flag is already set this session, no reload needed
   if (sessionStorage.getItem(MAINTENANCE_FLAG) === '1') return true;
-
-  // Set flag and hard-reload to bust JS cache
   sessionStorage.setItem(MAINTENANCE_FLAG, '1');
   window.location.reload();
   return true;
@@ -98,8 +91,9 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const routeRef = useRef<Route>(route);
+  routeRef.current = route;
 
-  // Clear the reload flag when maintenance is turned OFF so future ON triggers reload again
   useEffect(() => {
     if (maintenance && !maintenance.enabled) {
       sessionStorage.removeItem(MAINTENANCE_FLAG);
@@ -110,7 +104,6 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsLoggedIn(!!session);
     });
-
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
         auth.logout();
@@ -122,23 +115,16 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // Load maintenance mode + realtime + polling so cache never causes a stale state
   useEffect(() => {
     const isAdminRoute = window.location.pathname === '/aryan' ||
       window.location.hash === '#aryan' || window.location.hash === '#/aryan';
-
     const handleConfig = (cfg: MaintenanceConfig | null) => {
       if (cfg !== null) {
         setMaintenance(cfg);
-        // If we just loaded and maintenance is ON — force hard reload to bust JS cache
         applyMaintenance(cfg, !!staffSession, isAdminRoute);
       }
     };
-
-    // Initial load
     void fetchMaintenanceConfig().then(handleConfig);
-
-    // Realtime subscription — fires instantly when admin toggles maintenance
     const channel = supabase
       .channel('maintenance_mode_watch')
       .on(
@@ -151,26 +137,20 @@ export default function App() {
               : payload.new.value;
             const cfg = val as MaintenanceConfig;
             setMaintenance(cfg);
-            // Hard reload so cached JS is replaced with fresh bundle
             applyMaintenance(cfg, !!staffSession, isAdminRoute);
           }
         },
       )
       .subscribe();
-
-    // Polling fallback every 10s — catches cache/network misses
     pollTimerRef.current = setInterval(() => {
       void fetchMaintenanceConfig().then(handleConfig);
     }, 10_000);
-
-    // Re-fetch when the tab becomes visible (user switches back from another tab)
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void fetchMaintenanceConfig().then(handleConfig);
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
-
     return () => {
       void supabase.removeChannel(channel);
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -187,6 +167,24 @@ export default function App() {
     return off;
   }, []);
 
+  // Push a history entry when navigating to a game so Android back button works
+  useEffect(() => {
+    if (GAME_ROUTES.includes(route)) {
+      window.history.pushState({ gameRoute: route }, '');
+    }
+  }, [route]);
+
+  // Android/mobile back button — go home from game routes
+  useEffect(() => {
+    const onPopState = () => {
+      if (GAME_ROUTES.includes(routeRef.current)) {
+        setRoute('home');
+      }
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
   const openAuthModal = (mode: AuthModalMode) => { setAuthModalMode(mode); setAuthModalOpen(true); };
   const navigate = (r: Route) => setRoute(r);
 
@@ -201,10 +199,10 @@ export default function App() {
   }, []);
 
   const isGameRoute = GAME_ROUTES.includes(route);
-  // Hide main header on game routes (games have their own header) and special pages
+  // Hide main header on game routes (each game has its own header)
   const showHeader = !isGameRoute && route !== 'admin' && route !== 'affiliate' && route !== 'landing';
-  // Hide bottom nav on game routes and special pages
-  const showBottomNav = !isGameRoute && route !== 'admin' && route !== 'affiliate' && route !== 'landing';
+  // BottomNav is always visible EXCEPT on admin, affiliate, landing
+  const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
 
   const isAdminRoute = route === 'admin';
   const isStaffLoggedIn = !!staffSession;
@@ -234,8 +232,8 @@ export default function App() {
         />
       )}
 
-      {/* pt-[62px] only when main header is visible; game routes handle their own layout */}
-      <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[60px]' : ''}`}>
+      {/* pt-[62px] only when main header is visible; game routes start from top */}
+      <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[52px]' : ''}`}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
@@ -252,12 +250,12 @@ export default function App() {
         )}
         {route === 'referral' && <ReferralView onOpenWallet={() => setWalletOpen(true)} />}
         {route === 'admin' && <AdminView onOpenWallet={() => setWalletOpen(true)} />}
-        {route === 'history' && <HistoryView />}
+        {route === 'history' && <HistoryView onClose={() => navigate('home')} />}
         {route === 'ludo' && <LudoView onBack={() => navigate('home')} />}
-        {route === 'crash' && <CrashView />}
+        {route === 'crash' && <CrashView onBack={() => navigate('home')} />}
         {route === 'aviator' && <AviatorView onBack={() => navigate('home')} />}
-        {route === 'sunvsmoon' && <SunVsMoonView />}
-        {route === 'trading' && <TradingGameView />}
+        {route === 'sunvsmoon' && <SunVsMoonView onBack={() => navigate('home')} />}
+        {route === 'trading' && <TradingGameView onBack={() => navigate('home')} />}
         {route === 'affiliate' && <AffiliatePortalView onBack={() => navigate('home')} />}
         {route === 'landing' && <LandingPage onNavigate={navigate} />}
       </main>
@@ -275,7 +273,6 @@ export default function App() {
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
       <AuthModal open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
-
       {isLoggedIn && <BanPopup />}
       <ToastHost />
     </div>
