@@ -161,6 +161,7 @@ function Cell({
 
   return (
     <button
+      type="button"
       onClick={() => onReveal(index)}
       disabled={isRevealed || !active}
       className={`relative aspect-square rounded-xl border transition-all duration-200 ${
@@ -172,19 +173,19 @@ function Cell({
       } ${!isRevealed && active ? 'cursor-pointer' : 'cursor-default'}`}
     >
       {isRevealed && cell === 'gem' && (
-        <div className="absolute inset-0 grid place-items-center animate-gem-pop">
-          <Gem className="w-6 h-6 sm:w-7 sm:h-7 text-emeraldwin-400 drop-shadow-[0_0_8px_rgba(0,255,136,0.5)]" />
-        </div>
+        <span className="absolute inset-0 flex items-center justify-center">
+          <Gem className="w-5 h-5 text-emeraldwin-400" />
+        </span>
       )}
       {isRevealed && isMine && (
-        <div className="absolute inset-0 grid place-items-center animate-mine-blast">
-          <Bomb className="w-6 h-6 sm:w-7 sm:h-7 text-coral-500 drop-shadow-[0_0_8px_rgba(255,51,102,0.5)]" />
-        </div>
+        <span className="absolute inset-0 flex items-center justify-center">
+          <Bomb className="w-5 h-5 text-coral-400" />
+        </span>
       )}
       {!isRevealed && active && (
-        <div className="absolute inset-0 grid place-items-center">
-          <div className="w-2 h-2 rounded-full bg-slate-600" />
-        </div>
+        <span className="absolute inset-0 flex items-center justify-center opacity-20">
+          <Flag className="w-3 h-3 text-slate-400" />
+        </span>
       )}
     </button>
   );
@@ -193,13 +194,14 @@ function Cell({
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export default function MinesView() {
-  const [stakeStr, setStakeStr] = useState('100');
+  // Use admin-configured default bet; falls back to 100 until store loads
+  const [stakeStr, setStakeStr] = useState(() => String(store.getGameDefaultBet('mines')));
   const [minesInput, setMinesInput] = useState(3);
   const [loading, setLoading] = useState(false);
   // Load persisted session on mount
   const [game, setGame] = useState<ClientMinesState>(() => {
     const saved = loadMinesSession();
-    return saved ?? initialState(3, 100);
+    return saved ?? initialState(3, store.getGameDefaultBet('mines'));
   });
 
   const { rows: myHistory, loading: histLoading, error: histError, refresh: refreshHistory } = useSupabaseMinesHistory();
@@ -222,7 +224,7 @@ export default function MinesView() {
       bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login');
       return;
     }
-    const amt = parseFloat(stakeStr) || 100;
+    const amt = parseFloat(stakeStr) || store.getGameDefaultBet('mines');
     const { min, max } = store.getGameLimits('mines');
     if (amt < min || amt > max) {
       cms.toast({ title: 'Bet out of range', body: `Stake must be between ${store.currency}${min} and ${store.currency}${max}`, kind: 'alert' });
@@ -314,218 +316,286 @@ export default function MinesView() {
   }, [game, refreshHistory]);
 
   const isDisabled = loading;
+  const limits = store.getGameLimits('mines');
+  const stakeNum = parseFloat(stakeStr) || 0;
+  const lastQuickRef = { current: null as number | null };
 
   return (
-    <div className="flex flex-col min-h-screen animate-fade-in">
+    <div className="flex flex-col h-full bg-midnight-900 overflow-hidden">
       {/* Sticky Header with admin logo + balance */}
-      <div className="sticky top-0 z-10 bg-midnight-950 flex items-center justify-between px-3 pt-4 pb-2">
-        <div className="flex items-center gap-2">
+      <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-borderline-900 bg-midnight-900/95 backdrop-blur-sm">
+        <div className="flex items-center gap-2.5">
           {gameLogos['mines'] ? (
-            <img src={gameLogos['mines']} alt="Mines" className="w-9 h-9 object-contain rounded-xl" />
+            <img src={gameLogos['mines']} alt="Mines" className="w-7 h-7 rounded-lg object-cover" />
           ) : null}
           <div>
-            <h1 className="font-display font-extrabold text-xl text-white leading-none">Mines</h1>
-            <p className="text-xs text-slate-500">5×5 grid · {game.active ? game.mineCount : minesInput} mines hidden</p>
+            <p className="font-display font-extrabold text-white text-sm leading-tight">Mines</p>
+            <p className="text-[10px] text-slate-500 leading-tight">5×5 grid · {game.active ? game.mineCount : minesInput} mines hidden</p>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-slatepanel-800 border border-borderline-900">
-          <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slatepanel-800 border border-borderline-900">
+          <span className="text-[11px] font-bold text-slate-400">{store.currency}</span>
+          <span className="tabular font-extrabold text-white text-sm">
             {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
           </span>
         </div>
       </div>
 
       {/* Scrollable content */}
-      <div className="flex-1 space-y-4 px-3 pb-4">
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
         {/* Grid */}
-        <div className="panel p-3 sm:p-4">
-          <div className="grid grid-cols-5 gap-2 sm:gap-2.5">
+        <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-3">
+          <div className="grid grid-cols-5 gap-1.5">
             {Array.from({ length: 25 }, (_, i) => (
-              <Cell key={i} index={i} grid={game.grid} revealed={game.revealed} active={game.active && !isDisabled} onReveal={reveal} />
+              <Cell
+                key={i}
+                index={i}
+                grid={game.grid}
+                revealed={game.revealed}
+                active={game.active && !isDisabled}
+                onReveal={reveal}
+              />
             ))}
           </div>
         </div>
 
-        {/* Controls */}
-        <div className="panel p-3 sm:p-4">
-          <div className="grid grid-cols-2 gap-3 mb-3">
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Stake</label>
-              <div className="relative mt-1">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-bold text-sm">{store.currency}</span>
-                <input type="number" value={stakeStr} onChange={(e) => setStakeStr(e.target.value)} disabled={game.active} min={1} className="input text-center tabular" />
-              </div>
-            </div>
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Mines</label>
-              <div className="relative mt-1">
-                <Flag className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                <input
-                  type="number"
-                  value={minesInput || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (val === '') setMinesInput(0);
-                    else { const num = parseInt(val); if (!isNaN(num)) setMinesInput(Math.max(1, Math.min(24, num))); }
-                  }}
-                  onBlur={() => { if (!minesInput) setMinesInput(1); }}
-                  disabled={game.active} min={1} max={24} placeholder="1" className="input text-center tabular"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* Quick stake chips */}
-          <div className="flex gap-2 mb-3">
-            {quickStakes.map((v) => {
-              const label = v >= 1000 ? `${v / 1000}K` : String(v);
-              return (
-                <button
-                  key={v}
-                  type="button"
-                  disabled={game.active}
-                  onClick={() => setStakeStr(String(v))}
-                  className="flex-1 py-1.5 rounded-lg text-xs font-bold border border-borderline-800 bg-slatepanel-800 text-slate-300 active:scale-95 transition-transform disabled:opacity-40"
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-
-          <div className="flex items-center justify-between mb-3 px-1">
-            <div>
-              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Current</p>
-              <p className="tabular font-display font-extrabold text-2xl text-emeraldwin-400">{game.currentMultiplier.toFixed(2)}x</p>
-            </div>
-            <div className="text-right">
-              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Next Gem</p>
-              <p className="tabular font-bold text-lg text-neon-300">{game.nextMultiplier.toFixed(2)}x</p>
-            </div>
-            <div className="text-right">
-              <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Gems</p>
-              <p className="tabular font-bold text-lg text-white">{game.gemsFound}</p>
-            </div>
-          </div>
-
-          {!game.active ? (
-            <button onClick={() => { void start(); }} disabled={isDisabled} className="btn-primary w-full py-3">
-              <Play className="w-4 h-4" /> {loading ? 'Starting…' : 'Start Round'}
+        {/* Status overlay for busted/cashedOut */}
+        {(game.busted || game.cashedOut) && (
+          <div className={`rounded-2xl border p-4 text-center ${
+            game.busted
+              ? 'bg-coral-500/10 border-coral-500/30'
+              : 'bg-emeraldwin-500/10 border-emeraldwin-500/30'
+          }`}>
+            {game.busted ? (
+              <>
+                <Bomb className="w-8 h-8 text-coral-400 mx-auto mb-2" />
+                <p className="font-display font-extrabold text-coral-300 text-lg">BUSTED!</p>
+                <p className="text-[11px] text-slate-500 mt-1">{game.gemsFound} gems found before hitting a mine</p>
+              </>
+            ) : (
+              <>
+                <HandCoins className="w-8 h-8 text-emeraldwin-400 mx-auto mb-2" />
+                <p className="font-display font-extrabold text-emeraldwin-300 text-lg">CASHED OUT!</p>
+                <p className="text-[11px] text-slate-500 mt-1">{game.gemsFound} gems · {game.currentMultiplier.toFixed(2)}x multiplier</p>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                const def = store.getGameDefaultBet('mines');
+                setGame(initialState(minesInput, def));
+                setStakeStr(String(def));
+              }}
+              className="mt-3 flex items-center gap-2 mx-auto px-4 py-2 rounded-lg bg-slatepanel-700 border border-borderline-800 text-slate-300 text-xs font-semibold active:scale-95 transition-transform"
+            >
+              <RefreshCw className="w-3 h-3" /> New Game
             </button>
-          ) : (
-            <div className="grid grid-cols-2 gap-2">
-              <button onClick={() => { void cashout(); }} disabled={game.gemsFound === 0 || game.busted || game.cashedOut || isDisabled} className="btn-emerald py-3">
-                <HandCoins className="w-4 h-4" />
-                Cash Out {store.currency}{game.gemsFound > 0 ? (game.stake * game.currentMultiplier).toFixed(2) : '0.00'}
-              </button>
-              <button
-                disabled={game.busted || game.cashedOut}
-                className={`py-3 justify-center text-sm font-semibold rounded-xl border transition-colors ${
-                  game.busted ? 'btn-ghost text-slate-400' : game.cashedOut ? 'btn-ghost text-slate-400' : 'bg-neon-500/15 border-neon-500/40 text-neon-300'
-                }`}
-              >
-                {game.busted ? 'Round lost' : game.cashedOut ? 'Cashed out' : loading ? 'Checking…' : 'Pick a tile'}
-              </button>
-            </div>
-          )}
-        </div>
-
-        <p className="text-[11px] text-slate-600 text-center px-4">
-          Reveal gems to grow your multiplier. Hit a mine and you lose your stake. Cash out anytime to lock in winnings.
-        </p>
-
-        <MinesHistoryPanel rows={myHistory} loading={histLoading} error={histError} onRefresh={refreshHistory} />
-      </div>
-    </div>
-  );
-}
-
-// ── History panel ─────────────────────────────────────────────────────────────
-
-function MinesHistoryPanel({
-  rows,
-  loading,
-  error,
-  onRefresh,
-}: {
-  rows: MinesBetRow[];
-  loading: boolean;
-  error: string | null;
-  onRefresh: () => void;
-}) {
-  const totalWon = rows
-    .filter((r) => r.status === 'won')
-    .reduce((s, r) => s + (r.win_amount ?? 0), 0);
-
-  return (
-    <div className="panel p-0 overflow-hidden">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-borderline-900">
-        <span className="text-xs font-semibold text-coral-300">My History</span>
-        <button
-          onClick={onRefresh}
-          disabled={loading}
-          className="p-1 rounded-md text-slate-500 hover:text-slate-300 transition-colors cursor-pointer"
-          title="Refresh"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
-
-      <div className="p-3">
-        {loading ? (
-          <div className="py-6 flex justify-center">
-            <RefreshCw className="w-4 h-4 text-slate-600 animate-spin" />
           </div>
-        ) : error ? (
-          <p className="text-xs text-coral-400 text-center py-4">Error: {error}</p>
-        ) : rows.length === 0 ? (
-          <p className="text-xs text-slate-600 text-center py-4">No rounds yet. Play to build your history.</p>
-        ) : (
-          <>
-            <div className="grid grid-cols-[1.8rem_1.6rem_3.2rem_1fr_1fr] gap-x-2 pb-1 mb-1 border-b border-borderline-900 text-[10px] uppercase tracking-wider text-slate-500 font-semibold">
-              <span>💣</span>
-              <span>💎</span>
-              <span className="text-right">Multi</span>
-              <span className="text-right">Stake</span>
-              <span className="text-right">Payout</span>
+        )}
+
+        {/* Multiplier display when active */}
+        {game.active && (
+          <div className="flex items-center justify-between px-4 py-2.5 rounded-xl bg-slatepanel-800 border border-borderline-900">
+            <div className="text-center">
+              <p className="text-[9px] text-slate-500 uppercase tracking-widest">Current</p>
+              <p className="font-display font-extrabold text-emeraldwin-400 text-lg tabular">{game.currentMultiplier.toFixed(2)}x</p>
+            </div>
+            <div className="w-px h-8 bg-borderline-900" />
+            <div className="text-center">
+              <p className="text-[9px] text-slate-500 uppercase tracking-widest">Next gem</p>
+              <p className="font-display font-extrabold text-neon-300 text-lg tabular">{game.nextMultiplier.toFixed(2)}x</p>
+            </div>
+            <div className="w-px h-8 bg-borderline-900" />
+            <div className="text-center">
+              <p className="text-[9px] text-slate-500 uppercase tracking-widest">Gems found</p>
+              <p className="font-display font-extrabold text-white text-lg tabular">{game.gemsFound}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Bet controls (only when not active) */}
+        {!game.active && !game.busted && !game.cashedOut && (
+          <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-3 space-y-3">
+            {/* Mines count */}
+            <div>
+              <label className="text-[10px] text-slate-500 uppercase tracking-widest mb-2 block">Mines count</label>
+              <div className="flex gap-2 flex-wrap">
+                {[1, 2, 3, 5, 8, 10, 15].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setMinesInput(n)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                      minesInput === n
+                        ? 'bg-neon-500/20 border-neon-400/60 text-neon-300'
+                        : 'bg-slatepanel-800 border-borderline-800 text-slate-400 hover:border-slate-600'
+                    }`}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div className="max-h-72 overflow-y-auto divide-y divide-borderline-900">
-              {rows.map((r) => {
-                const won = r.status === 'won';
-                const d = (r.bet_details ?? {}) as { mines?: number; gems?: number };
-                const mines = d.mines ?? '-';
-                const gems = d.gems ?? '-';
-                const multiplier = r.multiplier ? Number(r.multiplier) : 0;
-                const payout = r.win_amount ?? 0;
-                return (
-                  <div
-                    key={r.id}
-                    className="grid grid-cols-[1.8rem_1.6rem_3.2rem_1fr_1fr] gap-x-2 py-1.5 text-xs items-center"
+            {/* Stake input */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label className="text-[10px] text-slate-500 uppercase tracking-widest">Stake</label>
+                <span className="text-[9px] text-slate-600">
+                  Min {store.currency}{limits.min} · Max {store.currency}{limits.max.toLocaleString()}
+                </span>
+              </div>
+              <div
+                className="rounded-xl border border-borderline-900 p-2 flex flex-col gap-2"
+                style={{ background: 'rgba(10,12,26,0.8)' }}
+              >
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cur = parseFloat(stakeStr) || 0;
+                      const next = Math.max(limits.min, cur - 50);
+                      setStakeStr(String(next));
+                    }}
+                    className="w-7 h-7 grid place-items-center rounded-lg bg-slatepanel-800 border border-borderline-800 text-slate-200 active:scale-95 transition-transform"
                   >
-                    <span className={`tabular font-mono ${won ? 'text-emeraldwin-400' : 'text-coral-400'}`}>{mines}</span>
-                    <span className={`tabular font-mono ${won ? 'text-emeraldwin-400' : 'text-coral-400'}`}>{gems}</span>
-                    <span className={`tabular font-mono text-right ${won ? 'text-emeraldwin-400' : 'text-coral-400'}`}>{multiplier.toFixed(2)}x</span>
-                    <span className="tabular font-mono text-right text-slate-400 truncate">{store.currency}{Number(r.bet_amount).toFixed(0)}</span>
-                    <span className={`tabular font-mono text-right font-bold truncate ${won ? 'text-emeraldwin-400' : 'text-slate-600'}`}>
-                      {won ? `${store.currency}${Number(payout).toFixed(2)}` : '—'}
-                    </span>
+                    <span className="text-base leading-none font-bold">−</span>
+                  </button>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={stakeStr}
+                    onChange={(e) => setStakeStr(e.target.value)}
+                    className="flex-1 text-center tabular font-extrabold text-white text-base leading-none bg-transparent border-0 outline-none w-0 min-w-0"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cur = parseFloat(stakeStr) || 0;
+                      const next = Math.min(limits.max, cur + 50);
+                      setStakeStr(String(next));
+                    }}
+                    className="w-7 h-7 grid place-items-center rounded-lg bg-slatepanel-800 border border-borderline-800 text-slate-200 active:scale-95 transition-transform"
+                  >
+                    <span className="text-base leading-none font-bold">+</span>
+                  </button>
+                </div>
+                <div className="flex gap-1">
+                  {quickStakes.slice(0, 4).map((v) => {
+                    const label = v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}K` : String(v);
+                    return (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => {
+                          if (lastQuickRef.current === v) {
+                            const cur = parseFloat(stakeStr) || 0;
+                            setStakeStr(String(Math.min(limits.max, cur + v)));
+                          } else {
+                            lastQuickRef.current = v;
+                            setStakeStr(String(v));
+                          }
+                        }}
+                        className="flex-1 py-1 rounded-lg text-[10px] tabular font-bold border border-borderline-800 bg-slatepanel-800 text-slate-300 active:scale-95 transition-transform"
+                      >
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Validation */}
+            {stakeNum > 0 && (stakeNum < limits.min || stakeNum > limits.max) && (
+              <p className="text-[10px] text-coral-400 font-semibold">
+                Stake must be between {store.currency}{limits.min} and {store.currency}{limits.max.toLocaleString()}
+              </p>
+            )}
+
+            <button
+              type="button"
+              disabled={isDisabled || stakeNum < limits.min || stakeNum > limits.max || stakeNum > balance}
+              onClick={() => void start()}
+              className="w-full py-3 rounded-xl font-display font-extrabold text-white text-base uppercase tracking-wider
+                         bg-gradient-to-r from-neon-500 to-emeraldwin-500 border border-neon-400/40
+                         active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed
+                         flex items-center justify-center gap-2"
+            >
+              {isDisabled ? (
+                <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
+              ) : (
+                <Play className="w-4 h-4" />
+              )}
+              Start Game
+            </button>
+          </div>
+        )}
+
+        {/* Cash Out button when active */}
+        {game.active && game.gemsFound > 0 && (
+          <button
+            type="button"
+            disabled={isDisabled}
+            onClick={() => void cashout()}
+            className="w-full py-3 rounded-xl font-display font-extrabold text-white text-base uppercase tracking-wider
+                       bg-gradient-to-r from-amberx-400 to-amberx-600 border border-amberx-400/40
+                       active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed
+                       flex items-center justify-center gap-2"
+          >
+            {isDisabled ? (
+              <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
+            ) : (
+              <HandCoins className="w-4 h-4" />
+            )}
+            Cash Out · {store.currency}{(game.stake * game.currentMultiplier).toFixed(2)}
+          </button>
+        )}
+
+        {/* My History */}
+        <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-borderline-900">
+            <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">My Bets</p>
+            <button type="button" onClick={refreshHistory} className="p-1 rounded-lg hover:bg-slatepanel-800 transition-colors">
+              <RefreshCw className="w-3 h-3 text-slate-500" />
+            </button>
+          </div>
+          {histLoading ? (
+            <div className="py-6 flex justify-center">
+              <div className="w-4 h-4 border-2 border-neon-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : histError ? (
+            <p className="px-4 py-3 text-[11px] text-coral-400">{histError}</p>
+          ) : myHistory.length === 0 ? (
+            <p className="px-4 py-4 text-[11px] text-slate-600 text-center">No bets yet — start playing!</p>
+          ) : (
+            <div className="divide-y divide-borderline-900">
+              {myHistory.slice(0, 20).map((row) => {
+                const won = row.win_amount != null && row.win_amount > 0;
+                return (
+                  <div key={row.id} className="flex items-center justify-between px-4 py-2.5">
+                    <div>
+                      <p className="text-xs font-semibold text-white tabular">
+                        {store.currency}{row.bet_amount.toLocaleString()}
+                      </p>
+                      <p className="text-[10px] text-slate-500">
+                        {row.bet_details?.mines ?? '?'} mines · {row.bet_details?.gems ?? '?'} gems
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-xs font-bold tabular ${won ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
+                        {won ? `+${store.currency}${(row.win_amount ?? 0).toLocaleString()}` : 'Bust'}
+                      </p>
+                      <p className="text-[10px] text-slate-600">
+                        {row.multiplier != null ? `${row.multiplier.toFixed(2)}x` : '—'}
+                      </p>
+                    </div>
                   </div>
                 );
               })}
             </div>
-
-            <div className="mt-2 pt-2 border-t border-borderline-900 flex items-center justify-between text-[10px] text-slate-500">
-              <span>{rows.length} rounds</span>
-              <span>
-                Total won:{' '}
-                <span className="text-emeraldwin-400 font-semibold">
-                  {store.currency}{Number(totalWon).toFixed(2)}
-                </span>
-              </span>
-            </div>
-          </>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
