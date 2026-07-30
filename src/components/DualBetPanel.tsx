@@ -25,8 +25,9 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
   const state = useCrashState();
   const cfg = useAdminConfig();
   const slot: BetSlot = bets[id];
-  // Use string state so user can fully clear the field (type freely)
-  const [amountStr, setAmountStr] = useState('100');
+
+  // Use admin-configured default bet; falls back to 100 until store loads
+  const [amountStr, setAmountStr] = useState(() => String(store.getGameDefaultBet('crash')));
   const [autoTarget, setAutoTarget] = useState('2.00');
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [autoBet, setAutoBet] = useState(false);
@@ -152,13 +153,11 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
   // ── spec §5: cumulative quick-stake clicks ────────────────────────────────
   const quickAmt = (base: number) => {
     if (lastQuickRef.current === base) {
-      // same button clicked again — add the base value cumulatively
       setAmountStr((prev) => {
         const cur = parseFloat(prev) || 0;
         return String(cur + base);
       });
     } else {
-      // first click on this button — set flat value
       setAmountStr(String(base));
       lastQuickRef.current = base;
     }
@@ -170,13 +169,10 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
   const inc = () => { setAmountStr(String(Math.round((stake + stepDelta) * 100) / 100)); lastQuickRef.current = null; };
   const dec = () => { setAmountStr(String(Math.max(1, Math.round((stake - stepDelta) * 100) / 100))); lastQuickRef.current = null; };
 
-  const showStake = stake >= 1000 ? `${(stake / 1000).toFixed(stake % 1000 === 0 ? 0 : 2)}K` : amountStr;
-
   const isQueued = !!queued;
 
   // ── spec §3: determine action button state ────────────────────────────────
   const getActionButton = () => {
-    // queued for next round — show loading indicator (spec §2)
     if (isQueued) {
       return (
         <button
@@ -192,7 +188,6 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
       );
     }
 
-    // After cashout during flying phase — show "NEXT BET" to queue next bet
     if (slot.placed && slot.cashedOut && (phase === 'flying' || phase === 'busted')) {
       return (
         <button
@@ -232,7 +227,6 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
       );
     }
     if (canCashout) {
-      // Cap displayed payout at MAX_WIN
       const displayPayout = Math.min(slot.amount * state.multiplier, MAX_WIN);
       return (
         <button
@@ -268,7 +262,6 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
   const limits = store.getGameLimits('crash');
 
   return (
-    // spec §3: premium deep-dark slate panel with razor-thin neon border
     <div
       className={[
         'rounded-2xl p-3 border',
@@ -339,7 +332,7 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
         </div>
       </div>
 
-      {/* Min/Max labels */}
+      {/* Min/Max/MaxWin labels */}
       <div className="flex items-center gap-3 mb-1.5">
         <span className="text-[9px] text-slate-500">Min: <span className="text-slate-400 font-semibold">{store.currency}{limits.min}</span></span>
         <span className="text-[9px] text-slate-500">Max: <span className="text-slate-400 font-semibold">{store.currency}{limits.max.toLocaleString()}</span></span>
@@ -364,7 +357,6 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
             >
               <Minus className="w-3 h-3" strokeWidth={3} />
             </button>
-            {/* Fully editable input — allows backspace to clear */}
             <input
               type="text"
               inputMode="decimal"
@@ -387,7 +379,7 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
             </button>
           </div>
 
-          {/* spec §5: cumulative quick-stake chips — repeated clicks ADD, not reset */}
+          {/* spec §5: cumulative quick-stake chips */}
           <div className="flex items-stretch gap-1">
             {quickStakes.slice(0, 4).map((v) => {
               const label = v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 2)}K` : String(v);
@@ -422,7 +414,6 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
 
 export default function DualBetPanel() {
   return (
-    // spec §3: no "Bet A" / "Bet B" text headers
     <div className="flex flex-col gap-2 w-full max-w-xl mx-auto items-stretch">
       <BetConsole id="A" />
       <BetConsole id="B" />
