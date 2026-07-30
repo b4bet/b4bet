@@ -1,6 +1,5 @@
 import { useMemo, useState, useEffect } from 'react';
-import { X, Copy, Check, Users, UserPlus } from 'lucide-react';
-import type { Route } from '../components/BottomNav';
+import { ArrowLeft, Copy, Check, Users, UserPlus } from 'lucide-react';
 import { useReferralConfig } from '../lib/cmsHooks';
 import { useAuth } from '../lib/hooks';
 import { store } from '../lib/store';
@@ -18,27 +17,32 @@ interface SupabaseReferral {
 }
 
 // ── Main View ──────────────────────────────────────────────────────────────
-export default function ReferralView({ onNavigate, onOpenMenu }: { onNavigate: (r: Route) => void; onOpenMenu?: () => void }) {
+export default function ReferralView({ onOpenWallet }: { onOpenWallet?: () => void }) {
   const session = useAuth();
   const cfg = useReferralConfig();
 
+  // Mobile back button — open wallet drawer (menu)
   useEffect(() => {
     window.history.pushState({ referralView: true }, '');
-    const handlePopstate = () => { onNavigate('home'); onOpenMenu?.(); };
+    const handlePopstate = () => { onOpenWallet?.(); };
     window.addEventListener('popstate', handlePopstate);
     return () => { window.removeEventListener('popstate', handlePopstate); };
-  }, [onNavigate, onOpenMenu]);
+  }, [onOpenWallet]);
 
   return (
-    <div className="space-y-4 animate-fade-in px-4">
-      <div className="flex items-center justify-between gap-2">
+    <div className="space-y-4 animate-fade-in px-4 pb-4">
+      <div className="flex items-center gap-3 pt-4">
+        <button
+          onClick={() => onOpenWallet?.()}
+          className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/40 transition-colors flex-shrink-0"
+          aria-label="Go back"
+        >
+          <ArrowLeft className="w-4 h-4 text-slate-300" />
+        </button>
         <div>
           <h1 className="font-display font-extrabold text-xl text-white">Refer &amp; Earn</h1>
           <p className="text-xs text-slate-500">Invite friends and earn rewards</p>
         </div>
-        <button onClick={() => { onNavigate('home'); onOpenMenu?.(); }} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
-          <X className="w-5 h-5 text-slate-300" />
-        </button>
       </div>
 
       <ReferAndEarn
@@ -50,7 +54,7 @@ export default function ReferralView({ onNavigate, onOpenMenu }: { onNavigate: (
   );
 }
 
-// ── Refer & Earn panel (loads history via SECURITY DEFINER RPC) ──────────────
+// ── Refer & Earn panel ──────────────────────────────────────────────────────
 function ReferAndEarn({
   userId,
   accountId,
@@ -66,6 +70,9 @@ function ReferAndEarn({
   const link = accountId ? `${window.location.origin}/register?ref=${accountId}` : '';
   const [copied, setCopied] = useState(false);
 
+  // suppress unused
+  void useMemo;
+
   const copy = async () => {
     if (!link) return;
     try { await navigator.clipboard.writeText(link); } catch { /* noop */ }
@@ -73,7 +80,6 @@ function ReferAndEarn({
     setTimeout(() => setCopied(false), 1500);
   };
 
-  // Load this user's referral history via SECURITY DEFINER RPC (bypasses RLS)
   useEffect(() => {
     if (!userId) return;
     setLoading(true);
@@ -207,7 +213,7 @@ function ReferralRow({ refData }: { refData: SupabaseReferral }) {
           <div className="bg-slatepanel-900 border border-borderline-900 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-display font-bold text-white">Referral Details</h3>
-              <button onClick={() => setOpen(false)} className="p-1 rounded-lg hover:bg-slatepanel-800"><X className="w-5 h-5 text-slate-400" /></button>
+              <button onClick={() => setOpen(false)} className="p-1 rounded-lg hover:bg-slatepanel-800"><ArrowLeft className="w-5 h-5 text-slate-400" /></button>
             </div>
             <div className="space-y-3 text-sm">
               <DetailRow label="Referred User" value={refData.referred_username || refData.referred_id.slice(0, 8)} />
