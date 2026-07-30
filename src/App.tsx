@@ -75,6 +75,9 @@ function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdm
   return true;
 }
 
+// Game routes use their own internal header — main app header is hidden
+const GAME_ROUTES: Route[] = ['crash', 'mines', 'aviator', 'sunvsmoon', 'trading', 'ludo'];
+
 export default function App() {
   const staffSession = useStaffSession();
   const [route, setRoute] = useState<Route>(() => {
@@ -197,8 +200,11 @@ export default function App() {
     startAllPersistentGameEngines();
   }, []);
 
-  const showHeader = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
-  const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
+  const isGameRoute = GAME_ROUTES.includes(route);
+  // Hide main header on game routes (games have their own header) and special pages
+  const showHeader = !isGameRoute && route !== 'admin' && route !== 'affiliate' && route !== 'landing';
+  // Hide bottom nav on game routes and special pages
+  const showBottomNav = !isGameRoute && route !== 'admin' && route !== 'affiliate' && route !== 'landing';
 
   const isAdminRoute = route === 'admin';
   const isStaffLoggedIn = !!staffSession;
@@ -228,7 +234,8 @@ export default function App() {
         />
       )}
 
-      <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[60px]' : 'pb-16'}`}>
+      {/* pt-[62px] only when main header is visible; game routes handle their own layout */}
+      <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[60px]' : ''}`}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
