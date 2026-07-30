@@ -1,6 +1,5 @@
 import { useMemo, useEffect } from 'react';
 import { X, ArrowDownLeft, ArrowUpRight, Clock, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
-import type { Route } from '../components/BottomNav';
 import { useAuth } from '../lib/hooks';
 import { useFinance } from '../lib/cmsHooks';
 
@@ -27,18 +26,18 @@ function statusConfig(status: string) {
   }
 }
 
-export default function HistoryView({ onNavigate }: { onNavigate: (r: Route) => void }) {
+export default function HistoryView({ onClose }: { onClose: () => void }) {
   const session = useAuth();
   const { deposits, withdrawals } = useFinance();
   const user = session?.username ?? 'guest';
 
-  // Mobile back button support
+  // Mobile back button support — go back to menu (ProfileDrawer)
   useEffect(() => {
     window.history.pushState({ historyView: true }, '');
-    const handlePopstate = () => { onNavigate('home'); };
+    const handlePopstate = () => { onClose(); };
     window.addEventListener('popstate', handlePopstate);
     return () => { window.removeEventListener('popstate', handlePopstate); };
-  }, [onNavigate]);
+  }, [onClose]);
 
   const items = useMemo(() => {
     const d = deposits
@@ -55,7 +54,7 @@ export default function HistoryView({ onNavigate }: { onNavigate: (r: Route) => 
       {/* Header row */}
       <div className="flex items-center justify-between px-4 pt-5 pb-3">
         <h2 className="font-display font-bold text-lg text-white">History</h2>
-        <button onClick={() => onNavigate('home')} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
+        <button onClick={onClose} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
           <X className="w-4 h-4 text-slate-400" />
         </button>
       </div>
@@ -92,7 +91,7 @@ export default function HistoryView({ onNavigate }: { onNavigate: (r: Route) => 
                   </span>
                 </div>
 
-                {/* Status badge — NO UTR, NO reason shown to user */}
+                {/* Status badge */}
                 <div className="flex items-center gap-1.5">
                   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cfg.bg} ${cfg.border} ${cfg.color}`}>
                     <Icon className={`w-3 h-3 ${t.status === 'processing' ? 'animate-spin' : ''}`} />
