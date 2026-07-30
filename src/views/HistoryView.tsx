@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { X, ArrowDownLeft, ArrowUpRight, Clock, CheckCircle2, XCircle, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowLeft, ArrowDownLeft, ArrowUpRight, Clock, CheckCircle2, XCircle, Loader2, RefreshCw } from 'lucide-react';
 import { supabase } from '../integrations/supabase/client';
 import { useAuth } from '../lib/hooks';
 
@@ -76,7 +76,6 @@ export default function HistoryView({ onClose }: { onClose: () => void }) {
       setItems(mapped);
     } catch (e) {
       console.error('[HistoryView] load error:', e);
-      // Fallback: try direct table query with user_id filter
       try {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) { setItems([]); return; }
@@ -110,7 +109,7 @@ export default function HistoryView({ onClose }: { onClose: () => void }) {
 
   useEffect(() => { void load(); }, [load]);
 
-  // Realtime updates — refresh on transaction changes
+  // Realtime updates
   useEffect(() => {
     const channel = supabase
       .channel('history_view_rt')
@@ -121,7 +120,7 @@ export default function HistoryView({ onClose }: { onClose: () => void }) {
     return () => { void supabase.removeChannel(channel); };
   }, [load]);
 
-  // Mobile back button support — go back to menu (ProfileDrawer)
+  // Mobile back button — go back to home
   useEffect(() => {
     window.history.pushState({ historyView: true }, '');
     const handlePopstate = () => { onClose(); };
@@ -129,26 +128,29 @@ export default function HistoryView({ onClose }: { onClose: () => void }) {
     return () => { window.removeEventListener('popstate', handlePopstate); };
   }, [onClose]);
 
-  // Suppress unused warning – session is kept for potential future use
   void session;
 
   return (
     <div className="min-h-screen bg-slatebg-950 text-white">
       {/* Header row */}
       <div className="flex items-center justify-between px-4 pt-5 pb-3">
-        <h2 className="font-display font-bold text-lg text-white">History</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
           <button
-            onClick={() => void load()}
-            disabled={loading}
-            className="w-8 h-8 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center disabled:opacity-50"
+            onClick={onClose}
+            className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/40 transition-colors"
+            aria-label="Go back"
           >
-            <RefreshCw className={`w-3.5 h-3.5 text-slate-400 ${loading ? 'animate-spin' : ''}`} />
+            <ArrowLeft className="w-4 h-4 text-slate-300" />
           </button>
-          <button onClick={onClose} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
-            <X className="w-4 h-4 text-slate-400" />
-          </button>
+          <h2 className="font-display font-bold text-lg text-white">History</h2>
         </div>
+        <button
+          onClick={() => void load()}
+          disabled={loading}
+          className="w-8 h-8 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center disabled:opacity-50"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 text-slate-400 ${loading ? 'animate-spin' : ''}`} />
+        </button>
       </div>
 
       {loading ? (
@@ -188,8 +190,6 @@ export default function HistoryView({ onClose }: { onClose: () => void }) {
                     {t.sign}{fmt(t.amount)}
                   </span>
                 </div>
-
-                {/* Status badge */}
                 <div className="flex items-center gap-1.5">
                   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${cfg.bg} ${cfg.border} ${cfg.color}`}>
                     <Icon className={`w-3 h-3 ${t.status === 'processing' ? 'animate-spin' : ''}`} />
