@@ -14,7 +14,6 @@ interface SupabaseReferral {
   bonus_amount: number;
   status: string;
   created_at: string;
-  referrer_username?: string;
   referred_username?: string;
 }
 
@@ -51,7 +50,7 @@ export default function ReferralView({ onNavigate, onOpenMenu }: { onNavigate: (
   );
 }
 
-// ── Refer & Earn panel (loads history directly from Supabase) ──────────────
+// ── Refer & Earn panel (loads history via SECURITY DEFINER RPC) ──────────────
 function ReferAndEarn({
   userId,
   accountId,
@@ -74,29 +73,26 @@ function ReferAndEarn({
     setTimeout(() => setCopied(false), 1500);
   };
 
-  // Load this user's referral history from Supabase
+  // Load this user's referral history via SECURITY DEFINER RPC (bypasses RLS)
   useEffect(() => {
     if (!userId) return;
     setLoading(true);
     supabase
-      .from('referrals')
-      .select(
-        'id, referrer_id, referred_id, bonus_amount, status, created_at, referred:profiles!referrals_referred_id_fkey(username)',
-      )
-      .eq('referrer_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(100)
-      .then(({ data }) => {
+      .rpc('get_my_referrals', { p_user_id: userId, p_limit: 100 })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('[ReferralView] get_my_referrals error:', error);
+        }
         if (data) {
           setReferrals(
-            (data as unknown as Array<Record<string, unknown>>).map((r) => ({
-              id: r.id as string,
-              referrer_id: r.referrer_id as string,
-              referred_id: r.referred_id as string,
+            (data as SupabaseReferral[]).map((r) => ({
+              id: r.id,
+              referrer_id: r.referrer_id,
+              referred_id: r.referred_id,
               bonus_amount: Number(r.bonus_amount),
-              status: r.status as string,
-              created_at: r.created_at as string,
-              referred_username: (r.referred as { username?: string } | null)?.username,
+              status: r.status,
+              created_at: r.created_at,
+              referred_username: r.referred_username ?? undefined,
             })),
           );
         }
