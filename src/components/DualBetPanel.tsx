@@ -9,6 +9,10 @@ import { cms } from '../lib/cms';
 import { sfx } from '../lib/crashAudio';
 import type { BetSlot } from '../lib/crashEngine';
 
+// Maximum win a player can take in a single round.
+// When bet × multiplier reaches this, the panel auto-cashes out.
+const MAX_WIN = 770_000;
+
 // ─── spec §2: next-round queue state per slot ──────────────────────────────
 interface QueuedBet {
   amount: number;
@@ -61,8 +65,18 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
     }
   }, [phase, slot.placed, queued, id]);
 
+  // ── MAX WIN: auto-cashout when bet × multiplier hits 770,000 ─────────────
+  useEffect(() => {
+    if (!canCashout) return;
+    const currentWin = slot.amount * state.multiplier;
+    if (currentWin >= MAX_WIN) {
+      cashout();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.multiplier]);
+
   const place = () => {
-    if (!auth.getSession()) { bus.emit('auth:open_modal' as any, 'login'); return; }
+    if (!auth.getSession()) { bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login'); return; }
     const amt = parseFloat(amountStr);
     if (!Number.isNaN(amt) && amt > store.balance) {
       setError('Insufficient balance');
@@ -177,7 +191,7 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
         </button>
       );
     }
-    
+
     // After cashout during flying phase — show "NEXT BET" to queue next bet
     if (slot.placed && slot.cashedOut && (phase === 'flying' || phase === 'busted')) {
       return (
@@ -193,7 +207,7 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
         </button>
       );
     }
-    
+
     if (!slot.placed) {
       const isFlying = phase === 'flying' || phase === 'busted';
       return (
@@ -218,6 +232,8 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
       );
     }
     if (canCashout) {
+      // Cap displayed payout at MAX_WIN
+      const displayPayout = Math.min(slot.amount * state.multiplier, MAX_WIN);
       return (
         <button
           type="button"
@@ -229,7 +245,7 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
         >
           <span className="text-[10px]">CASH OUT</span>
           <span className="tabular text-sm">
-            {store.currency}{(slot.amount * state.multiplier).toFixed(2)}
+            {store.currency}{displayPayout.toFixed(2)}
           </span>
         </button>
       );
@@ -327,6 +343,7 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
       <div className="flex items-center gap-3 mb-1.5">
         <span className="text-[9px] text-slate-500">Min: <span className="text-slate-400 font-semibold">{store.currency}{limits.min}</span></span>
         <span className="text-[9px] text-slate-500">Max: <span className="text-slate-400 font-semibold">{store.currency}{limits.max.toLocaleString()}</span></span>
+        <span className="text-[9px] text-slate-500 ml-auto">Max win: <span className="text-amber-400 font-semibold">{store.currency}{MAX_WIN.toLocaleString()}</span></span>
       </div>
 
       {/* ROW 2 — stake controls left + action button right */}
