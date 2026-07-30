@@ -4,7 +4,7 @@ import { Topics } from '../lib/bus';
 import type { MinesState } from '../lib/minesEngine';
 import { minesEngine } from '../lib/minesEngine';
 
-export type Route = 'home' | 'crash' | 'mines' | 'aviator' | 'games' | 'deposit' | 'wallet' | 'profile' | 'referral' | 'admin' | 'sunvsmoon' | 'trading' | 'history' | 'withdraw' | 'affiliate' | 'landing';
+export type Route = 'home' | 'crash' | 'mines' | 'aviator' | 'games' | 'deposit' | 'wallet' | 'profile' | 'referral' | 'admin' | 'sunvsmoon' | 'trading' | 'history' | 'withdraw' | 'affiliate' | 'landing' | 'ludo';
 
 interface NavItem {
   id: string;
@@ -13,11 +13,11 @@ interface NavItem {
 }
 
 interface Props {
-  route: Route;
+  current: Route;
   onNavigate: (r: Route) => void;
 }
 
-export default function BottomNav({ route, onNavigate }: Props) {
+export default function BottomNav({ current, onNavigate }: Props) {
   const minesState = useBus<MinesState>(Topics.MinesState, minesEngine.getState());
   const minesActive = minesState.active;
 
@@ -30,7 +30,7 @@ export default function BottomNav({ route, onNavigate }: Props) {
     <nav className="fixed bottom-0 left-0 right-0 z-40 h-[60px] bg-slatepanel-900 border-t border-borderline-900 will-change-transform">
       <div className="flex h-full">
         {items.map((item) => {
-          const active = route === item.id;
+          const active = current === item.id;
           return (
             <button
               key={item.id}
