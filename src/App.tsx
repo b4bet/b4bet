@@ -228,7 +228,7 @@ export default function App() {
         />
       )}
 
-      <main className="pb-16">
+      <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[60px]' : 'pb-16'}`}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
