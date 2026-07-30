@@ -19,7 +19,9 @@ function multiplierColor(x: number) {
   return 'text-red-400 bg-red-500/10 border-red-500/40';
 }
 
-export default function CrashView() {
+interface Props { onBack?: () => void; }
+
+export default function CrashView({ onBack }: Props) {
   const state = useCrashState();
   const history = useCrashHistory();
   const logos = useGameLogos();
@@ -46,6 +48,15 @@ export default function CrashView() {
       import('../lib/crashAudio').then((m) => { m.setCrashAudioActive(false); });
     };
   }, []);
+
+  // Mobile back button — go home
+  useEffect(() => {
+    if (!onBack) return;
+    window.history.pushState({ crashView: true }, '');
+    const handlePopstate = () => { onBack(); };
+    window.addEventListener('popstate', handlePopstate);
+    return () => { window.removeEventListener('popstate', handlePopstate); };
+  }, [onBack]);
 
   const recentHistory = history.slice(0, 10);
 
@@ -98,7 +109,7 @@ export default function CrashView() {
       <CrashSettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} buttonRef={settingsButtonRef} />
       <CrashFeedPopup open={feedOpen} onClose={() => setFeedOpen(false)} history={history} buttonRef={feedButtonRef} />
 
-      {/* ── Recent History Bar (fixed below header) ── */}
+      {/* ── Recent History Bar ── */}
       <div className="flex gap-1.5 px-3 py-2 overflow-x-auto scrollbar-none bg-slatepanel-900/50" style={{ flexShrink: 0 }}>
         {recentHistory.length === 0
           ? Array.from({ length: 10 }).map((_, i) => (
@@ -117,18 +128,13 @@ export default function CrashView() {
         className="overflow-y-auto"
         style={{ flex: '1 1 0', minHeight: 0 }}
       >
-        {/* Game Canvas with side padding */}
         <div className="relative px-3 pt-2">
           <CrashCanvas state={state} />
           <CashoutPopupOverlay />
         </div>
-
-        {/* Bet Panel */}
         <div className="px-3 pt-2">
           <DualBetPanel />
         </div>
-
-        {/* History Tabs */}
         <div className="px-3 py-2">
           <CrashHistoryTabs />
         </div>
