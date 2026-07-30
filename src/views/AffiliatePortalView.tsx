@@ -3,7 +3,7 @@ import { supabase } from '../integrations/supabase/client';
 import { auth } from '../lib/auth';
 import {
   TrendingUp, Users, DollarSign, Copy, CheckCircle, ExternalLink,
-  Clock, ChevronRight, AlertCircle, Wallet, BarChart3, Link, ArrowLeft,
+  Clock, ChevronRight, Wallet, BarChart3, Link, ArrowLeft,
   Gift, Star, Zap
 } from 'lucide-react';
 
@@ -27,11 +27,11 @@ interface Payout {
   status: string; created_at: string;
 }
 
-interface Props { onBack?: () => void; }
+interface Props { onBack?: () => void; onExit?: () => void; }
 
 type Tab = 'overview' | 'conversions' | 'payouts' | 'register';
 
-export default function AffiliateView({ onBack }: Props) {
+export default function AffiliateView({ onBack, onExit }: Props) {
   const [affiliate, setAffiliate] = useState<AffiliateData | null>(null);
   const [conversions, setConversions] = useState<Conversion[]>([]);
   const [payouts, setPayouts] = useState<Payout[]>([]);
@@ -47,7 +47,15 @@ export default function AffiliateView({ onBack }: Props) {
   const [regError, setRegError] = useState('');
   const session = auth.getSession();
 
-  useEffect(() => { loadData(); }, []);
+  // Back button support — go home, not referral
+  useEffect(() => {
+    window.history.pushState({ affiliateView: true }, '');
+    const handlePopstate = () => { (onExit ?? onBack)?.(); };
+    window.addEventListener('popstate', handlePopstate);
+    return () => window.removeEventListener('popstate', handlePopstate);
+  }, [onBack, onExit]);
+
+  useEffect(() => { void loadData(); }, []);
 
   async function loadData() {
     setLoading(true);
@@ -105,19 +113,9 @@ export default function AffiliateView({ onBack }: Props) {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  const fmt = (n: number) => `₹${(n / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+  const handleBack = () => { (onExit ?? onBack)?.(); };
 
-  if (!session) {
-    return (
-      <div className="min-h-screen bg-slatepanel-950 flex items-center justify-center p-6">
-        <div className="text-center space-y-4">
-          <AlertCircle className="w-12 h-12 text-amber-400 mx-auto" />
-          <h2 className="text-xl font-bold text-white">Login Required</h2>
-          <p className="text-slate-400">Please login to access the affiliate program.</p>
-        </div>
-      </div>
-    );
-  }
+  const fmt = (n: number) => `₹${(n / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
 
   if (loading) {
     return (
@@ -127,13 +125,13 @@ export default function AffiliateView({ onBack }: Props) {
     );
   }
 
-  // Not registered yet
+  // Not registered yet — show registration form (no login required)
   if (!affiliate) {
     return (
       <div className="min-h-screen bg-slatepanel-950 text-white">
         {/* Header */}
         <div className="bg-slatepanel-900 border-b border-slatepanel-700 px-4 py-3 flex items-center gap-3">
-          {onBack && <button onClick={onBack} className="text-slate-400 hover:text-white"><ArrowLeft className="w-5 h-5" /></button>}
+          <button onClick={handleBack} className="text-slate-400 hover:text-white"><ArrowLeft className="w-5 h-5" /></button>
           <h1 className="text-lg font-bold">Affiliate Program</h1>
         </div>
 
@@ -228,7 +226,7 @@ export default function AffiliateView({ onBack }: Props) {
     <div className="min-h-screen bg-slatepanel-950 text-white">
       {/* Header */}
       <div className="bg-slatepanel-900 border-b border-slatepanel-700 px-4 py-3 flex items-center gap-3">
-        {onBack && <button onClick={onBack} className="text-slate-400 hover:text-white"><ArrowLeft className="w-5 h-5" /></button>}
+        <button onClick={handleBack} className="text-slate-400 hover:text-white"><ArrowLeft className="w-5 h-5" /></button>
         <h1 className="text-lg font-bold flex-1">Affiliate Dashboard</h1>
         <span className={`px-3 py-1 rounded-full text-xs font-bold bg-${statusColor}-500/20 text-${statusColor}-400 capitalize`}>
           {affiliate.status}
@@ -356,7 +354,7 @@ export default function AffiliateView({ onBack }: Props) {
       </div>
 
       {/* Payout Modal */}
-      {payoutOpen && (
+      {payoutOpen && affiliate && (
         <div className="fixed inset-0 bg-black/70 flex items-end justify-center z-50 p-4">
           <div className="bg-slatepanel-800 rounded-2xl p-6 w-full max-w-md space-y-4">
             <h3 className="font-bold text-lg">Request Payout</h3>
