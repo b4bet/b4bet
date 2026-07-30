@@ -8,20 +8,21 @@ import React from 'react';
 interface Props { onNavigate: (r: Route) => void; }
 
 const ALL_GAMES = [
-  { route: 'crash'     as Route, label: 'Crash',      tag: 'Real-time', icon: Rocket,    color: '#b15eff', gameKey: 'crash'     as GameKey },
-  { route: 'mines'     as Route, label: 'Mines',      tag: 'Strategy',  icon: Bomb,      color: '#ff4d70', gameKey: 'mines'     as GameKey },
-  { route: 'aviator'   as Route, label: 'Aviator',    tag: 'Crash',     icon: Plane,     color: '#38bdf8', gameKey: 'aviator'   as GameKey },
-  { route: 'sunvsmoon' as Route, label: 'Sun & Moon', tag: 'Live',      icon: Sun,       color: '#FFB627', gameKey: 'sunvsmoon' as GameKey },
-  { route: 'trading'   as Route, label: 'Trading',    tag: 'Binary',    icon: TrendingUp,color: '#22c55e', gameKey: 'trading'   as GameKey },
+  { route: 'crash' as Route, label: 'Crash', tag: 'Real-time', icon: Rocket, color: '#b15eff', gameKey: 'crash' as GameKey },
+  { route: 'mines' as Route, label: 'Mines', tag: 'Strategy', icon: Bomb, color: '#ff4d70', gameKey: 'mines' as GameKey },
+  { route: 'aviator' as Route, label: 'Aviator', tag: 'Crash', icon: Plane, color: '#38bdf8', gameKey: 'aviator' as GameKey },
+  { route: 'sunvsmoon' as Route, label: 'Sun & Moon', tag: 'Live', icon: Sun, color: '#FFB627', gameKey: 'sunvsmoon' as GameKey },
+  { route: 'trading' as Route, label: 'Trading', tag: 'Binary', icon: TrendingUp, color: '#22c55e', gameKey: 'trading' as GameKey },
 ];
 
 export default function GamesView({ onNavigate }: Props) {
   const logos = useGameLogos();
 
   return (
-    <div className="p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-bold text-white">All Games</h2>
+    <div className="p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <span className="text-lg font-bold text-white">All Games</span>
+        <span className="text-xs text-slate-400">{ALL_GAMES.length}</span>
       </div>
       <div className="grid grid-cols-3 gap-3">
         {ALL_GAMES.map((g) => {
@@ -38,14 +39,15 @@ export default function GamesView({ onNavigate }: Props) {
               style={{ '--game-color': g.color } as React.CSSProperties}
             >
               {logo ? (
-                <img src={logo} alt={g.label} className="absolute inset-0 w-full h-full object-cover" />
+                <img src={logo} alt={g.label} className="w-full h-full object-cover" />
               ) : (
                 <>
-                  <div className="absolute inset-0" style={{ background: `radial-gradient(circle at 30% 30%, ${g.color}30, transparent 70%)` }} />
-                  <div className="relative flex flex-col items-center justify-center h-full gap-1">
-                    <Icon className="w-10 h-10" style={{ color: g.color }} />
-                    <span className="text-xs font-bold text-white">{g.label}</span>
-                    <span className="text-[10px] text-white/50">{g.tag}</span>
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Icon size={32} style={{ color: g.color }} />
+                  </div>
+                  <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/80">
+                    <div className="text-white text-xs font-bold">{g.label}</div>
+                    <div className="text-slate-400 text-[10px]">{g.tag}</div>
                   </div>
                 </>
               )}
