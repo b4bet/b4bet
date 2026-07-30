@@ -1,26 +1,31 @@
 import { useMemo, useState, useEffect } from 'react';
-import { X, Copy, Check, Users, TrendingUp, UserPlus } from 'lucide-react';
+import { X, Copy, Check, Users, UserPlus } from 'lucide-react';
 import type { Route } from '../components/BottomNav';
-import { cms } from '../lib/cms';
-import { useAffiliates, useReferralConfig, useReferrals } from '../lib/cmsHooks';
+import { useReferralConfig } from '../lib/cmsHooks';
 import { useAuth } from '../lib/hooks';
 import { store } from '../lib/store';
-import type { AuthSession } from '../lib/auth';
+import { supabase } from '../integrations/supabase/client';
 
+// ── Types ──────────────────────────────────────────────────────────────────
+interface SupabaseReferral {
+  id: string;
+  referrer_id: string;
+  referred_id: string;
+  bonus_amount: number;
+  status: string;
+  created_at: string;
+  referrer_username?: string;
+  referred_username?: string;
+}
+
+// ── Main View ──────────────────────────────────────────────────────────────
 export default function ReferralView({ onNavigate, onOpenMenu }: { onNavigate: (r: Route) => void; onOpenMenu?: () => void }) {
   const session = useAuth();
   const cfg = useReferralConfig();
-  const affiliates = useAffiliates();
-  const myApp = useMemo(() => (session ? affiliates.find((a) => a.userId === session.userId) ?? null : null), [affiliates, session]);
 
-  // Mobile back button support — go back to menu (ProfileDrawer)
   useEffect(() => {
     window.history.pushState({ referralView: true }, '');
-    const handlePopstate = () => {
-      onNavigate('home');
-      // Re-open the menu/drawer after navigating home
-      onOpenMenu?.();
-    };
+    const handlePopstate = () => { onNavigate('home'); onOpenMenu?.(); };
     window.addEventListener('popstate', handlePopstate);
     return () => { window.removeEventListener('popstate', handlePopstate); };
   }, [onNavigate, onOpenMenu]);
@@ -37,17 +42,31 @@ export default function ReferralView({ onNavigate, onOpenMenu }: { onNavigate: (
         </button>
       </div>
 
-      <ReferAndEarn userId={session?.userId} accountId={session?.accountId} cfg={cfg} />
+      <ReferAndEarn
+        userId={session?.userId}
+        accountId={session?.accountId}
+        cfg={cfg}
+      />
     </div>
   );
 }
 
-function ReferAndEarn({ userId, accountId, cfg }: { userId: string | undefined; accountId: string | undefined; cfg: { rewardAmount: number; minDeposit: number; tierPercent: number; tierThreshold: number } }) {
-  const allReferrals = useReferrals();
-  const referrals = useMemo(() => (userId ? allReferrals.filter((r) => r.referrerId === userId) : []), [allReferrals, userId]);
-  // Use 6-digit accountId as the referral code in the link (short & clean)
+// ── Refer & Earn panel (loads history directly from Supabase) ──────────────
+function ReferAndEarn({
+  userId,
+  accountId,
+  cfg,
+}: {
+  userId: string | undefined;
+  accountId: string | undefined;
+  cfg: { rewardAmount: number; minDeposit: number; tierPercent: number; tierThreshold: number };
+}) {
+  const [referrals, setReferrals] = useState<SupabaseReferral[]>([]);
+  const [loading, setLoading] = useState(false);
+
   const link = accountId ? `${window.location.origin}/register?ref=${accountId}` : '';
   const [copied, setCopied] = useState(false);
+
   const copy = async () => {
     if (!link) return;
     try { await navigator.clipboard.writeText(link); } catch { /* noop */ }
@@ -55,7 +74,37 @@ function ReferAndEarn({ userId, accountId, cfg }: { userId: string | undefined; 
     setTimeout(() => setCopied(false), 1500);
   };
 
-  const totalEarned = referrals.filter((r) => r.rewardCredited).reduce((s, r) => s + r.rewardAmount, 0);
+  // Load this user's referral history from Supabase
+  useEffect(() => {
+    if (!userId) return;
+    setLoading(true);
+    supabase
+      .from('referrals')
+      .select(
+        'id, referrer_id, referred_id, bonus_amount, status, created_at, referred:profiles!referrals_referred_id_fkey(username)',
+      )
+      .eq('referrer_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(100)
+      .then(({ data }) => {
+        if (data) {
+          setReferrals(
+            (data as unknown as Array<Record<string, unknown>>).map((r) => ({
+              id: r.id as string,
+              referrer_id: r.referrer_id as string,
+              referred_id: r.referred_id as string,
+              bonus_amount: Number(r.bonus_amount),
+              status: r.status as string,
+              created_at: r.created_at as string,
+              referred_username: (r.referred as { username?: string } | null)?.username,
+            })),
+          );
+        }
+        setLoading(false);
+      });
+  }, [userId]);
+
+  const totalEarned = referrals.filter((r) => r.status === 'credited').reduce((s, r) => s + r.bonus_amount, 0);
 
   if (!userId) {
     return (
@@ -69,6 +118,7 @@ function ReferAndEarn({ userId, accountId, cfg }: { userId: string | undefined; 
 
   return (
     <div className="space-y-3">
+      {/* Referral link */}
       <div className="panel p-4">
         <h3 className="font-display font-bold text-white text-sm mb-2">Your unique referral link</h3>
         <div className="flex items-center gap-2">
@@ -79,6 +129,7 @@ function ReferAndEarn({ userId, accountId, cfg }: { userId: string | undefined; 
         </div>
       </div>
 
+      {/* Config metrics */}
       <div className="grid grid-cols-2 gap-2">
         <Metric label="Reward / Referral" value={`${store.currency}${cfg.rewardAmount}`} accent="text-emeraldwin-400" />
         <Metric label="Min. Deposit" value={`${store.currency}${cfg.minDeposit}`} accent="text-neon-300" />
@@ -86,6 +137,7 @@ function ReferAndEarn({ userId, accountId, cfg }: { userId: string | undefined; 
         <Metric label="Tier Commission" value={`${cfg.tierPercent}%`} accent="text-coral-400" />
       </div>
 
+      {/* Summary cards */}
       <div className="grid grid-cols-2 gap-2">
         <div className="panel p-3 text-center">
           <p className="text-[11px] text-slate-400 mb-1">Total Referrals</p>
@@ -97,14 +149,19 @@ function ReferAndEarn({ userId, accountId, cfg }: { userId: string | undefined; 
         </div>
       </div>
 
+      {/* History list */}
       <div className="panel p-4 space-y-3">
-        <h3 className="font-display font-bold text-white flex items-center gap-2"><Users className="w-4 h-4 text-neon-300" /> Referral History</h3>
-        {referrals.length === 0 ? (
+        <h3 className="font-display font-bold text-white flex items-center gap-2">
+          <Users className="w-4 h-4 text-neon-300" /> Referral History
+        </h3>
+        {loading ? (
+          <p className="text-xs text-slate-500 text-center py-4">Loading...</p>
+        ) : referrals.length === 0 ? (
           <p className="text-xs text-slate-500 text-center py-4">No referrals yet</p>
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto">
-            {referrals.map((r, i) => (
-              <ReferralRow key={i} refData={r} />
+            {referrals.map((r) => (
+              <ReferralRow key={r.id} refData={r} />
             ))}
           </div>
         )}
@@ -122,32 +179,33 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
   );
 }
 
-function ReferralRow({ refData }: { refData: Record<string, unknown> }) {
+function ReferralRow({ refData }: { refData: SupabaseReferral }) {
   const [open, setOpen] = useState(false);
-  const rewardCredited = !!refData.rewardCredited;
-  const firstDepositApproved = !!refData.firstDepositApproved;
-  const statusColor = rewardCredited ? 'text-emeraldwin-400' : firstDepositApproved ? 'text-amberx-400' : 'text-slate-400';
-  const statusText = rewardCredited ? 'Rewarded' : firstDepositApproved ? 'Pending' : 'Awaiting deposit';
-  const referredName = refData.referredName as string | undefined;
-  const referredId = refData.referredId as string | undefined;
-  const rewardAmount = refData.rewardAmount as number | undefined;
-  const timestamp = refData.timestamp as number | undefined;
+  const isCredited = refData.status === 'credited';
+  const statusColor = isCredited ? 'text-emeraldwin-400' : 'text-slate-400';
+  const statusText = isCredited ? 'Rewarded' : 'Awaiting deposit';
 
   return (
     <>
-      <div onClick={() => setOpen(true)} className="flex items-center justify-between bg-slatepanel-800 rounded-lg p-3 cursor-pointer hover:bg-slatepanel-700 transition-colors border border-borderline-800">
+      <div
+        onClick={() => setOpen(true)}
+        className="flex items-center justify-between bg-slatepanel-800 rounded-lg p-3 cursor-pointer hover:bg-slatepanel-700 transition-colors border border-borderline-800"
+      >
         <div className="flex items-center gap-2 min-w-0">
           <UserPlus className="w-4 h-4 text-neon-300 flex-shrink-0" />
           <div>
-            <p className="text-sm font-semibold text-white truncate">{referredName || referredId}</p>
-            <p className="text-[10px] text-slate-500">ID: {referredId}</p>
+            <p className="text-sm font-semibold text-white truncate">{refData.referred_username || refData.referred_id.slice(0, 8)}</p>
+            <p className="text-[10px] text-slate-500">
+              {new Date(refData.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+            </p>
           </div>
         </div>
         <div className="text-right flex-shrink-0">
           <p className={`text-xs font-bold ${statusColor}`}>{statusText}</p>
-          {rewardCredited && <p className="text-[10px] text-emeraldwin-300">+{store.currency}{rewardAmount}</p>}
+          {isCredited && <p className="text-[10px] text-emeraldwin-300">+{store.currency}{refData.bonus_amount}</p>}
         </div>
       </div>
+
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setOpen(false)}>
           <div className="bg-slatepanel-900 border border-borderline-900 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -156,12 +214,11 @@ function ReferralRow({ refData }: { refData: Record<string, unknown> }) {
               <button onClick={() => setOpen(false)} className="p-1 rounded-lg hover:bg-slatepanel-800"><X className="w-5 h-5 text-slate-400" /></button>
             </div>
             <div className="space-y-3 text-sm">
-              <DetailRow label="Referred User" value={referredName || referredId || '—'} />
-              <DetailRow label="User ID" value={referredId || '—'} />
-              <DetailRow label="Date" value={timestamp ? new Date(timestamp).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'} />
+              <DetailRow label="Referred User" value={refData.referred_username || refData.referred_id.slice(0, 8)} />
+              <DetailRow label="User ID" value={refData.referred_id} />
+              <DetailRow label="Date" value={new Date(refData.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} />
               <DetailRow label="Status" value={statusText} />
-              <DetailRow label="First Deposit" value={firstDepositApproved ? 'Approved' : 'Pending'} />
-              <DetailRow label="Reward Amount" value={rewardCredited ? `${store.currency}${rewardAmount}` : 'Pending'} />
+              <DetailRow label="Reward Amount" value={isCredited ? `${store.currency}${refData.bonus_amount}` : 'Pending'} />
             </div>
             <button onClick={() => setOpen(false)} className="btn-primary w-full py-2 mt-4">Close</button>
           </div>
