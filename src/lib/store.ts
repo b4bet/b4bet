@@ -186,6 +186,9 @@ class Store {
   private balancesByUser: Record<string, number> = {};
   private static BALANCES_KEY = 'b4bet.balances';
 
+  // Default bet amounts per game slug — loaded from Supabase games table
+  private perGameDefaultBets: Record<string, number> = {};
+
   private userBalanceChannel: RealtimeChannel | null = null;
 
   signupBonus = 100;
@@ -416,13 +419,17 @@ class Store {
 
   async loadGameLimitsFromGamesTable() {
     try {
-      const { data } = await supabase.from('games').select('slug, min_bet, max_bet, is_active');
+      const { data } = await supabase.from('games').select('slug, min_bet, max_bet, is_active, default_bet');
       if (!data) return;
-      const rows = data as { slug: string; min_bet: number; max_bet: number; is_active: boolean }[];
+      const rows = data as { slug: string; min_bet: number; max_bet: number; is_active: boolean; default_bet: number }[];
       const next = { ...this.admin.perGameLimits };
       for (const row of rows) {
         if (row.slug && typeof row.min_bet === 'number' && typeof row.max_bet === 'number') {
           next[row.slug] = { min: row.min_bet, max: row.max_bet };
+        }
+        // Store default_bet so getGameDefaultBet() can serve it synchronously
+        if (row.slug && typeof row.default_bet === 'number') {
+          this.perGameDefaultBets[row.slug] = row.default_bet;
         }
       }
       this.admin = { ...this.admin, perGameLimits: next };
@@ -536,6 +543,12 @@ class Store {
     const override = this.admin.perGameLimits[gameKey];
     if (override) return { min: override.min, max: override.max };
     return { min: this.admin.minBet, max: this.admin.maxBet };
+  }
+
+  /** Returns the admin-configured default bet amount for a game (in paise).
+   *  Falls back to 100 if the value hasn't loaded yet or isn't set. */
+  getGameDefaultBet(gameKey: string): number {
+    return this.perGameDefaultBets[gameKey] ?? 100;
   }
 
   setGameLimit(gameKey: string, limit: PerGameLimit | null) {
