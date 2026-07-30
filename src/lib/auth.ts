@@ -31,10 +31,10 @@ async function getClientIp(): Promise<string> {
   const sessionIp = sessionStorage.getItem('b4bet.clientIp');
   if (sessionIp) return sessionIp;
   const services: Array<() => Promise<string>> = [
-    async () => { const r = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(4000) }); const j = await r.json() as { ip: string }; return j.ip; },
-    async () => { const r = await fetch('https://api64.ipify.org?format=json', { signal: AbortSignal.timeout(4000) }); const j = await r.json() as { ip: string }; return j.ip; },
-    async () => { const r = await fetch('https://api.my-ip.io/v1/ip.json', { signal: AbortSignal.timeout(4000) }); const j = await r.json() as { ip: string }; return j.ip; },
-    async () => { const r = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(4000) }); const j = await r.json() as { ip: string }; return j.ip; },
+    async () => { const r = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) }); const j = await r.json() as { ip: string }; return j.ip; },
+    async () => { const r = await fetch('https://api64.ipify.org?format=json', { signal: AbortSignal.timeout(3000) }); const j = await r.json() as { ip: string }; return j.ip; },
+    async () => { const r = await fetch('https://api.my-ip.io/v1/ip.json', { signal: AbortSignal.timeout(3000) }); const j = await r.json() as { ip: string }; return j.ip; },
+    async () => { const r = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(3000) }); const j = await r.json() as { ip: string }; return j.ip; },
   ];
   for (const fn of services) {
     try { const ip = await fn(); if (ip && ip.length > 3) { sessionStorage.setItem('b4bet.clientIp', ip); return ip; } } catch { /* try next */ }
@@ -135,21 +135,34 @@ class AuthManager {
     }
     if (!data.user) return { ok: false, error: 'Registration failed. Please try again.' };
 
-    const realIp = await logIpWithFallback(data.user.id, data.session?.access_token, 'signup');
+    // FIX: Don't await IP lookup — fire and forget so signup resolves instantly.
+    // IP logging is best-effort; it must never block the signup flow.
+    const ipPromise = logIpWithFallback(data.user.id, data.session?.access_token, 'signup');
+
     const { error: profileErr } = await supabase.from('profiles').upsert({
       id: data.user.id, username: uname, display_name: uname, phone: umobile,
       balance: 0, total_deposit: 0, total_withdrawal: 0, vip_level: 0, is_admin: false,
       account_id: accountId, is_active: true, signup_bonus_granted: false,
-      registration_ip: realIp || null,
+      registration_ip: null, // will be updated in the background after IP resolves
     });
     if (profileErr) console.error('[auth] profile upsert error:', profileErr);
-    try { store.grantSignupBonus(data.user.id, uname, realIp); } catch { /* ignore */ }
+
+    // Update registration_ip in background once IP resolves (non-blocking)
+    ipPromise.then((realIp) => {
+      if (realIp) {
+        void supabase.from('profiles').update({ registration_ip: realIp }).eq('id', data.user.id).catch(() => {});
+        void logUserIp(data.user.id, realIp, 'signup').catch?.(() => {});
+      }
+    }).catch(() => {});
+
+    // Grant signup bonus (non-blocking)
+    void store.grantSignupBonusAsync(data.user.id, uname);
 
     this.session = { userId: data.user.id, accountId, username: uname, email: umail, loggedInAt: Date.now() };
     this.persistSession();
     this.emitState();
 
-    // Send welcome email
+    // Send welcome email (non-blocking)
     emailService.sendWelcome(umail, uname);
 
     if (uref) {
