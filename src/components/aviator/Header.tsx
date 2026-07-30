@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { HelpCircle, Menu, Volume2, Music, X, Wallet, Plane } from 'lucide-react';
 import { Toggle } from './Toggle';
 import { formatMoney } from './game/format';
@@ -112,7 +113,12 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
         </div>
       </div>
 
-      {howToOpen && <HowToPlayModal onClose={() => setHowToOpen(false)} />}
+      {/* Modal rendered via portal — outside header's stacking context so it
+          appears above the game canvas regardless of canvas z-index */}
+      {howToOpen && createPortal(
+        <HowToPlayModal onClose={() => setHowToOpen(false)} />,
+        document.body,
+      )}
     </header>
   );
 }
@@ -142,7 +148,7 @@ function SettingRow({
 function HowToPlayModal({ onClose }: { onClose: () => void }) {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
       onClick={onClose}
     >
       <div
