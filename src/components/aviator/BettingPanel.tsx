@@ -29,7 +29,8 @@ export interface BetState {
 
 export function createInitialBet(roundId: number): BetState {
   return {
-    amount: 100,
+    // Use admin-configured default bet; falls back to 100 until store loads
+    amount: store.getGameDefaultBet('aviator'),
     mode: 'bet',
     placed: false,
     cashedOutAt: null,
@@ -446,13 +447,11 @@ export function BettingPanel({
                 className="flex-1 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer bg-white/8 hover:bg-white/15 text-white/70 disabled:opacity-40 disabled:cursor-not-allowed border border-white/10"
                 onClick={() => {
                   if (lastQuickRef.current === value) {
-                    // Same button again — add cumulatively
                     const cur = parseFloat(amountInput) || 0;
                     const next = Math.max(limits.min, Math.min(limits.max, Math.round((cur + value) * 100) / 100));
                     setAmount(next);
                     setAmountInput(String(next));
                   } else {
-                    // Different button — set flat value
                     lastQuickRef.current = value;
                     setAmount(value);
                     setAmountInput(String(value));
