@@ -5,7 +5,6 @@ import { useDynamicPages, useHasUnreadAgentMessage, useSocialLinks } from '../li
 import { store } from '../lib/store';
 import { getOrCreateAccountId } from '../lib/accountId';
 import { auth } from '../lib/auth';
-import { setReferralTab } from '../lib/referralTab';
 import DynamicPagePopup from './DynamicPagePopup';
 import PaymentMethodFlow from './PaymentMethodFlow';
 import { RedeemCodeSection } from '../views/ProfileView';
@@ -104,10 +103,8 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
 
   const go = (r: Route) => { onClose(); onNavigate(r); };
 
-  const handleReferral = (tab: 'refer' | 'affiliate') => {
-    setReferralTab(tab);
-    go('referral');
-  };
+  // Affiliate navigates directly to 'affiliate' route — NOT through referral
+  const handleAffiliate = () => { go('affiliate'); };
 
   // Shared menu item class — px-4 ensures left/right breathing room
   const menuItem = 'w-full flex items-center gap-3 px-4 py-4 hover:bg-slatepanel-700 transition-colors';
@@ -215,7 +212,7 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
                 )}
                 <div className="border-t border-borderline-900" />
 
-                <button onClick={() => handleReferral('refer')} className={menuItem}>
+                <button onClick={() => go('referral')} className={menuItem}>
                   <div className="w-8 h-8 rounded-xl bg-slatepanel-700 grid place-items-center shrink-0"><Users className="w-4 h-4 text-slate-400" /></div>
                   <span className="text-white text-sm font-medium flex-1 text-left">Refer &amp; Earn</span>
                   <ChevronRight className="w-4 h-4 text-slate-500" />
@@ -224,8 +221,8 @@ export default function ProfileDrawer({ open, onClose, onNavigate, onOpenSupport
               </>
             )}
 
-            {/* Affiliate — always visible */}
-            <button onClick={() => handleReferral('affiliate')} className={menuItem}>
+            {/* Affiliate — always visible, goes directly to affiliate route */}
+            <button onClick={handleAffiliate} className={menuItem}>
               <div className="w-8 h-8 rounded-xl bg-purple-500/20 grid place-items-center shrink-0"><TrendingUp className="w-4 h-4 text-purple-400" /></div>
               <span className="text-white text-sm font-medium flex-1 text-left">Affiliate</span>
               <ChevronRight className="w-4 h-4 text-slate-500" />
