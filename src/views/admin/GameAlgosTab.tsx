@@ -170,7 +170,6 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
               <div className="grid grid-cols-3 gap-2">
                 {SUN_MOON_OPTIONS.map((opt) => {
                   const BtnIcon = opt.icon;
-                  // Active = matches current saved value in Supabase (handler.manualResult) OR locally selected
                   const isActive = manual === opt.value || handler.manualResult === opt.value;
                   const isSaving = manualSaveStatus === 'saving' && manual === opt.value;
                   return (
@@ -201,7 +200,6 @@ function GameHandlerPanel({ gameKey, label, icon: Icon, manualLabel, manualPlace
                   );
                 })}
               </div>
-              {/* Status row */}
               <div className="flex items-center gap-2 flex-wrap">
                 {manualSaveStatus === 'saving' && (
                   <span className="text-[11px] text-amber-300 font-semibold flex items-center gap-1">
@@ -313,8 +311,8 @@ export function GlobalBetLimitsPanel() {
     setSaving(true);
     store.setAdmin({ minBet: mn, maxBet: mx });
 
-    // Update games table for all games that have no per-game override
-    const gameKeys = ['crash', 'aviator', 'wingo', 'k3', 'fived', 'sunvsmoon', 'trading', 'mines'];
+    // Only update the 5 active games
+    const gameKeys = ['crash', 'aviator', 'sunvsmoon', 'trading', 'mines'];
     const currentPerGame = store.admin.perGameLimits;
     const keysToUpdate = gameKeys.filter((k) => !currentPerGame[k]);
 
