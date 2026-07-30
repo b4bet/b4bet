@@ -3,6 +3,7 @@ import SelectModal from '../../components/SelectModal';
 import { cms } from '../../lib/cms';
 import { useAdminConfig, useGameLogos, useGameRound } from '../../lib/hooks';
 import { store } from '../../lib/store';
+import { supabase } from '../../integrations/supabase/client';
 import { gameLogos } from '../../lib/gameLogos';
 import type { GameKey } from '../../lib/gameLogos';
 import {
@@ -301,15 +302,34 @@ export function GlobalBetLimitsPanel() {
   const [min, setMin] = useState(String(cfg.minBet));
   const [max, setMax] = useState(String(cfg.maxBet));
   const [msg, setMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  const save = () => {
+  const save = async () => {
     const mn = parseFloat(min);
     const mx = parseFloat(max);
     if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn <= 0 || mx <= mn) {
       setMsg('Invalid limits — max must exceed min.'); return;
     }
+    setSaving(true);
     store.setAdmin({ minBet: mn, maxBet: mx });
-    setMsg('Saved · enforced on all games.');
+
+    // Update games table for all games that have no per-game override
+    const gameKeys = ['crash', 'aviator', 'wingo', 'k3', 'fived', 'sunvsmoon', 'trading', 'mines'];
+    const currentPerGame = store.admin.perGameLimits;
+    const keysToUpdate = gameKeys.filter((k) => !currentPerGame[k]);
+
+    try {
+      if (keysToUpdate.length > 0) {
+        await supabase
+          .from('games')
+          .update({ min_bet: mn, max_bet: mx })
+          .in('slug', keysToUpdate);
+      }
+      setMsg('Global limits saved.');
+    } catch {
+      setMsg('Saved locally but games table update failed.');
+    }
+    setSaving(false);
     setTimeout(() => setMsg(null), 2000);
   };
 
@@ -329,7 +349,14 @@ export function GlobalBetLimitsPanel() {
           <input type="number" value={max} onChange={(e) => setMax(e.target.value)} min={1} step={1} className="input tabular" />
         </div>
       </div>
-      <button onClick={save} className="btn-emerald w-full py-2">Save Global Limits</button>
+      <button
+        onClick={() => { void save(); }}
+        disabled={saving}
+        className="btn-emerald w-full py-2 flex items-center justify-center gap-2 disabled:opacity-60"
+      >
+        {saving && <RefreshCw className="w-4 h-4 animate-spin" />}
+        Save Global Limits
+      </button>
       {msg && <p className="text-[11px] text-emeraldwin-300 font-semibold">{msg}</p>}
       <p className="text-[11px] text-slate-500">
         Active: <span className="tabular text-white">{store.currency}{cfg.minBet}</span> – <span className="tabular text-white">{store.currency}{cfg.maxBet}</span>
@@ -353,21 +380,35 @@ export function PerGameBetLimitsPanel() {
     return result;
   });
   const [msg, setMsg] = useState<string | null>(null);
+  const [savingKeys, setSavingKeys] = useState<Record<string, 'idle' | 'saving' | 'saved' | 'error'>>({});
 
-  const save = (key: string) => {
+  const save = async (key: string) => {
     const d = drafts[key];
     const mn = parseFloat(d.min);
     const mx = parseFloat(d.max);
-    if (d.min === '' && d.max === '') {
-      store.setGameLimit(key, null);
-      setMsg(`${key} cleared — using global limits.`);
-    } else if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn <= 0 || mx <= mn) {
-      setMsg('Invalid — max must exceed min.');
-    } else {
-      store.setGameLimit(key, { min: mn, max: mx });
-      setMsg(`${key} limits saved.`);
+
+    setSavingKeys((prev) => ({ ...prev, [key]: 'saving' }));
+    try {
+      if (d.min === '' && d.max === '') {
+        await store.setGameLimitAsync(key, null);
+        setMsg(`${key} cleared — using global limits.`);
+      } else if (!Number.isFinite(mn) || !Number.isFinite(mx) || mn <= 0 || mx <= mn) {
+        setMsg('Invalid — max must exceed min.');
+        setSavingKeys((prev) => ({ ...prev, [key]: 'idle' }));
+        return;
+      } else {
+        await store.setGameLimitAsync(key, { min: mn, max: mx });
+        setMsg(`${key} limits saved.`);
+      }
+      setSavingKeys((prev) => ({ ...prev, [key]: 'saved' }));
+    } catch (e) {
+      setMsg((e as Error).message || 'Save failed');
+      setSavingKeys((prev) => ({ ...prev, [key]: 'error' }));
     }
-    setTimeout(() => setMsg(null), 2000);
+    setTimeout(() => {
+      setSavingKeys((prev) => ({ ...prev, [key]: 'idle' }));
+      setMsg(null);
+    }, 3000);
   };
 
   return (
@@ -385,6 +426,7 @@ export function PerGameBetLimitsPanel() {
             {gameMeta.map((g) => {
               const draft = drafts[g.key];
               const override = cfg.perGameLimits[g.key];
+              const keyStatus = savingKeys[g.key] ?? 'idle';
               return (
                 <div key={g.key} className="bg-slatepanel-800 rounded-xl p-3 border border-borderline-800">
                   <div className="flex items-center justify-between mb-2">
@@ -394,15 +436,44 @@ export function PerGameBetLimitsPanel() {
                   <div className="flex gap-2 items-center">
                     <div className="flex-1">
                       <p className="text-[9px] text-slate-500 mb-0.5">Min ({store.currency})</p>
-                      <input type="number" value={draft.min} placeholder={String(cfg.minBet)} onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], min: e.target.value } }))} className="input tabular text-sm py-1.5 w-full" />
+                      <input
+                        type="number"
+                        value={draft.min}
+                        placeholder={String(cfg.minBet)}
+                        onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], min: e.target.value } }))}
+                        className="input tabular text-sm py-1.5 w-full"
+                      />
                     </div>
                     <div className="flex-1">
                       <p className="text-[9px] text-slate-500 mb-0.5">Max ({store.currency})</p>
-                      <input type="number" value={draft.max} placeholder={String(cfg.maxBet)} onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], max: e.target.value } }))} className="input tabular text-sm py-1.5 w-full" />
+                      <input
+                        type="number"
+                        value={draft.max}
+                        placeholder={String(cfg.maxBet)}
+                        onChange={(e) => setDrafts((prev) => ({ ...prev, [g.key]: { ...prev[g.key], max: e.target.value } }))}
+                        className="input tabular text-sm py-1.5 w-full"
+                      />
                     </div>
-                    <button onClick={() => save(g.key)} className="btn-primary px-3 py-1.5 text-xs mt-4">Save</button>
+                    <button
+                      onClick={() => { void save(g.key); }}
+                      disabled={keyStatus === 'saving'}
+                      className="btn-primary px-3 py-1.5 text-xs mt-4 flex items-center gap-1 disabled:opacity-60"
+                    >
+                      {keyStatus === 'saving'
+                        ? <RefreshCw className="w-3 h-3 animate-spin" />
+                        : keyStatus === 'saved'
+                        ? <CheckCircle className="w-3 h-3 text-emerald-400" />
+                        : null}
+                      Save
+                    </button>
                     {override && (
-                      <button onClick={() => { store.setGameLimit(g.key, null); setDrafts((prev) => ({ ...prev, [g.key]: { min: '', max: '' } })); }} className="p-1.5 mt-4 rounded-lg bg-coral-500/15 border border-coral-500/30 hover:bg-coral-500/25 transition-colors">
+                      <button
+                        onClick={() => {
+                          void store.setGameLimitAsync(g.key, null).catch(() => {});
+                          setDrafts((prev) => ({ ...prev, [g.key]: { min: '', max: '' } }));
+                        }}
+                        className="p-1.5 mt-4 rounded-lg bg-coral-500/15 border border-coral-500/30 hover:bg-coral-500/25 transition-colors"
+                      >
                         <X className="w-3.5 h-3.5 text-coral-400" />
                       </button>
                     )}
