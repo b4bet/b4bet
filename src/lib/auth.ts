@@ -123,6 +123,38 @@ class AuthManager {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(umail)) return { ok: false, error: 'Please enter a valid email address.' };
     if (!/^\d{7,15}$/.test(umobile)) return { ok: false, error: 'Please enter a valid mobile number (digits only).' };
     if (password.length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
+
+    // If referral code provided, validate it BEFORE signup to show clear error
+    let referrerId: string | null = null;
+    if (uref) {
+      try {
+        // Try account_id match first (6-digit short code used in referral links)
+        const { data: byAccountId } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('account_id', uref)
+          .maybeSingle();
+        if (byAccountId) {
+          referrerId = byAccountId.id as string;
+        } else {
+          // Fallback: try username match (legacy links)
+          const { data: byUsername } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('username', uref)
+            .maybeSingle();
+          if (byUsername) referrerId = byUsername.id as string;
+        }
+        if (!referrerId) {
+          return { ok: false, error: 'Invalid referral code. Please check and try again.' };
+        }
+      } catch (e) {
+        console.warn('[auth] referral lookup failed, ignoring:', e);
+        // Don't block signup if referral lookup fails due to network
+        referrerId = null;
+      }
+    }
+
     const accountId = generateAccountId();
     const { data, error } = await supabase.auth.signUp({
       email: umail, password,
@@ -135,77 +167,62 @@ class AuthManager {
     }
     if (!data.user) return { ok: false, error: 'Registration failed. Please try again.' };
 
-    // FIX: Don't await IP lookup — fire and forget so signup resolves instantly.
-    // IP logging is best-effort; it must never block the signup flow.
-    const ipPromise = logIpWithFallback(data.user.id, data.session?.access_token, 'signup');
-
-    const { error: profileErr } = await supabase.from('profiles').upsert({
-      id: data.user.id, username: uname, display_name: uname, phone: umobile,
-      balance: 0, total_deposit: 0, total_withdrawal: 0, vip_level: 0, is_admin: false,
-      account_id: accountId, is_active: true, signup_bonus_granted: false,
-      registration_ip: null, // will be updated in the background after IP resolves
-    });
-    if (profileErr) console.error('[auth] profile upsert error:', profileErr);
-
-    // Update registration_ip in background once IP resolves (non-blocking)
-    ipPromise.then((realIp) => {
-      if (realIp) {
-        void supabase.from('profiles').update({ registration_ip: realIp }).eq('id', data.user.id).catch(() => {});
-        void logUserIp(data.user.id, realIp, 'signup').catch?.(() => {});
-      }
-    }).catch(() => {});
-
-    // Grant signup bonus (non-blocking)
-    void store.grantSignupBonusAsync(data.user.id, uname);
-
+    // Set session immediately so user is logged in
     this.session = { userId: data.user.id, accountId, username: uname, email: umail, loggedInAt: Date.now() };
     this.persistSession();
     this.emitState();
 
-    // Send welcome email (non-blocking)
-    emailService.sendWelcome(umail, uname);
+    // All post-signup steps are non-blocking — wrapped in try/catch so they
+    // NEVER prevent the signup from succeeding or the modal from closing.
+    void (async () => {
+      try {
+        // IP logging — fire and forget
+        const ipPromise = logIpWithFallback(data.user!.id, data.session?.access_token, 'signup');
 
-    if (uref) {
-      // FIX: Look up referrer by account_id (6-digit) first, then fallback to username
-      // This matches the referral link format: /register?ref=<accountId>
-      let referrerId: string | null = null;
+        // Upsert profile
+        const { error: profileErr } = await supabase.from('profiles').upsert({
+          id: data.user!.id, username: uname, display_name: uname, phone: umobile,
+          balance: 0, total_deposit: 0, total_withdrawal: 0, vip_level: 0, is_admin: false,
+          account_id: accountId, is_active: true, signup_bonus_granted: false,
+          registration_ip: null,
+        });
+        if (profileErr) console.error('[auth] profile upsert error:', profileErr);
 
-      // Try account_id match first (6-digit short code used in referral links)
-      const { data: byAccountId } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('account_id', uref)
-        .maybeSingle();
+        // Update registration_ip in background once IP resolves
+        ipPromise.then((realIp) => {
+          if (realIp) {
+            void supabase.from('profiles').update({ registration_ip: realIp }).eq('id', data.user!.id).catch(() => {});
+            void logUserIp(data.user!.id, realIp, 'signup').catch?.(() => {});
+          }
+        }).catch(() => {});
 
-      if (byAccountId) {
-        referrerId = byAccountId.id as string;
-      } else {
-        // Fallback: try username match (legacy links)
-        const { data: byUsername } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('username', uref)
-          .maybeSingle();
-        if (byUsername) referrerId = byUsername.id as string;
+        // Grant signup bonus
+        void store.grantSignupBonusAsync(data.user!.id, uname);
+
+        // Send welcome email
+        emailService.sendWelcome(umail, uname);
+
+        // Record referral if we found a valid referrer
+        if (uref && referrerId) {
+          cms.recordReferralSignup(
+            { id: data.user!.id, accountId, username: uname, email: umail, mobile: umobile, referralCode: uref, createdAt: Date.now(), isActive: true },
+            referrerId,
+          );
+          void supabase.rpc('record_referral', {
+            p_referrer_id: referrerId,
+            p_referred_id: data.user!.id,
+            p_bonus_amount: 0,
+            p_status: 'pending',
+          }).catch((e: unknown) => { console.error('[auth] record_referral error:', e); });
+        }
+
+        cms.pushFromTemplate('nt_welcome', 'Welcome!', `Account created. Welcome, ${uname}!`, 'success');
+      } catch (e) {
+        // Post-signup steps failed — log but don't surface to user
+        console.error('[auth] post-signup background error:', e);
       }
+    })();
 
-      if (referrerId) {
-        // Save to in-memory CMS state (for session display)
-        cms.recordReferralSignup(
-          { id: data.user.id, accountId, username: uname, email: umail, mobile: umobile, referralCode: uref, createdAt: Date.now(), isActive: true },
-          referrerId,
-        );
-        // FIX: Also persist referral to Supabase so history shows on reload
-        // Uses SECURITY DEFINER RPC to bypass RLS (no INSERT policy on referrals table)
-        void supabase.rpc('record_referral', {
-          p_referrer_id: referrerId,
-          p_referred_id: data.user.id,
-          p_bonus_amount: 0, // bonus_amount updated when deposit is approved
-          p_status: 'pending',
-        }).catch((e: unknown) => { console.error('[auth] record_referral error:', e); });
-      }
-    }
-    cms.pushFromTemplate('nt_welcome', 'Welcome!', `Account created. Welcome, ${uname}!`, 'success');
     return { ok: true };
   }
 
