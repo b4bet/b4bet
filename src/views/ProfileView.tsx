@@ -21,13 +21,17 @@ export default function ProfileView({
   const session = useAuth();
   const accountId = session ? session.accountId : getOrCreateAccountId();
 
-  // Mobile back button — push a history entry so Android/iOS back navigates home
+  // Mobile back button — go back to menu (ProfileDrawer)
   useEffect(() => {
     window.history.pushState({ profileView: true }, '');
-    const handlePopstate = () => { onNavigate('home'); };
+    const handlePopstate = () => {
+      onNavigate('home');
+      // Re-open the menu/drawer after navigating home
+      onOpenMenu?.();
+    };
     window.addEventListener('popstate', handlePopstate);
     return () => { window.removeEventListener('popstate', handlePopstate); };
-  }, [onNavigate]);
+  }, [onNavigate, onOpenMenu]);
 
   // Fetch mobile from Supabase auth user_metadata (works on mobile browsers too)
   const [userMobile, setUserMobile] = useState('—');
@@ -88,7 +92,7 @@ export default function ProfileView({
           <h1 className="font-display font-extrabold text-xl text-white">Profile</h1>
           <p className="text-xs text-slate-500">Account & security</p>
         </div>
-        <button onClick={() => onNavigate('home')} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
+        <button onClick={() => { onNavigate('home'); onOpenMenu?.(); }} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
           <X className="w-5 h-5 text-slate-300" />
         </button>
       </div>

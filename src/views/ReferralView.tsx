@@ -17,13 +17,17 @@ export default function ReferralView({ onNavigate, onOpenMenu }: { onNavigate: (
   const initialTab = getReferralTab() || 'refer';
   const isAffiliate = initialTab === 'affiliate';
 
-  // Mobile back button support
+  // Mobile back button support — go back to menu (ProfileDrawer)
   useEffect(() => {
     window.history.pushState({ referralView: true }, '');
-    const handlePopstate = () => { onNavigate('home'); };
+    const handlePopstate = () => {
+      onNavigate('home');
+      // Re-open the menu/drawer after navigating home
+      onOpenMenu?.();
+    };
     window.addEventListener('popstate', handlePopstate);
     return () => { window.removeEventListener('popstate', handlePopstate); };
-  }, [onNavigate]);
+  }, [onNavigate, onOpenMenu]);
 
   return (
     <div className="space-y-4 animate-fade-in px-4">
@@ -32,7 +36,7 @@ export default function ReferralView({ onNavigate, onOpenMenu }: { onNavigate: (
           <h1 className="font-display font-extrabold text-xl text-white">{isAffiliate ? 'Affiliate' : 'Refer & Earn'}</h1>
           <p className="text-xs text-slate-500">{isAffiliate ? 'Earn from traffic partners' : 'Invite friends and earn rewards'}</p>
         </div>
-        <button onClick={() => onNavigate('home')} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
+        <button onClick={() => { onNavigate('home'); onOpenMenu?.(); }} className="md:hidden w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center">
           <X className="w-5 h-5 text-slate-300" />
         </button>
       </div>
