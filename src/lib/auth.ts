@@ -153,11 +153,33 @@ class AuthManager {
     emailService.sendWelcome(umail, uname);
 
     if (uref) {
-      const { data: profiles } = await supabase.from('profiles').select('id').eq('username', uref);
-      if (profiles && profiles.length > 0) {
+      // FIX: Look up referrer by account_id (6-digit) first, then fallback to username
+      // This matches the referral link format: /register?ref=<accountId>
+      let referrerId: string | null = null;
+
+      // Try account_id match first (6-digit short code used in referral links)
+      const { data: byAccountId } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('account_id', uref)
+        .maybeSingle();
+
+      if (byAccountId) {
+        referrerId = byAccountId.id as string;
+      } else {
+        // Fallback: try username match (legacy links)
+        const { data: byUsername } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('username', uref)
+          .maybeSingle();
+        if (byUsername) referrerId = byUsername.id as string;
+      }
+
+      if (referrerId) {
         cms.recordReferralSignup(
           { id: data.user.id, accountId, username: uname, email: umail, mobile: umobile, referralCode: uref, createdAt: Date.now(), isActive: true },
-          profiles[0].id
+          referrerId,
         );
       }
     }
