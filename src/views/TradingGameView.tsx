@@ -397,7 +397,7 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
   const [betsPanelOpen, setBetsPanelOpen] = useState(false);
 
   const [selectedTime,   setSelectedTime]   = useState<TimeOption>(1);
-  const [betAmountStr,   setBetAmountStr]   = useState('100');
+  const [betAmountStr,   setBetAmountStr]   = useState(() => String(store.getGameDefaultBet('trading')));
   const betAmount = parseFloat(betAmountStr) || 0;
 
   const [assetDropdown,  setAssetDropdown]  = useState(false);
