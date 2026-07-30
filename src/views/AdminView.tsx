@@ -115,7 +115,7 @@ const TABS: { key: Tab; label: string; icon: typeof Cpu }[] = [
   { key: 'homeStats', label: 'Home Stats', icon: Activity },
   { key: 'notifications', label: 'Notifications', icon: Bell },
   { key: 'notificationManager', label: 'Notif. Manager', icon: Bell },
-  { key: 'marketing', label: 'Marketing', icon: Megaphone },
+  { key: 'marketing', label: 'Refer & Earn', icon: Megaphone },
   { key: 'crm', label: 'CRM', icon: Users },
   { key: 'email', label: 'Email Manager', icon: Mail },
   { key: 'smtp', label: 'SMTP', icon: Server },
@@ -367,27 +367,22 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
   }, []);
 
   // ─── Mobile back button support for admin panel ───
-  // Push history state when navigating to a non-dashboard tab
   useEffect(() => {
     if (activeTab !== 'dashboard') {
       window.history.pushState({ adminTab: activeTab }, '');
     }
   }, [activeTab]);
 
-  // Handle popstate (mobile back button)
   useEffect(() => {
     const handlePopState = () => {
       const history = tabHistoryRef.current;
       if (history.length > 1) {
-        // Pop the current tab and go to previous
         history.pop();
         const prevTab = history[history.length - 1];
         setActiveTab(prevTab);
       } else if (activeTabRef.current === 'dashboard') {
-        // Already on dashboard, go back to main app
         onNavigate('home');
       } else {
-        // Go back to dashboard
         setActiveTab('dashboard');
         tabHistoryRef.current = ['dashboard'];
       }
@@ -396,7 +391,6 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
     return () => window.removeEventListener('popstate', handlePopState);
   }, [onNavigate]);
 
-  // If not logged in, show login page (stays on admin route, not user website)
   if (!staffSessionId) return <AdminLoginPage />;
 
   const canAccess = (tab: Tab): boolean => {
@@ -408,7 +402,6 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
 
   const visibleTabs = TABS.filter(t => canAccess(t.key));
   const navigate = (tab: Tab) => {
-    // Track tab history for back navigation
     tabHistoryRef.current.push(tab);
     setActiveTab(tab);
     setSidebarOpen(false);
@@ -505,7 +498,6 @@ export default function AdminView({ onNavigate, onOpenWallet }: { onNavigate: (r
               <button onClick={() => setChangingPassword(false)} className="text-[10px] text-slate-500 hover:text-slate-300">Cancel</button>
             </div>
           )}
-          {/* Logout: only clear staff session — AdminLoginPage will render since staffSessionId becomes null */}
           <button
             onClick={() => { cms.logoutStaff(); }}
             className="w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-red-400 hover:bg-red-500/10 transition-colors">
