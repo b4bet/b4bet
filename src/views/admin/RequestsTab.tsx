@@ -27,8 +27,9 @@ type Period = 'all' | 'day' | 'week' | 'month' | 'year' | 'custom';
 type ActMode = 'accept' | 'cancel';
 type ActState = { id: string; mode: ActMode } | null;
 
+// 'All' option removed — default is always 'all' (show everything)
 const PERIODS: { key: Period; label: string }[] = [
-  { key: 'all', label: 'All' }, { key: 'day', label: 'Day' }, { key: 'week', label: 'Week' },
+  { key: 'day', label: 'Day' }, { key: 'week', label: 'Week' },
   { key: 'month', label: 'Month' }, { key: 'year', label: 'Year' }, { key: 'custom', label: 'Custom' },
 ];
 const MS: Record<string, number> = { day: 86400000, week: 604800000, month: 2592000000, year: 31536000000 };
