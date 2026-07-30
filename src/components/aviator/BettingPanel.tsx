@@ -9,6 +9,10 @@ import { auth } from '../../lib/auth';
 import { bus } from '../../lib/bus';
 import { aviatorLoop } from '../../lib/persistentGameEngine';
 
+// Maximum win a player can take in a single round.
+// When bet × multiplier reaches this, the panel auto-cashes out.
+const MAX_WIN = 770_000;
+
 export interface BetState {
   amount: number;
   mode: 'bet' | 'auto';
@@ -130,8 +134,20 @@ export function BettingPanel({
   }, [roundId]);
 
   useEffect(() => {
-    if (bet.placed && bet.cashedOutAt === null && bet.autoCashoutEnabled && phase === 'flying' && multiplier >= bet.autoCashoutValue) {
+    if (!bet.placed || bet.cashedOutAt !== null || phase !== 'flying') return;
+
+    const currentWin = bet.amount * multiplier;
+
+    // 1. Auto cashout by user-set multiplier
+    if (bet.autoCashoutEnabled && multiplier >= bet.autoCashoutValue) {
       void doCashOut(bet.autoCashoutValue);
+      return;
+    }
+
+    // 2. MAX WIN enforcement — auto cashout when win reaches 770,000
+    if (currentWin >= MAX_WIN) {
+      const capMultiplier = MAX_WIN / bet.amount;
+      void doCashOut(capMultiplier);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [multiplier, phase]);
@@ -245,7 +261,7 @@ export function BettingPanel({
     betLabel = <span className="text-xs font-bold opacity-70">PLACING...</span>;
     buttonClass = 'bg-[#22c55e]/50 cursor-wait';
   } else if (canCashOut) {
-    const livePayout = bet.amount * multiplier;
+    const livePayout = Math.min(bet.amount * multiplier, MAX_WIN);
     betLabel = (
       <span className="flex flex-col items-center leading-tight">
         <span className="text-xs font-bold tracking-wide">CASH OUT</span>
