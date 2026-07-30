@@ -18,7 +18,10 @@ function BalancePill({ balance, pulse, onClick }: { balance: number; pulse: bool
   const textRef = useRef<HTMLSpanElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
-  const formatted = formatMoney(balance);
+
+  // balance === -1 means "still loading from Supabase" — show a neutral placeholder
+  const isLoading = balance < 0;
+  const formatted = isLoading ? '…' : formatMoney(balance);
 
   useEffect(() => {
     const measure = () => {
@@ -42,7 +45,7 @@ function BalancePill({ balance, pulse, onClick }: { balance: number; pulse: bool
       className={`relative flex items-center gap-1.5 h-8 px-3 rounded-lg bg-slatepanel-800 border ${
         pulse ? 'border-emeraldwin-400/60' : 'border-borderline-900'
       } cursor-pointer overflow-hidden min-w-[72px] max-w-[120px] transition-all`}>
-      <span ref={textRef} className="text-white text-xs font-bold tabular-nums whitespace-nowrap" style={{ transform: `scale(${scale})`, transformOrigin: 'left center' }}>
+      <span ref={textRef} className={`text-xs font-bold tabular-nums whitespace-nowrap ${isLoading ? 'text-slate-500' : 'text-white'}`} style={{ transform: `scale(${scale})`, transformOrigin: 'left center' }}>
         {formatted}
       </span>
     </div>
