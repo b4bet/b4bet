@@ -175,6 +175,9 @@ export default function App() {
   const openAuthModal = (mode: AuthModalMode) => { setAuthModalMode(mode); setAuthModalOpen(true); };
   const navigate = (r: Route) => setRoute(r);
 
+  // Open menu drawer (ProfileDrawer)
+  const openMenu = () => setWalletOpen(true);
+
   useEffect(() => {
     const off = bus.on('ui:open_support_chat', () => setSupportChatOpen(true));
     return off;
@@ -224,16 +227,16 @@ export default function App() {
         {route === 'games'     && <GamesView onNavigate={navigate} />}
         {route === 'deposit'   && <DepositView />}
         {route === 'wallet'    && <WalletView />}
-        {route === 'withdraw'  && <WithdrawView />}
+        {route === 'withdraw'  && <WithdrawView onNavigate={navigate} />}
         {route === 'profile'   && (
           <ProfileView
             onNavigate={navigate}
             onOpenSupport={() => setSupportChatOpen(true)}
             onOpenAuthModal={openAuthModal}
-            onOpenMenu={() => setWalletOpen(true)}
+            onOpenMenu={openMenu}
           />
         )}
-        {route === 'referral'  && <ReferralView onOpenWallet={() => setWalletOpen(true)} />}
+        {route === 'referral'  && <ReferralView onNavigate={navigate} onOpenMenu={openMenu} />}
         {route === 'admin'     && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
         {route === 'history'   && <HistoryView />}
         {route === 'crash'     && <CrashView />}
