@@ -100,7 +100,7 @@ function LoginForm({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
@@ -114,19 +114,24 @@ function LoginForm({
     }
 
     setLoading(true);
-    setTimeout(async () => {
+    try {
+      await new Promise(r => setTimeout(r, 400));
       const result = await auth.login(identifier, password);
-      setLoading(false);
       if (result.ok) {
         onSuccess();
       } else {
         setError(result.error ?? 'Login failed.');
       }
-    }, 400);
+    } catch (err) {
+      setError('An unexpected error occurred. Please try again.');
+      console.error('[LoginForm] error:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-4">
       <div className="space-y-1">
         {/* Email or Mobile — no icon in label */}
         <div>
@@ -214,24 +219,29 @@ function SignupForm({
     if (ref) setReferralCode(ref);
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
-    setTimeout(async () => {
+    try {
+      await new Promise(r => setTimeout(r, 400));
       const result = await auth.register(username, email, password, referralCode, mobile);
-      setLoading(false);
       if (result.ok) {
         bus.emit(Topics.AuthState, auth.getSession());
         onSuccess();
       } else {
         setError(result.error ?? 'Registration failed.');
       }
-    }, 400);
+    } catch (err) {
+      setError('An unexpected error occurred. Please try again.');
+      console.error('[SignupForm] error:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-3">
+    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-3">
       {/* Username */}
       <div>
         <label className="text-xs font-medium text-slate-400 mb-1 flex items-center gap-1">
@@ -348,17 +358,22 @@ function ForgotForm({ onBack }: { onBack: () => void }) {
     e.preventDefault();
     setError(null);
     setLoading(true);
-    const result = await auth.forgotPassword(email);
-    setLoading(false);
-    if (result.ok) {
-      setCode('');
-      setStep('verify');
-    } else {
-      setError(result.error ?? 'Could not send reset code.');
+    try {
+      const result = await auth.forgotPassword(email);
+      if (result.ok) {
+        setCode('');
+        setStep('verify');
+      } else {
+        setError(result.error ?? 'Could not send reset code.');
+      }
+    } catch {
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
+      setLoading(false);
     }
   };
 
-  const handleVerify = (e: React.FormEvent) => {
+  const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (newPassword !== confirmPassword) {
@@ -366,15 +381,19 @@ function ForgotForm({ onBack }: { onBack: () => void }) {
       return;
     }
     setLoading(true);
-    setTimeout(async () => {
+    try {
+      await new Promise(r => setTimeout(r, 600));
       const result = await auth.resetPassword(code, newPassword);
-      setLoading(false);
       if (result.ok) {
         setStep('success');
       } else {
         setError(result.error ?? 'Could not reset password.');
       }
-    }, 600);
+    } catch {
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (step === 'success') {
@@ -396,7 +415,7 @@ function ForgotForm({ onBack }: { onBack: () => void }) {
 
   if (step === 'verify') {
     return (
-      <form onSubmit={handleVerify} className="space-y-4">
+      <form onSubmit={(e) => { void handleVerify(e); }} className="space-y-4">
         <div className="text-center space-y-1">
           <p className="font-semibold text-white">Check your email</p>
           <p className="text-xs text-slate-400">A 6-digit recovery code was sent to {email}.</p>
@@ -456,7 +475,7 @@ function ForgotForm({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <form onSubmit={handleRequest} className="space-y-4">
+    <form onSubmit={(e) => { void handleRequest(e); }} className="space-y-4">
       <p className="text-xs text-slate-400">
         Enter your registered email address and we&apos;ll send a 6-digit recovery code via email.
       </p>
@@ -500,7 +519,7 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (newPassword !== confirmPassword) {
@@ -508,16 +527,20 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
       return;
     }
     setLoading(true);
-    setTimeout(async () => {
+    try {
+      await new Promise(r => setTimeout(r, 400));
       const result = await auth.changePassword(currentPassword, newPassword);
-      setLoading(false);
       if (result.ok) {
         setSuccess(true);
         setTimeout(onClose, 1500);
       } else {
         setError(result.error ?? 'Could not change password.');
       }
-    }, 400);
+    } catch {
+      setError('An unexpected error occurred. Please try again.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (success) {
@@ -530,7 +553,7 @@ function ChangePasswordForm({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={(e) => { void handleSubmit(e); }} className="space-y-4">
       <div>
         <label className="text-xs font-medium text-slate-400 mb-1 block">Current Password</label>
         <PasswordInput
