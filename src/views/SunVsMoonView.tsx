@@ -230,7 +230,10 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const balance   = useBalance();
   const limits    = store.getGameLimits('sunvsmoon');
 
-  const [betAmount,      setBetAmount]      = useState(limits.min > 0 ? limits.min : 100);
+  const [betAmount,      setBetAmount]      = useState(() => {
+    const def = store.getGameDefaultBet('sunvsmoon');
+    return def > 0 ? def : (limits.min > 0 ? limits.min : 100);
+  });
   const [lastQuickStake, setLastQuickStake] = useState<number | null>(null);
 
   const initEng = sunMoonLoop.getState();
