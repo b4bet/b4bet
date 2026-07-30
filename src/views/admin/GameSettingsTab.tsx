@@ -30,6 +30,7 @@ interface GameRow {
   display_name: string;
   is_active: boolean;
   min_bet: number;
+  default_bet: number;
   max_bet: number;
   category: string;
 }
@@ -49,7 +50,7 @@ export default function GameSettingsTab() {
 
     const { data, error } = await supabase
       .from('games')
-      .select('id, slug, name, display_name, is_active, min_bet, max_bet, category')
+      .select('id, slug, name, display_name, is_active, min_bet, default_bet, max_bet, category')
       .order('name');
 
     if (error) {
@@ -69,7 +70,9 @@ export default function GameSettingsTab() {
   }
 
   async function saveGame(game: GameRow) {
+    // Validation: default_bet must be between min and max
     if (game.min_bet > game.max_bet) return;
+    if (game.default_bet < game.min_bet || game.default_bet > game.max_bet) return;
 
     setSaveStatus(s => ({ ...s, [game.id]: 'saving' }));
 
@@ -78,6 +81,7 @@ export default function GameSettingsTab() {
       .update({
         is_active: game.is_active,
         min_bet: game.min_bet,
+        default_bet: game.default_bet,
         max_bet: game.max_bet,
         display_name: game.display_name,
         updated_at: new Date().toISOString(),
@@ -93,7 +97,7 @@ export default function GameSettingsTab() {
     setSaveStatus(s => ({ ...s, [game.id]: 'saved' }));
     setTimeout(() => setSaveStatus(s => ({ ...s, [game.id]: 'idle' })), 2500);
 
-    // Refresh in-memory limits so games pick up new values without page reload
+    // Refresh in-memory limits + default bets so games pick up new values without page reload
     await store.loadGameLimitsFromGamesTable();
   }
 
@@ -163,7 +167,7 @@ export default function GameSettingsTab() {
       <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
         <Info className="w-3.5 h-3.5 text-blue-400 mt-0.5 flex-shrink-0" />
         <p className="text-[11px] text-blue-300">
-          Min/Max bet <strong>paise</strong> mein hai — 100 paise = ₹1.
+          Amounts <strong>paise</strong> mein hain — 100 paise = ₹1.
           Save karte hi games mein turant enforce hoga.
         </p>
       </div>
@@ -174,7 +178,9 @@ export default function GameSettingsTab() {
           const meta = GAME_META[g.slug] ?? { ...DEFAULT_META, label: g.display_name };
           const Icon = meta.icon;
           const status = saveStatus[g.id] ?? 'idle';
-          const hasError = g.min_bet > g.max_bet;
+          const hasMinMaxError = g.min_bet > g.max_bet;
+          const hasDefaultError = g.default_bet < g.min_bet || g.default_bet > g.max_bet;
+          const hasError = hasMinMaxError || hasDefaultError;
 
           return (
             <div key={g.id} className={`rounded-xl border p-4 space-y-3 ${meta.bg}`}>
@@ -203,16 +209,36 @@ export default function GameSettingsTab() {
                 </button>
               </div>
 
-              {/* Inputs */}
-              <div className="grid grid-cols-3 gap-3">
+              {/* Display Name — full width row */}
+              <div>
+                <label className="text-[11px] text-slate-400 mb-1 block">Display Name</label>
+                <input
+                  value={g.display_name}
+                  onChange={e => update(g.id, { display_name: e.target.value })}
+                  className="w-full bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none transition-colors"
+                />
+              </div>
+
+              {/* 3 bet amount inputs */}
+              <div className="grid grid-cols-3 gap-2">
+                {/* Default Bet */}
                 <div>
-                  <label className="text-[11px] text-slate-400 mb-1 block">Display Name</label>
+                  <label className="text-[11px] text-violet-300 mb-1 block font-semibold">
+                    Default Bet <span className="text-slate-600 font-normal">(paise)</span>
+                  </label>
                   <input
-                    value={g.display_name}
-                    onChange={e => update(g.id, { display_name: e.target.value })}
-                    className="w-full bg-slate-900/60 border border-slate-700/60 rounded-lg px-3 py-2 text-sm text-white focus:border-violet-500 focus:outline-none transition-colors"
+                    type="number"
+                    min={0}
+                    value={g.default_bet}
+                    onChange={e => update(g.id, { default_bet: Number(e.target.value) })}
+                    className={`w-full bg-slate-900/60 border rounded-lg px-3 py-2 text-sm text-white focus:outline-none transition-colors ${
+                      hasDefaultError ? 'border-red-500/60' : 'border-violet-500/50 focus:border-violet-400'
+                    }`}
                   />
+                  <p className="text-[10px] text-violet-400/70 mt-0.5">₹{(g.default_bet / 100).toFixed(2)}</p>
                 </div>
+
+                {/* Min Bet */}
                 <div>
                   <label className="text-[11px] text-slate-400 mb-1 block">
                     Min Bet <span className="text-slate-600">(paise)</span>
@@ -223,11 +249,13 @@ export default function GameSettingsTab() {
                     value={g.min_bet}
                     onChange={e => update(g.id, { min_bet: Number(e.target.value) })}
                     className={`w-full bg-slate-900/60 border rounded-lg px-3 py-2 text-sm text-white focus:outline-none transition-colors ${
-                      hasError ? 'border-red-500/60' : 'border-slate-700/60 focus:border-violet-500'
+                      hasMinMaxError ? 'border-red-500/60' : 'border-slate-700/60 focus:border-violet-500'
                     }`}
                   />
                   <p className="text-[10px] text-slate-600 mt-0.5">₹{(g.min_bet / 100).toFixed(2)}</p>
                 </div>
+
+                {/* Max Bet */}
                 <div>
                   <label className="text-[11px] text-slate-400 mb-1 block">
                     Max Bet <span className="text-slate-600">(paise)</span>
@@ -238,17 +266,24 @@ export default function GameSettingsTab() {
                     value={g.max_bet}
                     onChange={e => update(g.id, { max_bet: Number(e.target.value) })}
                     className={`w-full bg-slate-900/60 border rounded-lg px-3 py-2 text-sm text-white focus:outline-none transition-colors ${
-                      hasError ? 'border-red-500/60' : 'border-slate-700/60 focus:border-violet-500'
+                      hasMinMaxError ? 'border-red-500/60' : 'border-slate-700/60 focus:border-violet-500'
                     }`}
                   />
                   <p className="text-[10px] text-slate-600 mt-0.5">₹{(g.max_bet / 100).toFixed(2)}</p>
                 </div>
               </div>
 
-              {hasError && (
+              {/* Validation errors */}
+              {hasMinMaxError && (
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30">
                   <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
                   <p className="text-xs text-amber-300">Min bet, max bet se zyada nahi ho sakta</p>
+                </div>
+              )}
+              {hasDefaultError && !hasMinMaxError && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                  <p className="text-xs text-amber-300">Default bet, min aur max ke beech hona chahiye</p>
                 </div>
               )}
 
