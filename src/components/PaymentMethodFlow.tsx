@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft, Wallet, X, Info, Copy, Coins, AlertTriangle } from 'lucide-react';
 import { useAuth, useBalance } from '../lib/hooks';
@@ -35,9 +35,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const selectedRef = useRef<ManualMethod | null>(null);
   selectedRef.current = selected;
 
-  // Flag to prevent popstate from firing after intentional close/submit
-  const closingRef = useRef(false);
-
   const showAlert = (title: string, body: string) => {
     if (alertTimer.current) clearTimeout(alertTimer.current);
     if (alertFadeTimer.current) clearTimeout(alertFadeTimer.current);
@@ -56,7 +53,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
   useEffect(() => {
     if (open) {
-      closingRef.current = false;
       setSelected(null);
       setSelectedCrypto(null);
       setAmount('');
@@ -66,38 +62,26 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   }, [open]);
 
-  // Push one state when flow opens so mobile back button works
+  // Mobile back button — push ONE state on open, handle popstate with React state only
   useEffect(() => {
     if (!open) return;
-    window.history.pushState({ pmf: 'method-list' }, '');
-    return () => {};
+    window.history.pushState({ pmf: true }, '');
+
+    const onPop = () => {
+      if (selectedRef.current) {
+        // form → method list (pure state, push again so next back closes)
+        setSelected(null);
+        setSelectedCrypto(null);
+        window.history.pushState({ pmf: true }, '');
+      } else {
+        // method list → close
+        onClose();
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
-
-  // Push another state when method is selected
-  useEffect(() => {
-    if (!open || !selected) return;
-    window.history.pushState({ pmf: 'method-form' }, '');
-  }, [selected, open]);
-
-  // Mobile back button: handle popstate
-  const handlePopState = useCallback(() => {
-    if (closingRef.current) return;
-    if (!open) return;
-    if (selectedRef.current) {
-      // Go back from form → method list
-      setSelected(null);
-      setSelectedCrypto(null);
-    } else {
-      // Go back from method list → close
-      onClose();
-    }
-  }, [open, onClose]);
-
-  useEffect(() => {
-    if (!open) return;
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [open, handlePopState]);
 
   if (!open) return null;
 
@@ -121,10 +105,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     return { min: selected.minAmount || 0, max: selected.maxAmount || Infinity };
   };
 
-  // Close: just call onClose — do NOT call history.go() as it navigates out of the site
-  const handleClose = () => {
-    closingRef.current = true;
-    onClose();
+  // X button — just close, no history navigation
+  const handleClose = () => onClose();
+
+  // Back arrow on form screen — pure React state, no history
+  const handleBackToMethodList = () => {
+    setSelected(null);
+    setSelectedCrypto(null);
   };
 
   const handleSubmit = (e?: React.FormEvent | React.MouseEvent) => {
@@ -162,7 +149,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails), session?.userId);
     }
 
-    // Show success toast then close — no history.go() to avoid navigating out of the site
     cms.toast({
       title: flow === 'deposit' ? 'Deposit Request Submitted' : 'Withdrawal Request Submitted',
       body: 'Please wait 5 minutes, your payment is processing...',
@@ -175,10 +161,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     navigator.clipboard?.writeText(text).then(() => {
       cms.toast({ title: 'Copied', body: 'Address copied to clipboard.', kind: 'success' });
     }).catch(() => {});
-  };
-
-  const handleBackToMethodList = () => {
-    window.history.back();
   };
 
   const alertPortal = alertPopup
