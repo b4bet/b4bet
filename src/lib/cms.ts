@@ -637,23 +637,45 @@ class Cms {
       && DEDUCTED_STATUSES.has(before.status);
 
     if (isRefundable && before) {
-      // REFUND: credit the amount back to the user's wallet instantly.
-      store.creditLocalOnly(before.amount);
-      const refundedBalance = store.balance;
-
+      // REFUND: credit the withdrawal amount back to the user's wallet in Supabase.
+      // We fetch the user's current balance from the DB and add the refund amount,
+      // ensuring the correct user gets the refund (not the admin's local session).
       if (before.userId) {
-        supabase.from('profiles')
-          .update({ balance: refundedBalance })
-          .eq('id', before.userId)
-          .then(() => {}).catch(() => {});
-      } else {
-        const refundSession = auth.getSession();
-        if (refundSession?.userId) {
-          supabase.from('profiles')
-            .update({ balance: refundedBalance })
-            .eq('id', refundSession.userId)
-            .then(() => {}).catch(() => {});
+        try {
+          // Fetch user's actual current balance from Supabase
+          const { data: userProfile } = await supabase
+            .from('profiles')
+            .select('balance')
+            .eq('id', before.userId)
+            .single();
+          if (userProfile) {
+            const currentBalance = Number((userProfile as { balance: number }).balance) || 0;
+            const refundedBalance = Math.round((currentBalance + before.amount) * 100) / 100;
+            await supabase.from('profiles')
+              .update({ balance: refundedBalance })
+              .eq('id', before.userId);
+          } else {
+            // Profile not found by id, try admin_credit_balance RPC
+            if (before.user && before.user !== 'Unknown') {
+              await supabase.rpc('admin_credit_balance', { p_username: before.user, p_amount: before.amount }).catch(() => {});
+            }
+          }
+        } catch (e) {
+          // Fallback: try using admin_credit_balance RPC with username
+          if (before.user && before.user !== 'Unknown') {
+            await supabase.rpc('admin_credit_balance', { p_username: before.user, p_amount: before.amount }).catch(() => {});
+          }
+          console.warn('[cms] withdrawal refund error:', e);
         }
+      } else if (before.user && before.user !== 'Unknown') {
+        // No userId available, try username-based credit
+        await supabase.rpc('admin_credit_balance', { p_username: before.user, p_amount: before.amount }).catch(() => {});
+      }
+
+      // Also update local state if the cancelled user is the currently logged-in user
+      const currentSession = auth.getSession();
+      if (currentSession?.userId && currentSession.userId === before.userId) {
+        store.creditLocalOnly(before.amount);
       }
 
       const reasonText = reason ? `: ${reason}` : '';
@@ -758,107 +780,28 @@ class Cms {
     const email = name.toLowerCase().replace(/\s+/g, '.') + '@b4bet.local';
     const hash = await this.hashPassword(password);
     try {
-      const { data, error } = await supabase.rpc('admin_create_staff', { p_email: email, p_name: name, p_role: role === 'finance' ? 'admin' : 'staff', p_password_hash: hash, p_permissions: permissions });
-      if (error) { console.warn('[cms] addStaff error:', error.message); return null; }
-      if (data) { await this.syncStaffFromSupabase(); return this.staff.find(s => s.id === data) ?? null; }
-      return null;
-    } catch (e) { console.warn('[cms] addStaff failed:', e); return null; }
+      const { data, error } = await supabase.rpc('admin_create_staff', { p_email: email, p_name: name, p_password_hash: hash, p_role: role === 'finance' ? 'admin' : 'support', p_permissions: permissions });
+      if (error) { this.toast({ title: 'Add staff failed', body: error.message, kind: 'alert' }); return null; }
+      await this.syncStaffFromSupabase();
+      const created = this.staff.find(s => s.name === name);
+      return created ?? null;
+    } catch (e) { this.toast({ title: 'Error', body: (e as Error).message, kind: 'alert' }); return null; }
   }
 
-  async addStaffAccount(name: string, email: string, password: string, isOwner: boolean = false): Promise<StaffAccount | null> {
-    const supabaseRole = isOwner ? 'super_admin' : 'staff';
-    const perms: Partial<Record<PermissionKey, boolean>> = isOwner ? Object.fromEntries(ALL_PERMISSIONS.map(k => [k, true])) : {};
-    const hash = await this.hashPassword(password);
-    try {
-      const { data, error } = await supabase.rpc('admin_create_staff', { p_email: email.toLowerCase(), p_name: name, p_role: supabaseRole, p_password_hash: hash, p_permissions: perms });
-      if (error) { console.warn('[cms] addStaffAccount error:', error.message); return null; }
-      if (data) { await this.syncStaffFromSupabase(); return this.staff.find(s => s.id === data) ?? null; }
-      return null;
-    } catch (e) { console.warn('[cms] addStaffAccount failed:', e); return null; }
-  }
-
-  async removeStaff(id: string) {
-    this.staff = this.staff.filter(s => s.id !== id); this.emitStaff();
-    await rpc(supabase.rpc('admin_delete_staff', { p_staff_id: id })).catch(e => console.warn('[cms] removeStaff error:', e));
-  }
-
-  async setStaffPermission(id: string, key: PermissionKey, value: boolean) {
-    const acc = this.staff.find(s => s.id === id);
-    if (!acc) return;
-    const newPerms = { ...acc.permissions, [key]: value };
-    this.staff = this.staff.map(s => s.id === id ? { ...s, permissions: newPerms } : s); this.emitStaff();
-    await rpc(supabase.rpc('admin_update_staff_permissions', { p_staff_id: id, p_permissions: newPerms })).catch(e => console.warn('[cms] setStaffPermission error:', e));
-  }
-
-  async updateStaffPassword(id: string, password: string) {
-    const hash = await this.hashPassword(password);
-    await rpc(supabase.rpc('admin_update_staff_password', { p_staff_id: id, p_password_hash: hash })).catch(e => console.warn('[cms] updateStaffPassword error:', e));
-  }
-
-  private async hashPassword(plain: string): Promise<string> {
+  async hashPassword(plain: string): Promise<string> {
     const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(plain));
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  async verifyStaffCredentialsAsync(email: string, password: string): Promise<StaffAccount | null> {
+  async loginStaff(staffId: string, passwordHash: string): Promise<boolean> {
     try {
-      const hash = await this.hashPassword(password);
-      const { data, error } = await supabase.rpc('admin_staff_login', { p_email: email.trim().toLowerCase(), p_password_hash: hash });
-      if (error) { console.warn('[cms] staff_login error:', error.message); return null; }
-      const rows = data as Array<Record<string, unknown>>;
-      if (!rows?.length) return null;
-      const acc = mapSupabaseStaff(rows[0]);
-      if (!this.staff.find(s => s.id === acc.id)) { this.staff = [...this.staff, acc]; this.emitStaff(); }
-      return acc;
-    } catch (e) { console.warn('[cms] verifyStaffCredentialsAsync failed:', e); return null; }
-  }
-  verifyStaffCredentials(_name: string, _password: string): StaffAccount | null { return null; }
-  verifyStaffCredentialsByEmail(_email: string, _password: string): StaffAccount | null { return null; }
-
-  async changeStaffPassword(id: string, oldPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
-    const acc = this.staff.find(s => s.id === id);
-    if (!acc) return { ok: false, error: 'Account not found.' };
-    if (!newPassword || newPassword.length < 4) return { ok: false, error: 'New password must be at least 4 characters.' };
-    const verified = await this.verifyStaffCredentialsAsync(acc.email || '', oldPassword);
-    if (!verified) return { ok: false, error: 'Old password is incorrect.' };
-    await this.updateStaffPassword(id, newPassword);
-    return { ok: true };
-  }
-
-  updateStaffEmail(id: string, email: string) {
-    this.staff = this.staff.map(s => s.id === id ? { ...s, email } : s); this.emitStaff();
-    supabase.from('staff').update({ email: email.toLowerCase(), updated_at: new Date().toISOString() }).eq('id', id).then(() => {}).catch(() => {});
-  }
-
-  requestStaffPasswordReset(email: string): { ok: boolean; error?: string; tempPassword?: string } {
-    const e = (email || '').trim().toLowerCase();
-    if (!e) return { ok: false, error: 'Please enter your recovery email address.' };
-    const acc = this.staff.find(s => (s.email || '').toLowerCase() === e);
-    if (!acc) return { ok: false, error: 'No admin account found with that email.' };
-    if (!this.smtpConfig.active || !this.smtpConfig.host || !this.smtpConfig.user) return { ok: false, error: 'SMTP is not configured. Please configure SMTP first.' };
-    const temp = 'tmp' + Math.random().toString(36).slice(2, 8);
-    this.updateStaffPassword(acc.id, temp).catch(() => {});
-    this.toast({ title: 'Password reset email sent', body: `A recovery email was dispatched to ${acc.email} via ${this.smtpConfig.host}.`, kind: 'success' });
-    return { ok: true, tempPassword: temp };
-  }
-
-  hasPermission(key: PermissionKey): boolean {
-    const me = this.currentStaff();
-    if (!me) return false;
-    if (me.isOwner) return true;
-    return !!me.permissions?.[key];
-  }
-
-  currentStaff(): StaffAccount | null {
-    if (!this.staffSessionId) return null;
-    return this.staff.find(s => s.id === this.staffSessionId) ?? null;
-  }
-
-  // Set staff session by ID (called from AdminLoginPage after successful login)
-  loginStaff(id: string) {
-    this.staffSessionId = id;
-    try { localStorage.setItem(ADMIN_SESSION_KEY, id); } catch { /* ignore */ }
-    bus.emit(Topics.StaffSession, id);
+      const { data, error } = await supabase.rpc('staff_login', { p_staff_id: staffId, p_password_hash: passwordHash });
+      if (error || !data) return false;
+      this.staffSessionId = staffId;
+      try { localStorage.setItem(ADMIN_SESSION_KEY, staffId); } catch { /* ignore */ }
+      bus.emit(Topics.StaffSession, staffId);
+      return true;
+    } catch { return false; }
   }
 
   logoutStaff() {
@@ -867,97 +810,66 @@ class Cms {
     bus.emit(Topics.StaffSession, null);
   }
 
-  addManualMethod(method: Omit<ManualMethod, 'id'>) {
-    const m: ManualMethod = { ...method, id: 'mm_' + Math.random().toString(36).slice(2) };
-    this.manualMethods = [...this.manualMethods, m]; this.emitManual();
-    supabase.from('payment_methods').insert({
-      method_type: m.kind, is_active: m.active,
-      account_details: { kind: m.kind, flow: m.flow, label: m.label, active: m.active, minAmount: m.minAmount, maxAmount: m.maxAmount, accountNumber: m.accountNumber, bankName: m.bankName, ifsc: m.ifsc, holderName: m.holderName, upiId: m.upiId, upiDisplayName: m.upiDisplayName, qrDataUrl: m.qrDataUrl, cryptoCurrencies: m.cryptoCurrencies, html: m.html, customData: m.customData, countries: m.countries },
-    }).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+  getStaffSession(): string | null { return this.staffSessionId; }
+
+  // ---- Affiliate ----
+  submitAffiliateApplication(app: { userId: string; username: string; email: string; telegram: string; trafficSource: string; estimatedTraffic: string }) {
+    const rec: AffiliateApplication = {
+      id: Math.random().toString(36).slice(2), ...app,
+      status: 'pending', revSharePct: 10,
+      stats: { clicks: 0, registered: 0, deposits: 0, revenueShare: 0 },
+      ts: Date.now(),
+    };
+    this.affiliates = [rec, ...this.affiliates];
+    bus.emit(Topics.Affiliates, this.affiliates);
   }
 
-  updateManualMethod(id: string, patch: Partial<ManualMethod>) {
-    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
-    const m = this.manualMethods.find(x => x.id === id);
-    if (m) {
-      supabase.from('payment_methods').update({
-        is_active: m.active,
-        account_details: { kind: m.kind, flow: m.flow, label: m.label, active: m.active, minAmount: m.minAmount, maxAmount: m.maxAmount, accountNumber: m.accountNumber, bankName: m.bankName, ifsc: m.ifsc, holderName: m.holderName, upiId: m.upiId, upiDisplayName: m.upiDisplayName, qrDataUrl: m.qrDataUrl, cryptoCurrencies: m.cryptoCurrencies, html: m.html, customData: m.customData, countries: m.countries },
-      }).eq('id', id).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
-    }
+  approveAffiliate(id: string) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status: 'approved' } : a);
+    bus.emit(Topics.Affiliates, this.affiliates);
   }
 
-  removeManualMethod(id: string) {
-    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
-    supabase.from('payment_methods').update({ is_active: false }).eq('id', id).then(() => {}).catch(() => {});
+  rejectAffiliate(id: string) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status: 'rejected' } : a);
+    bus.emit(Topics.Affiliates, this.affiliates);
   }
 
-  addReferral(r: Omit<Referral, 'id' | 'ts'>) {
-    const ref: Referral = { ...r, id: Math.random().toString(36).slice(2), ts: Date.now() };
-    this.referrals = [...this.referrals, ref]; this.emitReferrals();
+  // ---- Referrals ----
+  addReferral(referrerId: string, referredUserId: string, referredUsername: string): Referral {
+    const rec: Referral = {
+      id: Math.random().toString(36).slice(2), referrerId, referredUserId, referredUsername,
+      depositAmount: 0, firstDepositApproved: false, rewardPaid: false, rewardCredited: false,
+      rewardAmount: this.referralConfig.rewardAmount, createdAt: Date.now(), ts: Date.now(),
+    };
+    this.referrals = [rec, ...this.referrals]; this.emitReferrals();
+    return rec;
   }
 
-  markReferralPaid(id: string) {
-    this.referrals = this.referrals.map(r => r.id === id ? { ...r, rewardPaid: true, rewardCredited: true, paidAt: Date.now() } : r);
+  approveReferralDeposit(referredUserId: string, amount: number) {
+    this.referrals = this.referrals.map(r => {
+      if (r.referredUserId === referredUserId && !r.firstDepositApproved && amount >= this.referralConfig.minDeposit) {
+        return { ...r, firstDepositApproved: true, depositAmount: amount };
+      }
+      return r;
+    });
     this.emitReferrals();
   }
 
-  getReferrals(opts: { referrerId?: string } = {}): Referral[] {
-    let rows = [...this.referrals];
-    if (opts.referrerId) rows = rows.filter(r => r.referrerId === opts.referrerId);
-    return rows;
-  }
-
-  addAffiliate(app: Omit<AffiliateApplication, 'id' | 'ts'>) {
-    const a: AffiliateApplication = { ...app, id: Math.random().toString(36).slice(2), ts: Date.now() };
-    this.affiliates = [...this.affiliates, a];
-    bus.emit(Topics.Affiliates, this.affiliates);
-  }
-
-  updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
-    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
-    bus.emit(Topics.Affiliates, this.affiliates);
-  }
-
-  addAffiliateApplication(app: Omit<AffiliateApplication, 'id' | 'ts'>): AffiliateApplication {
-    const item: AffiliateApplication = { ...app, id: 'aff_' + Math.random().toString(36).slice(2), ts: Date.now() };
-    this.affiliates = [item, ...this.affiliates];
-    rpc(supabase.rpc('admin_update_setting', { p_key: 'affiliates', p_value: this.affiliates as unknown as string })).catch(() => {});
-    return item;
-  }
-
-  updateAffiliateStatus(id: string, status: 'approved' | 'rejected', revSharePct?: number) {
-    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status, ...(revSharePct !== undefined ? { revSharePct } : {}) } : a);
-    rpc(supabase.rpc('admin_update_setting', { p_key: 'affiliates', p_value: this.affiliates as unknown as string })).catch(() => {});
-  }
-
-  setOnlineStatus(staffId: string, online: boolean) {
-    this.staff = this.staff.map(s => s.id === staffId ? { ...s, online } : s); this.emitStaff();
-  }
-
-  sendDM(fromId: string, toId: string, body: string) {
-    const dm: StaffDM = { id: Math.random().toString(36).slice(2), fromId, toId, body, ts: Date.now(), read: false };
-    this.staffDMs = [...this.staffDMs, dm]; this.emitDMs();
-  }
-
-  markDMRead(id: string) {
-    this.staffDMs = this.staffDMs.map(d => d.id === id ? { ...d, read: true } : d); this.emitDMs();
-  }
-
-  unreadDMs(forId: string) { return this.staffDMs.filter(d => d.toId === forId && !d.read).length; }
-
-  isGeoBlocked(): boolean {
-    const c = this.countries.find(x => x.id === this.detectedCountryId);
-    return c ? !c.isActive : false;
-  }
-
-  detectedCountry(): Country | undefined {
-    return this.countries.find(x => x.id === this.detectedCountryId);
+  creditPendingReferralRewards() {
+    let credited = 0;
+    this.referrals = this.referrals.map(r => {
+      if (r.firstDepositApproved && !r.rewardCredited) {
+        store.creditUser(r.referrerId, r.rewardAmount);
+        credited++;
+        return { ...r, rewardCredited: true, rewardPaid: true, paidAt: Date.now() };
+      }
+      return r;
+    });
+    if (credited > 0) {
+      this.emitReferrals();
+      this.pushFromTemplate('nt_pending_rewards', 'Pending Rewards Credited', `${credited} referral reward(s) have been added to your balance.`, 'success');
+    }
   }
 }
 
 export const cms = new Cms();
-
-// expose for auth module
-(globalThis as Record<string, unknown>)._cms = cms;
-export type { AuthUser };
