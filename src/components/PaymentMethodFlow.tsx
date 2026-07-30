@@ -32,8 +32,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alertFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Track history depth for back button
-  const historyDepthRef = useRef(0);
   const selectedRef = useRef<ManualMethod | null>(null);
   selectedRef.current = selected;
 
@@ -68,37 +66,29 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   }, [open]);
 
-  // ─── Mobile back button: push state when flow opens ───
+  // Push one state when flow opens so mobile back button works
   useEffect(() => {
-    if (!open) {
-      historyDepthRef.current = 0;
-      return;
-    }
+    if (!open) return;
     window.history.pushState({ pmf: 'method-list' }, '');
-    historyDepthRef.current = 1;
     return () => {};
   }, [open]);
 
-  // ─── Mobile back button: push state when method is selected ───
+  // Push another state when method is selected
   useEffect(() => {
-    if (!open) return;
-    if (selected) {
-      window.history.pushState({ pmf: 'method-form' }, '');
-      historyDepthRef.current = 2;
-    }
+    if (!open || !selected) return;
+    window.history.pushState({ pmf: 'method-form' }, '');
   }, [selected, open]);
 
-  // ─── Mobile back button: handle popstate ───
+  // Mobile back button: handle popstate
   const handlePopState = useCallback(() => {
-    // If we're intentionally closing (submit/X button), ignore this event
     if (closingRef.current) return;
     if (!open) return;
     if (selectedRef.current) {
+      // Go back from form → method list
       setSelected(null);
       setSelectedCrypto(null);
-      historyDepthRef.current = 1;
     } else {
-      historyDepthRef.current = 0;
+      // Go back from method list → close
       onClose();
     }
   }, [open, onClose]);
@@ -131,13 +121,9 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     return { min: selected.minAmount || 0, max: selected.maxAmount || Infinity };
   };
 
-  // Handle close with history cleanup — set closingRef so popstate is ignored
+  // Close: just call onClose — do NOT call history.go() as it navigates out of the site
   const handleClose = () => {
     closingRef.current = true;
-    if (historyDepthRef.current > 0) {
-      window.history.go(-historyDepthRef.current);
-      historyDepthRef.current = 0;
-    }
     onClose();
   };
 
@@ -148,77 +134,40 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     const amt = Number(amount);
     const limits = getEffectiveLimits();
 
-    if (!amt || amt <= 0) {
-      showAlert('Enter Amount', 'Amount must be greater than 0.');
-      return;
-    }
-    if (limits.min > 0 && amt < limits.min) {
-      showAlert('Invalid Amount', `Minimum ${flow} amount is ${store.currency}${limits.min}.`);
-      return;
-    }
-    if (limits.max > 0 && limits.max < Infinity && amt > limits.max) {
-      showAlert('Invalid Amount', `Maximum ${flow} amount is ${store.currency}${limits.max}.`);
-      return;
-    }
-    if (flow === 'withdrawal' && amt > balance) {
-      showAlert('Insufficient Balance', `Available: ${store.currency}${balance.toFixed(2)}`);
-      return;
-    }
+    if (!amt || amt <= 0) { showAlert('Enter Amount', 'Amount must be greater than 0.'); return; }
+    if (limits.min > 0 && amt < limits.min) { showAlert('Invalid Amount', `Minimum ${flow} amount is ${store.currency}${limits.min}.`); return; }
+    if (limits.max > 0 && limits.max < Infinity && amt > limits.max) { showAlert('Invalid Amount', `Maximum ${flow} amount is ${store.currency}${limits.max}.`); return; }
+    if (flow === 'withdrawal' && amt > balance) { showAlert('Insufficient Balance', `Available: ${store.currency}${balance.toFixed(2)}`); return; }
 
     let destLabel = selected.label;
     let destDetails: Record<string, string> = { amount: String(amt) };
 
     if (selected.kind === 'upi') {
-      if (flow === 'withdrawal' && !destination.trim()) {
-        showAlert('UPI ID Required', 'Enter your UPI ID.');
-        return;
-      }
-      destLabel = selected.label;
+      if (flow === 'withdrawal' && !destination.trim()) { showAlert('UPI ID Required', 'Enter your UPI ID.'); return; }
       if (destination.trim()) destDetails = { ...destDetails, upiId: destination.trim() };
     } else if (selected.kind === 'bank') {
-      if (flow === 'withdrawal' && !destination.trim()) {
-        showAlert('Account Details Required', 'Enter your bank account number.');
-        return;
-      }
-      destLabel = selected.label;
+      if (flow === 'withdrawal' && !destination.trim()) { showAlert('Account Details Required', 'Enter your bank account number.'); return; }
       if (destination.trim()) destDetails = { ...destDetails, accountNumber: destination.trim(), ifsc: details.trim() };
     } else if (selected.kind === 'crypto') {
-      if (!selectedCrypto) {
-        showAlert('Select Currency', 'Please select a crypto currency.');
-        return;
-      }
-      if (flow === 'withdrawal' && !destination.trim()) {
-        showAlert('Wallet Address Required', 'Enter your withdrawal wallet address.');
-        return;
-      }
+      if (!selectedCrypto) { showAlert('Select Currency', 'Please select a crypto currency.'); return; }
+      if (flow === 'withdrawal' && !destination.trim()) { showAlert('Wallet Address Required', 'Enter your withdrawal wallet address.'); return; }
       destLabel = `${selected.label} - ${selectedCrypto.name} (${selectedCrypto.network})`;
-      destDetails = {
-        ...destDetails,
-        currency: selectedCrypto.name,
-        network: selectedCrypto.network,
-        walletAddress: destination.trim(),
-        gasFee: String(selectedCrypto.gasFee || 0),
-      };
+      destDetails = { ...destDetails, currency: selectedCrypto.name, network: selectedCrypto.network, walletAddress: destination.trim(), gasFee: String(selectedCrypto.gasFee || 0) };
     }
 
     if (flow === 'deposit') {
-      if (!utr.trim()) {
-        showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.');
-        return;
-      }
+      if (!utr.trim()) { showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.'); return; }
       cms.submitDeposit(user, amt, destLabel, utr.trim(), JSON.stringify(destDetails), session?.userId);
     } else {
       cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails), session?.userId);
     }
 
-    // Show success toast BEFORE closing so it appears on top
+    // Show success toast then close — no history.go() to avoid navigating out of the site
     cms.toast({
       title: flow === 'deposit' ? 'Deposit Request Submitted' : 'Withdrawal Request Submitted',
       body: 'Please wait 5 minutes, your payment is processing...',
       kind: 'success',
     });
-
-    // Close the flow — closingRef prevents popstate from re-showing method list
     handleClose();
   };
 
@@ -228,12 +177,10 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }).catch(() => {});
   };
 
-  // Handle UI back button (from form to method list)
   const handleBackToMethodList = () => {
     window.history.back();
   };
 
-  // Error alert portal
   const alertPortal = alertPopup
     ? createPortal(
         <div
@@ -298,9 +245,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                   m.kind === 'crypto' ? 'border-blue-400/30 hover:border-blue-400/60' :
                   'border-borderline-900 hover:border-neon-400/60';
                 return (
-                  <button
-                    key={m.id}
-                    onClick={() => setSelected(m)}
+                  <button key={m.id} onClick={() => setSelected(m)}
                     className={`w-full text-left px-4 py-4 rounded-xl border transition-all bg-slatepanel-800 text-white font-semibold hover:bg-slatepanel-700 text-base ${kindColor}`}
                   >
                     <div className="flex items-center justify-between">
@@ -353,36 +298,18 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
           <div>
-            <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">
-              Amount ({store.currency})
-            </label>
-            <input
-              type="number"
-              inputMode="decimal"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              placeholder="0.00"
-              className="input w-full py-3 text-lg font-bold"
-            />
+            <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Amount ({store.currency})</label>
+            <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className="input w-full py-3 text-lg font-bold" />
             <div className="flex items-center gap-2 mt-2">
-              {limits.min > 0 && (
-                <span className="chip text-[10px] bg-slatepanel-800 text-slate-400">Min: {store.currency}{limits.min}</span>
-              )}
-              {limits.max > 0 && limits.max < Infinity && (
-                <span className="chip text-[10px] bg-slatepanel-800 text-slate-400">Max: {store.currency}{limits.max}</span>
-              )}
-              {limits.gasFee && limits.gasFee > 0 && (
-                <span className="chip text-[10px] bg-amberx-500/15 text-amberx-300">⛽ Gas Fee: {limits.gasFee}</span>
-              )}
+              {limits.min > 0 && <span className="chip text-[10px] bg-slatepanel-800 text-slate-400">Min: {store.currency}{limits.min}</span>}
+              {limits.max > 0 && limits.max < Infinity && <span className="chip text-[10px] bg-slatepanel-800 text-slate-400">Max: {store.currency}{limits.max}</span>}
+              {limits.gasFee && limits.gasFee > 0 && <span className="chip text-[10px] bg-amberx-500/15 text-amberx-300">⛽ Gas Fee: {limits.gasFee}</span>}
             </div>
             {flow === 'withdrawal' && limits.gasFee && limits.gasFee > 0 && Number(amount) > 0 && (
-              <p className="text-[10px] text-amberx-300 mt-1">
-                You will receive approximately {store.currency}{(Number(amount) - limits.gasFee).toFixed(2)} after gas fee deduction.
-              </p>
+              <p className="text-[10px] text-amberx-300 mt-1">You will receive approximately {store.currency}{(Number(amount) - limits.gasFee).toFixed(2)} after gas fee deduction.</p>
             )}
           </div>
 
-          {/* ── UPI method ── */}
           {selected.kind === 'upi' && (
             <div className="space-y-3">
               {flow === 'deposit' && (
@@ -414,7 +341,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             </div>
           )}
 
-          {/* ── Bank method ── */}
           {selected.kind === 'bank' && (
             <div className="space-y-3">
               {flow === 'deposit' && (
@@ -452,7 +378,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             </div>
           )}
 
-          {/* ── Crypto method ── */}
           {selected.kind === 'crypto' && (
             <div className="space-y-3">
               <div>
@@ -506,7 +431,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             </div>
           )}
 
-          {/* ── Submit ── */}
           <button
             type="button"
             onClick={(e) => handleSubmit(e)}
