@@ -233,7 +233,6 @@ function PriceChart({ priceHistory, currentPrice, selectedAsset, activeBets }: {
       const chartTimeSpan = chartEndTime - chartStartTime || 1;
 
       activeBets.forEach((bet) => {
-        // Only show bets for the current asset
         if (bet.asset.symbol !== selectedAsset.symbol) return;
 
         const secs   = Math.max(0, Math.floor((bet.expiryTimestamp - now) / 1000));
@@ -241,47 +240,39 @@ function PriceChart({ priceHistory, currentPrice, selectedAsset, activeBets }: {
         const remSecs = secs % 60;
         const timerText = `${mins}:${remSecs.toString().padStart(2, '0')}`;
 
-        // Entry line position based on time
         const entryTimeRatio = Math.max(0, Math.min(1, (bet.placedAt - chartStartTime) / chartTimeSpan));
         const entryX = CP.left + entryTimeRatio * CW;
         const entryY = CP.top + CH - ((bet.entryPrice - adjMin) / adjRange) * CH;
 
-        // Expiry line — position based on expiry timestamp
         const expiryTimeRatio = Math.max(0, Math.min(1, (bet.expiryTimestamp - chartStartTime) / chartTimeSpan));
 
         const color = bet.direction === 'UP' ? 'rgba(34,197,94,0.8)' : 'rgba(239,68,68,0.8)';
         const colorSolid = bet.direction === 'UP' ? '#22c55e' : '#ef4444';
 
-        // Entry vertical line (dashed)
         ctx.setLineDash([2, 3]);
         ctx.strokeStyle = color;
         ctx.lineWidth = 1;
         ctx.beginPath(); ctx.moveTo(entryX, CP.top); ctx.lineTo(entryX, H - CP.bottom); ctx.stroke();
         ctx.setLineDash([]);
 
-        // Entry price dot
         ctx.beginPath();
         ctx.arc(entryX, entryY, 4, 0, Math.PI * 2);
         ctx.fillStyle = colorSolid; ctx.fill();
         ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5; ctx.stroke();
 
-        // Moving expiry countdown line (solid, advancing)
         const expiryLineX = Math.min(CP.left + CW, CP.left + expiryTimeRatio * CW);
         ctx.setLineDash([]);
         ctx.strokeStyle = 'rgba(255,200,0,0.7)';
         ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.moveTo(expiryLineX, CP.top); ctx.lineTo(expiryLineX, H - CP.bottom); ctx.stroke();
 
-        // Fill zone between entry and expiry line
         ctx.fillStyle = bet.direction === 'UP' ? 'rgba(34,197,94,0.06)' : 'rgba(239,68,68,0.06)';
         ctx.fillRect(entryX, CP.top, expiryLineX - entryX, CH);
 
-        // Timer label on expiry line
         ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
         ctx.fillStyle = '#ffc800';
         ctx.fillText(timerText, expiryLineX, CP.top - 6);
 
-        // Direction label at entry
         ctx.font = '9px monospace'; ctx.fillStyle = colorSolid;
         ctx.fillText(bet.direction, entryX, CP.top - 6);
       });
@@ -383,7 +374,7 @@ function ActiveBetsList({ bets }: { bets: ActiveBet[] }) {
   );
 }
 
-export default function TradingGameView({ onBack: _onBack }: { onBack?: () => void }) {
+export default function TradingGameView({ onBack }: { onBack?: () => void }) {
   const balance = useBalance();
   const gameLogos = useGameLogos();
   const tradingLogo = gameLogos['trading'];
@@ -391,7 +382,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
   const [selectedAsset, setSelectedAsset] = useState<Asset>(ASSETS[0]);
   const [currentPrice,  setCurrentPrice]  = useState(ASSETS[0].basePrice);
   const [priceHistory,  setPriceHistory]  = useState<PricePoint[]>([]);
-  // Load persisted bets on mount
   const [activeBets,    setActiveBets]    = useState<ActiveBet[]>(() => loadBetsFromStorage());
   const [toasts,        setToasts]        = useState<ToastItem[]>([]);
   const [betsPanelOpen, setBetsPanelOpen] = useState(false);
@@ -411,10 +401,18 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
   useEffect(() => { currentPriceRef.current = currentPrice; }, [currentPrice]);
   useEffect(() => { assetRef.current = selectedAsset; }, [selectedAsset]);
 
-  // Persist active bets to localStorage whenever they change
   useEffect(() => {
     saveBetsToStorage(activeBets);
   }, [activeBets]);
+
+  // Mobile back button — go home
+  useEffect(() => {
+    if (!onBack) return;
+    window.history.pushState({ tradingView: true }, '');
+    const handlePopstate = () => { onBack(); };
+    window.addEventListener('popstate', handlePopstate);
+    return () => { window.removeEventListener('popstate', handlePopstate); };
+  }, [onBack]);
 
   useEffect(() => {
     if (!betsPanelOpen) return;
@@ -476,14 +474,12 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
       });
       updated.forEach((bet) => {
         if (bet.timeRemaining <= 0) {
-          // Determine win/loss based on final price vs entry
           const won =
             (bet.direction === 'UP'   && bet.currentPrice > bet.entryPrice) ||
             (bet.direction === 'DOWN' && bet.currentPrice < bet.entryPrice);
 
           const session = auth.getSession();
           if (session) {
-            // postSoft never throws for "Unknown action" — it just returns the response
             void GameService.tradingSettle(
               session.userId,
               bet.asset.symbol,
@@ -493,9 +489,7 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
               bet.currentPrice,
               bet.payoutPercentage,
             ).then((res) => {
-              // Check if server actually succeeded
               if (res.success && res.balance_after != null) {
-                // Server handled settlement
                 store.setBalance(res.balance_after);
                 if (res.won) {
                   addToast(`WIN +${store.currency}${Math.floor(res.profit)} on ${bet.asset.symbol}`, 'win');
@@ -514,7 +508,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
                   won: res.won,
                 } as Omit<TradingBetRecord, 'id' | 'ts'>);
               } else {
-                // Server didn't handle it (Unknown action / error) — settle locally
                 const payout = won ? bet.betAmount + (bet.betAmount * bet.payoutPercentage / 100) : 0;
                 if (won) {
                   store.credit(payout);
@@ -535,7 +528,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
                 } as Omit<TradingBetRecord, 'id' | 'ts'>);
               }
             }).catch(() => {
-              // Network error / 5xx — settle locally (no toast for error)
               const payout = won ? bet.betAmount + (bet.betAmount * bet.payoutPercentage / 100) : 0;
               if (won) {
                 store.credit(payout);
@@ -612,11 +604,9 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
     addToast(`${direction} on ${assetRef.current.symbol} ×${selectedTime}m`, 'info');
   }, [balance, betAmountStr, selectedTime, addToast, limits]);
 
-  // FIX: Don't clear active bets when switching assets
   const handleAssetChange = (asset: Asset) => {
     setSelectedAsset(asset);
     setAssetDropdown(false);
-    // DO NOT clear activeBets — they persist across asset switches
   };
 
   const adjustAmount = (delta: number) => {
@@ -627,15 +617,13 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
   const potentialWin = betAmount + (betAmount * selectedAsset.payout) / 100;
   const canBet       = betAmount > 0 && betAmount <= balance;
 
-  // Filter bets for display — show ALL active bets regardless of asset
   const allActiveBets = activeBets;
-  // For chart, only show bets of current asset
   const currentAssetBets = activeBets.filter((b) => b.asset.symbol === selectedAsset.symbol);
 
   return (
-    <div className="flex flex-col animate-fade-in h-[calc(100vh-130px)] px-3">
-      {/* ── Trading Header: round logo + "Trading" text + balance ── */}
-      <div className="flex items-center justify-between py-2 mb-1">
+    <div className="flex flex-col animate-fade-in h-[calc(100vh-52px)] px-3">
+      {/* ── Trading Header ── */}
+      <div className="flex items-center justify-between py-2 mb-1 flex-shrink-0">
         <div className="flex items-center gap-2">
           {tradingLogo ? (
             <img
@@ -660,7 +648,7 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
         </div>
       </div>
 
-      {/* ── Top bar: asset selector only ── */}
+      {/* ── Asset selector ── */}
       <div className="bg-gray-900 border border-gray-800 rounded-t-2xl px-3 py-2 flex items-center gap-2 flex-shrink-0">
         <div className="relative flex-1">
           <button
@@ -706,8 +694,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
 
       {/* ── Control panel ── */}
       <div className="bg-gray-900 border border-t-0 border-gray-800 rounded-b-2xl px-3 py-2.5 flex-shrink-0 space-y-2.5">
-
-        {/* Amount */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[10px] text-gray-400 uppercase tracking-wide">Amount</span>
@@ -740,7 +726,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
           </div>
         </div>
 
-        {/* Active Bets toggle — shows ALL bets across all assets */}
         <div ref={betsPanelRef}>
           <button
             onClick={() => setBetsPanelOpen(!betsPanelOpen)}
@@ -758,7 +743,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
           {betsPanelOpen && <ActiveBetsList bets={allActiveBets} />}
         </div>
 
-        {/* Expiration */}
         <div>
           <div className="flex items-center gap-1.5 mb-1.5">
             <Clock className="w-3 h-3 text-gray-400" />
@@ -777,7 +761,6 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
           </div>
         </div>
 
-        {/* UP/DOWN buttons */}
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={() => handlePlaceBet('UP')}
@@ -799,14 +782,12 @@ export default function TradingGameView({ onBack: _onBack }: { onBack?: () => vo
           </button>
         </div>
 
-        {/* Payout preview */}
         <div className="flex items-center justify-between px-1">
           <span className="text-[10px] text-gray-400">Potential win</span>
           <span className="text-[10px] font-bold text-emerald-400">+{Math.floor(potentialWin).toLocaleString()}</span>
         </div>
       </div>
 
-      {/* Toast notifications */}
       <div className="fixed top-4 right-4 left-4 sm:left-auto sm:w-80 z-[100] flex flex-col gap-2 pointer-events-none">
         {toasts.map((t) => (
           <div key={t.id} className="pointer-events-auto">
