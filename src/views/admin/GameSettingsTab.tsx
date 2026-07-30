@@ -4,7 +4,7 @@ import { store } from '@/lib/store';
 import {
   Save, RefreshCw, Settings, ToggleLeft, ToggleRight,
   AlertTriangle, CheckCircle, Gamepad2, TrendingUp, Coins,
-  Zap, Sun, Layers, Info,
+  Zap, Sun, Layers,
 } from 'lucide-react';
 
 // ── Game icon/color metadata ──────────────────────────────────────────────────
@@ -163,15 +163,6 @@ export default function GameSettingsTab() {
         </button>
       </div>
 
-      {/* Info banner */}
-      <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
-        <Info className="w-3.5 h-3.5 text-blue-400 mt-0.5 flex-shrink-0" />
-        <p className="text-[11px] text-blue-300">
-          Amounts <strong>paise</strong> mein hain — 100 paise = ₹1.
-          Save karte hi games mein turant enforce hoga.
-        </p>
-      </div>
-
       {/* Game cards */}
       <div className="space-y-3">
         {games.map(g => {
@@ -224,7 +215,7 @@ export default function GameSettingsTab() {
                 {/* Default Bet */}
                 <div>
                   <label className="text-[11px] text-violet-300 mb-1 block font-semibold">
-                    Default Bet <span className="text-slate-600 font-normal">(paise)</span>
+                    Default Bet <span className="text-slate-600 font-normal">(₹)</span>
                   </label>
                   <input
                     type="number"
@@ -235,13 +226,12 @@ export default function GameSettingsTab() {
                       hasDefaultError ? 'border-red-500/60' : 'border-violet-500/50 focus:border-violet-400'
                     }`}
                   />
-                  <p className="text-[10px] text-violet-400/70 mt-0.5">₹{(g.default_bet / 100).toFixed(2)}</p>
                 </div>
 
                 {/* Min Bet */}
                 <div>
                   <label className="text-[11px] text-slate-400 mb-1 block">
-                    Min Bet <span className="text-slate-600">(paise)</span>
+                    Min Bet <span className="text-slate-600">(₹)</span>
                   </label>
                   <input
                     type="number"
@@ -252,13 +242,12 @@ export default function GameSettingsTab() {
                       hasMinMaxError ? 'border-red-500/60' : 'border-slate-700/60 focus:border-violet-500'
                     }`}
                   />
-                  <p className="text-[10px] text-slate-600 mt-0.5">₹{(g.min_bet / 100).toFixed(2)}</p>
                 </div>
 
                 {/* Max Bet */}
                 <div>
                   <label className="text-[11px] text-slate-400 mb-1 block">
-                    Max Bet <span className="text-slate-600">(paise)</span>
+                    Max Bet <span className="text-slate-600">(₹)</span>
                   </label>
                   <input
                     type="number"
@@ -269,7 +258,6 @@ export default function GameSettingsTab() {
                       hasMinMaxError ? 'border-red-500/60' : 'border-slate-700/60 focus:border-violet-500'
                     }`}
                   />
-                  <p className="text-[10px] text-slate-600 mt-0.5">₹{(g.max_bet / 100).toFixed(2)}</p>
                 </div>
               </div>
 
