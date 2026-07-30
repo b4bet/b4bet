@@ -142,13 +142,24 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       destDetails = { ...destDetails, currency: selectedCrypto.name, network: selectedCrypto.network, walletAddress: destination.trim(), gasFee: String(selectedCrypto.gasFee || 0) };
     }
 
+    // Suppress the internal admin-facing toast that cms.submitDeposit/submitWithdrawal fires.
+    // We show our own user-friendly success toast right after.
+    const originalToast = cms.toast.bind(cms);
+    cms.toast = () => { /* suppress internal admin toast */ };
+
     if (flow === 'deposit') {
-      if (!utr.trim()) { showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.'); return; }
+      if (!utr.trim()) {
+        cms.toast = originalToast; // restore before returning
+        showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.');
+        return;
+      }
       cms.submitDeposit(user, amt, destLabel, utr.trim(), JSON.stringify(destDetails), session?.userId);
     } else {
       cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails), session?.userId);
     }
 
+    // Restore toast and show our success notification
+    cms.toast = originalToast;
     cms.toast({
       title: flow === 'deposit' ? 'Deposit Request Submitted' : 'Withdrawal Request Submitted',
       body: 'Please wait 5 minutes, your payment is processing...',
