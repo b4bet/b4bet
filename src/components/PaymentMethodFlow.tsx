@@ -66,6 +66,20 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   }, [open]);
 
+  // Auto-close submitted popup after 2.5 seconds
+  const autoCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (submitted) {
+      autoCloseTimer.current = setTimeout(() => {
+        handleClose();
+      }, 2500);
+    }
+    return () => {
+      if (autoCloseTimer.current) clearTimeout(autoCloseTimer.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submitted]);
+
   // ─── Mobile back button: push state when flow opens ───
   useEffect(() => {
     if (!open) {
@@ -299,7 +313,19 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             </div>
             <p className="font-display font-bold text-lg text-white">Request Submitted</p>
             <p className="text-sm text-slate-400">Please wait 5 minutes, your payment is processing...</p>
-            <button onClick={handleClose} className="btn-primary w-full py-3">Done</button>
+            {/* Progress bar showing auto-close in 2.5s */}
+            <div className="w-full h-[3px] rounded-full overflow-hidden bg-white/10">
+              <div
+                className="h-full rounded-full bg-emeraldwin-400"
+                style={{ animation: 'shrink 2.5s linear forwards' }}
+              />
+            </div>
+            <style>{`
+              @keyframes shrink {
+                from { width: 100%; }
+                to { width: 0%; }
+              }
+            `}</style>
           </div>
         </div>
       </>
