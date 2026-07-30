@@ -2,6 +2,7 @@
  * MinesView — server-side outcome version.
  * FIX: Persist active session to localStorage so navigating away and back
  * restores the game state (grid, revealed tiles, multiplier, session id).
+ * FIX: Sticky header + history capped to 4 visible rows (rest scroll inside box).
  */
 
 import { useState, useCallback, useEffect } from 'react';
@@ -64,7 +65,6 @@ function loadMinesSession(): ClientMinesState | null {
     const raw = localStorage.getItem(MINES_SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as ClientMinesState;
-    // Only restore if session is still active
     if (parsed.active && parsed.sessionId && !parsed.busted && !parsed.cashedOut) {
       return parsed;
     }
@@ -194,11 +194,9 @@ function Cell({
 // ── Main view ─────────────────────────────────────────────────────────────────
 
 export default function MinesView() {
-  // Use admin-configured default bet; falls back to 100 until store loads
   const [stakeStr, setStakeStr] = useState(() => String(store.getGameDefaultBet('mines')));
   const [minesInput, setMinesInput] = useState(3);
   const [loading, setLoading] = useState(false);
-  // Load persisted session on mount
   const [game, setGame] = useState<ClientMinesState>(() => {
     const saved = loadMinesSession();
     return saved ?? initialState(3, store.getGameDefaultBet('mines'));
@@ -213,7 +211,6 @@ export default function MinesView() {
     ? adminCfg.gameHandlers['mines'].quickStakes
     : [100, 500, 1000, 5000];
 
-  // Persist game state whenever it changes
   useEffect(() => {
     saveMinesSession(game);
   }, [game]);
@@ -320,10 +317,17 @@ export default function MinesView() {
   const stakeNum = parseFloat(stakeStr) || 0;
   const lastQuickRef = { current: null as number | null };
 
+  // ~4 history rows × ~44px each = 176px visible, rest scroll
+  const HISTORY_ROW_HEIGHT = 44;
+  const HISTORY_VISIBLE_ROWS = 4;
+  const historyMaxHeight = HISTORY_ROW_HEIGHT * HISTORY_VISIBLE_ROWS;
+
   return (
-    <div className="flex flex-col h-full bg-midnight-900 overflow-hidden">
-      {/* Sticky Header with admin logo + balance */}
-      <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-borderline-900 bg-midnight-900/95 backdrop-blur-sm">
+    // Full-screen flex column — header is sticky, content scrolls below
+    <div className="flex flex-col bg-midnight-900" style={{ height: 'calc(100dvh - 52px)' }}>
+
+      {/* ── STICKY HEADER ── */}
+      <div className="sticky top-0 z-10 flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-borderline-900 bg-midnight-900/95 backdrop-blur-sm">
         <div className="flex items-center gap-2.5">
           {gameLogos['mines'] ? (
             <img src={gameLogos['mines']} alt="Mines" className="w-7 h-7 rounded-lg object-cover" />
@@ -334,15 +338,15 @@ export default function MinesView() {
           </div>
         </div>
         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slatepanel-800 border border-borderline-900">
-          <span className="text-[11px] font-bold text-slate-400">{store.currency}</span>
           <span className="tabular font-extrabold text-white text-sm">
             {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
           </span>
         </div>
       </div>
 
-      {/* Scrollable content */}
+      {/* ── SCROLLABLE CONTENT ── */}
       <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+
         {/* Grid */}
         <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-3">
           <div className="grid grid-cols-5 gap-1.5">
@@ -506,7 +510,6 @@ export default function MinesView() {
               </div>
             </div>
 
-            {/* Validation */}
             {stakeNum > 0 && (stakeNum < limits.min || stakeNum > limits.max) && (
               <p className="text-[10px] text-coral-400 font-semibold">
                 Stake must be between {store.currency}{limits.min} and {store.currency}{limits.max.toLocaleString()}
@@ -552,7 +555,7 @@ export default function MinesView() {
           </button>
         )}
 
-        {/* My History */}
+        {/* My History — 4 rows visible, rest scroll inside box */}
         <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-borderline-900">
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">My Bets</p>
@@ -569,11 +572,15 @@ export default function MinesView() {
           ) : myHistory.length === 0 ? (
             <p className="px-4 py-4 text-[11px] text-slate-600 text-center">No bets yet — start playing!</p>
           ) : (
-            <div className="divide-y divide-borderline-900">
-              {myHistory.slice(0, 20).map((row) => {
+            // Fixed max-height showing ~4 rows; overflow scrolls within this box
+            <div
+              className="overflow-y-auto divide-y divide-borderline-900 scrollbar-none"
+              style={{ maxHeight: `${historyMaxHeight}px` }}
+            >
+              {myHistory.map((row) => {
                 const won = row.win_amount != null && row.win_amount > 0;
                 return (
-                  <div key={row.id} className="flex items-center justify-between px-4 py-2.5">
+                  <div key={row.id} className="flex items-center justify-between px-4 py-2.5" style={{ minHeight: `${HISTORY_ROW_HEIGHT}px` }}>
                     <div>
                       <p className="text-xs font-semibold text-white tabular">
                         {store.currency}{row.bet_amount.toLocaleString()}
@@ -596,6 +603,7 @@ export default function MinesView() {
             </div>
           )}
         </div>
+
       </div>
     </div>
   );
