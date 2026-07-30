@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Gift, History } from 'lucide-react';
 import { cms } from '../../lib/cms';
 import { useReferralConfig, useReferrals } from '../../lib/cmsHooks';
@@ -88,8 +88,8 @@ function ReferConfig() {
   );
 }
 
-// ---- Live referral history from Supabase referrals table ----
-interface SupabaseReferral {
+// ---- Live referral history from Supabase referrals table (admin) ----
+interface AdminReferral {
   id: string;
   referrer_id: string;
   referred_id: string;
@@ -102,33 +102,36 @@ interface SupabaseReferral {
 
 function ReferralHistoryAdmin() {
   const allRefs = useReferrals(); // in-memory (recorded during this session)
-  const [liveRefs, setLiveRefs] = useState<SupabaseReferral[]>([]);
-  const [loaded, setLoaded] = useState(false);
+  const [liveRefs, setLiveRefs] = useState<AdminReferral[]>([]);
+  const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
 
-  if (!loaded) {
-    setLoaded(true);
-    // Load live referrals from Supabase with profile join
+  useEffect(() => {
+    setLoading(true);
+    // Use SECURITY DEFINER RPC — bypasses RLS so admin can see all referrals
     supabase
-      .from('referrals')
-      .select('id, referrer_id, referred_id, bonus_amount, status, created_at, referrer:profiles!referrals_referrer_id_fkey(username), referred:profiles!referrals_referred_id_fkey(username)')
-      .order('created_at', { ascending: false })
-      .limit(200)
-      .then(({ data }) => {
-        if (data) {
-          setLiveRefs((data as unknown as Array<Record<string, unknown>>).map((r) => ({
-            id: r.id as string,
-            referrer_id: r.referrer_id as string,
-            referred_id: r.referred_id as string,
-            bonus_amount: Number(r.bonus_amount),
-            status: r.status as string,
-            created_at: r.created_at as string,
-            referrer_username: (r.referrer as { username?: string } | null)?.username,
-            referred_username: (r.referred as { username?: string } | null)?.username,
-          })));
+      .rpc('admin_get_referrals', { p_limit: 500 })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('[MarketingTab] admin_get_referrals error:', error);
         }
+        if (data) {
+          setLiveRefs(
+            (data as AdminReferral[]).map((r) => ({
+              id: r.id,
+              referrer_id: r.referrer_id,
+              referred_id: r.referred_id,
+              bonus_amount: Number(r.bonus_amount),
+              status: r.status,
+              created_at: r.created_at,
+              referrer_username: r.referrer_username ?? undefined,
+              referred_username: r.referred_username ?? undefined,
+            })),
+          );
+        }
+        setLoading(false);
       });
-  }
+  }, []);
 
   // Merge in-memory and live, deduplicate by id
   const combined = [
@@ -174,7 +177,11 @@ function ReferralHistoryAdmin() {
             </tr>
           </thead>
           <tbody>
-            {filtered.length === 0 ? (
+            {loading ? (
+              <tr>
+                <td colSpan={5} className="text-center py-8 text-slate-500">Loading from Supabase…</td>
+              </tr>
+            ) : filtered.length === 0 ? (
               <tr>
                 <td colSpan={5} className="text-center py-8 text-slate-500">No referral history found</td>
               </tr>
