@@ -190,10 +190,19 @@ class AuthManager {
       }
 
       if (referrerId) {
+        // Save to in-memory CMS state (for session display)
         cms.recordReferralSignup(
           { id: data.user.id, accountId, username: uname, email: umail, mobile: umobile, referralCode: uref, createdAt: Date.now(), isActive: true },
           referrerId,
         );
+        // FIX: Also persist referral to Supabase so history shows on reload
+        // Uses SECURITY DEFINER RPC to bypass RLS (no INSERT policy on referrals table)
+        void supabase.rpc('record_referral', {
+          p_referrer_id: referrerId,
+          p_referred_id: data.user.id,
+          p_bonus_amount: 0, // bonus_amount updated when deposit is approved
+          p_status: 'pending',
+        }).catch((e: unknown) => { console.error('[auth] record_referral error:', e); });
       }
     }
     cms.pushFromTemplate('nt_welcome', 'Welcome!', `Account created. Welcome, ${uname}!`, 'success');
