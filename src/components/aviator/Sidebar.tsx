@@ -7,6 +7,9 @@ import {
   randomName,
   initials,
 } from './game/format';
+import { supabase } from '@/integrations/supabase/client';
+import { auth } from '../../lib/auth';
+import { store } from '../../lib/store';
 
 export interface BetRecord {
   id: string;
@@ -39,6 +42,20 @@ interface SidebarProps {
 
 type Tab = 'all' | 'mine' | 'top';
 
+interface MyHistoryBet {
+  id: string;
+  bet_amount: number;
+  win_amount: number;
+  multiplier: number;
+  status: string;
+  placed_at: string;
+  cash_out_at: number | null;
+}
+
+function fmtTime(ts: string) {
+  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
 export function Sidebar({
   phase,
   multiplier,
@@ -53,11 +70,39 @@ export function Sidebar({
   const [input, setInput] = useState('');
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
+  // My Bets historical data
+  const [myHistory, setMyHistory] = useState<MyHistoryBet[]>([]);
+  const [myHistoryLoading, setMyHistoryLoading] = useState(false);
+  const session = auth.getSession();
+
   useEffect(() => {
     if (chatScrollRef.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
   }, [chat]);
+
+  useEffect(() => {
+    if (tab !== 'mine') return;
+    if (!session?.userId) return;
+    setMyHistoryLoading(true);
+    void supabase
+      .rpc('get_aviator_my_bets', { p_user_id: session.userId, p_limit: 50 })
+      .then(({ data, error }) => {
+        if (error) console.error('[AviatorSidebar] my bets error:', error);
+        if (!error && data) {
+          setMyHistory(
+            (data as MyHistoryBet[]).map((r) => ({
+              ...r,
+              bet_amount: Number(r.bet_amount),
+              win_amount: Number(r.win_amount),
+              multiplier: Number(r.multiplier),
+              cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
+            }))
+          );
+        }
+        setMyHistoryLoading(false);
+      });
+  }, [tab, phase, session?.userId]);
 
   function send() {
     const text = input.trim();
@@ -71,7 +116,7 @@ export function Sidebar({
     .sort((a, b) => (b.win ?? 0) - (a.win ?? 0))
     .slice(0, 50);
 
-  const list = tab === 'all' ? allBets : tab === 'mine' ? myBets : topBets;
+  const list = tab === 'all' ? allBets : topBets;
 
   return (
     <aside className="flex h-full flex-col rounded-xl bg-ink-700 border border-ink-500/60 overflow-hidden">
@@ -88,28 +133,84 @@ export function Sidebar({
         </SideTab>
       </div>
 
-      {/* Column headers */}
-      <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr] gap-1 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b border-ink-600/60">
-        <span>Player</span>
-        <span className="text-right">Bet</span>
-        <span className="text-right">X</span>
-        <span className="text-right">Win</span>
-      </div>
-
-      {/* Bet list */}
-      <div className="scroll-thin flex-1 overflow-y-auto min-h-0">
-        {list.length === 0 ? (
-          <div className="flex h-full items-center justify-center p-4 text-center text-xs text-gray-600">
-            {tab === 'mine'
-              ? 'You haven’t placed any bets yet.'
-              : tab === 'top'
-                ? 'No cashed-out wins yet this round.'
-                : 'Waiting for players to join…'}
+      {/* My Bets tab — historical table */}
+      {tab === 'mine' ? (
+        <div className="flex-1 overflow-y-auto min-h-0 scroll-thin">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-ink-600/60 text-[10px] font-bold uppercase tracking-wider text-gray-500">
+                <th className="px-2 py-2 text-left">Time</th>
+                <th className="px-2 py-2 text-right">Stake</th>
+                <th className="px-2 py-2 text-right">×</th>
+                <th className="px-2 py-2 text-right">Win</th>
+                <th className="px-2 py-2 text-right">P/L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {myHistoryLoading && (
+                <tr>
+                  <td colSpan={5} className="py-6 text-center text-gray-500">Loading…</td>
+                </tr>
+              )}
+              {!myHistoryLoading && !session?.userId && (
+                <tr>
+                  <td colSpan={5} className="py-6 text-center text-gray-500">Login to see your bets.</td>
+                </tr>
+              )}
+              {!myHistoryLoading && session?.userId && myHistory.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-6 text-center text-gray-500">No bets yet.</td>
+                </tr>
+              )}
+              {myHistory.map((b) => {
+                const netpl = b.win_amount - b.bet_amount;
+                return (
+                  <tr key={b.id} className="border-b border-ink-600/20 hover:bg-ink-650/40">
+                    <td className="px-2 py-1.5 text-gray-400">{fmtTime(b.placed_at)}</td>
+                    <td className="px-2 py-1.5 text-right font-mono text-gray-300">{store.currency}{b.bet_amount}</td>
+                    <td className="px-2 py-1.5 text-right font-mono">
+                      {b.cash_out_at != null
+                        ? <span className="text-aviator-green font-bold">{b.cash_out_at.toFixed(2)}×</span>
+                        : <span className="text-gray-600">—</span>}
+                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono">
+                      {b.status === 'won'
+                        ? <span className="text-aviator-green">{store.currency}{b.win_amount}</span>
+                        : <span className="text-gray-600">—</span>}
+                    </td>
+                    <td className={`px-2 py-1.5 text-right font-mono font-bold ${netpl >= 0 ? 'text-aviator-green' : 'text-red-400'}`}>
+                      {netpl >= 0 ? '+' : ''}{store.currency}{netpl}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <>
+          {/* Column headers for All / Top tabs */}
+          <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr] gap-1 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b border-ink-600/60">
+            <span>Player</span>
+            <span className="text-right">Bet</span>
+            <span className="text-right">X</span>
+            <span className="text-right">Win</span>
           </div>
-        ) : (
-          list.map((b) => <BetRow key={b.id} bet={b} phase={phase} multiplier={multiplier} />)
-        )}
-      </div>
+
+          {/* Bet list */}
+          <div className="scroll-thin flex-1 overflow-y-auto min-h-0">
+            {list.length === 0 ? (
+              <div className="flex h-full items-center justify-center p-4 text-center text-xs text-gray-600">
+                {tab === 'top'
+                  ? 'No cashed-out wins yet this round.'
+                  : 'Waiting for players to join…'}
+              </div>
+            ) : (
+              list.map((b) => <BetRow key={b.id} bet={b} phase={phase} multiplier={multiplier} />)
+            )}
+          </div>
+        </>
+      )}
 
       {/* Chat */}
       <div className="border-t border-ink-600 bg-ink-750">
