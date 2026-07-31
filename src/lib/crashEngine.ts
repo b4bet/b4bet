@@ -35,6 +35,11 @@ export interface BetSlot {
   win: number | null;
   /** Supabase bets row id — set after pending insert */
   dbId: string | null;
+  /**
+   * Set to true when the slot is settled (won/lost) before insertPendingBet
+   * completes. The insert callback will then immediately delete the orphan row.
+   */
+  settledBeforeInsert: boolean;
 }
 
 export interface CrashState {
@@ -89,6 +94,7 @@ function freshBet(id: 'A' | 'B'): BetSlot {
     cashedOut: false,
     win: null,
     dbId: null,
+    settledBeforeInsert: false,
   };
 }
 
@@ -410,8 +416,11 @@ class CrashEngine {
       win: slot.win ?? 0,
     });
     if (slot.dbId) {
+      // DB row exists — update it
       void settlePendingBet(slot.dbId, slot.win ?? 0, cashOutAt, cashOutAt, this.state.bustPoint, 'won');
     } else {
+      // insertPendingBet still in flight — mark settled so the callback deletes the orphan
+      slot.settledBeforeInsert = true;
       void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
     }
   }
@@ -431,8 +440,11 @@ class CrashEngine {
         win: 0,
       });
       if (slot.dbId) {
+        // DB row exists — update it
         void settlePendingBet(slot.dbId, 0, bustPoint, null, bustPoint, 'lost');
       } else {
+        // insertPendingBet still in flight — mark settled so the callback deletes the orphan
+        slot.settledBeforeInsert = true;
         void settleSlotOnServer(slot, roundId, bustPoint);
       }
     }
@@ -473,7 +485,13 @@ class CrashEngine {
     const session = auth.getSession();
     if (session?.userId) {
       void insertPendingBet(session.userId, amount, this.state.roundId).then((dbId) => {
-        if (dbId) slot.dbId = dbId;
+        if (!dbId) return;
+        if (slot.settledBeforeInsert) {
+          // Round ended before insert completed — delete the orphan row immediately
+          void deletePendingBet(dbId);
+        } else {
+          slot.dbId = dbId;
+        }
       });
     }
 
