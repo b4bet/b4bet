@@ -35,6 +35,8 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const [popupVisible, setPopupVisible] = useState(false);
   const popupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const popupFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const selectedRef = useRef<ManualMethod | null>(null);
   selectedRef.current = selected;
@@ -77,12 +79,11 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
         setSelectedCrypto(null);
         window.history.pushState({ pmf: true }, '');
       } else {
-        onClose();
+        onCloseRef.current();
       }
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   if (!open) return null;
@@ -104,7 +105,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     return { min: selected.minAmount || 0, max: selected.maxAmount || Infinity };
   };
 
-  const handleClose = () => onClose();
+  const handleClose = () => onCloseRef.current();
   const handleBackToMethodList = () => { setSelected(null); setSelectedCrypto(null); };
 
   const resetForm = () => {
@@ -114,7 +115,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     setDetails('');
     setSelectedCrypto(null);
     setSubmitting(false);
-    // Go back to method list
     setSelected(null);
   };
 
@@ -191,13 +191,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
         return;
       }
 
-      // Show success popup and go back to method list
+      // Go back to method list first, then show popup
+      resetForm();
       showPopup(
         flow === 'deposit' ? 'Deposit Submitted!' : 'Withdrawal Requested!',
         flow === 'deposit' ? 'Request received. Processing soon.' : 'Your request has been submitted.',
         'success',
       );
-      resetForm();
 
     } catch (err) {
       console.error('[PaymentMethodFlow] submit error:', err);
@@ -210,56 +210,58 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     navigator.clipboard?.writeText(text).then(() => { alert('Copied!'); }).catch(() => {});
   };
 
-  // Unified popup portal (error = red, success = green)
+  // Popup — fully pointer-events-none so it never blocks buttons underneath
   const popupPortal = popup
     ? createPortal(
         <div
-          className="fixed inset-0 z-[9998] flex items-center justify-center px-6 pointer-events-none"
+          className="fixed inset-0 z-[9998] flex items-end justify-center px-4 pb-8 pointer-events-none"
           style={{ transition: 'opacity 0.3s ease', opacity: popupVisible ? 1 : 0 }}
         >
           <div
-            className="pointer-events-auto w-full max-w-[320px] overflow-hidden rounded-2xl shadow-2xl"
+            className="w-full max-w-[340px] overflow-hidden rounded-2xl shadow-2xl pointer-events-none"
             style={{
               background: 'linear-gradient(145deg, #1e1e2e 0%, #16162a 100%)',
-              border: popup.kind === 'success' ? '1px solid rgba(16,185,129,0.25)' : '1px solid rgba(239,68,68,0.25)',
+              border: popup.kind === 'success' ? '1px solid rgba(16,185,129,0.3)' : '1px solid rgba(239,68,68,0.3)',
               boxShadow: popup.kind === 'success'
-                ? '0 0 0 1px rgba(16,185,129,0.08), 0 24px 48px rgba(0,0,0,0.6)'
-                : '0 0 0 1px rgba(239,68,68,0.08), 0 24px 48px rgba(0,0,0,0.6)',
-              transform: popupVisible ? 'scale(1) translateY(0)' : 'scale(0.95) translateY(8px)',
-              transition: 'transform 0.3s cubic-bezier(0.34,1.56,0.64,1), opacity 0.3s ease',
+                ? '0 8px 32px rgba(16,185,129,0.15), 0 2px 8px rgba(0,0,0,0.5)'
+                : '0 8px 32px rgba(239,68,68,0.15), 0 2px 8px rgba(0,0,0,0.5)',
+              transform: popupVisible ? 'translateY(0) scale(1)' : 'translateY(16px) scale(0.97)',
+              transition: 'transform 0.3s cubic-bezier(0.34,1.56,0.64,1)',
             }}
           >
             <div
               className="h-[3px] w-full"
               style={{ background: popup.kind === 'success' ? 'linear-gradient(90deg, #10b981, #34d399)' : 'linear-gradient(90deg, #ef4444, #f97316)' }}
             />
-            <div className="px-6 py-5 flex flex-col items-center text-center gap-3">
+            <div className="px-5 py-4 flex items-center gap-4">
               <div
-                className="w-12 h-12 rounded-full flex items-center justify-center"
+                className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center"
                 style={popup.kind === 'success'
-                  ? { background: 'rgba(16,185,129,0.12)', border: '1.5px solid rgba(16,185,129,0.3)' }
-                  : { background: 'rgba(239,68,68,0.12)', border: '1.5px solid rgba(239,68,68,0.3)' }}
+                  ? { background: 'rgba(16,185,129,0.15)', border: '1.5px solid rgba(16,185,129,0.35)' }
+                  : { background: 'rgba(239,68,68,0.15)', border: '1.5px solid rgba(239,68,68,0.35)' }}
               >
                 {popup.kind === 'success'
                   ? <CheckCircle2 className="w-5 h-5" style={{ color: '#34d399' }} />
                   : <AlertTriangle className="w-5 h-5" style={{ color: '#f87171' }} />}
               </div>
-              <div>
-                <p className="font-semibold text-white text-[15px] leading-snug tracking-tight">{popup.title}</p>
-                <p className="text-[13px] mt-1 leading-relaxed" style={{ color: '#94a3b8' }}>{popup.body}</p>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-white text-[14px] leading-tight">{popup.title}</p>
+                <p className="text-[12px] mt-0.5 text-slate-400 leading-snug">{popup.body}</p>
               </div>
+            </div>
+            <div className="px-5 pb-3">
               <div className="w-full h-[3px] rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
                 <div
                   className="h-full rounded-full"
                   style={{
                     background: popup.kind === 'success' ? 'linear-gradient(90deg, #10b981, #34d399)' : 'linear-gradient(90deg, #ef4444, #f97316)',
-                    animation: 'shrink 2.5s linear forwards',
+                    animation: 'pmf_shrink 2.5s linear forwards',
                   }}
                 />
               </div>
             </div>
-            <style>{`@keyframes shrink { from { width: 100%; } to { width: 0%; } }`}</style>
           </div>
+          <style>{`@keyframes pmf_shrink { from { width: 100%; } to { width: 0%; } }`}</style>
         </div>,
         document.body,
       )
@@ -274,7 +276,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             <h3 className="font-display font-bold text-white flex items-center gap-2">
               <Wallet className="w-4 h-4 text-neon-400" /> Select {title} Method
             </h3>
-            <button onClick={handleClose} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors">
+            <button onClick={handleClose} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors cursor-pointer">
               <X className="w-4 h-4 text-slate-300" />
             </button>
           </div>
@@ -293,7 +295,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                   'border-borderline-900 hover:border-neon-400/60';
                 return (
                   <button key={m.id} onClick={() => setSelected(m)}
-                    className={`w-full text-left px-4 py-4 rounded-xl border transition-all bg-slatepanel-800 text-white font-semibold hover:bg-slatepanel-700 text-base ${kindColor}`}
+                    className={`w-full text-left px-4 py-4 rounded-xl border transition-all bg-slatepanel-800 text-white font-semibold hover:bg-slatepanel-700 text-base cursor-pointer ${kindColor}`}
                   >
                     <div className="flex items-center justify-between">
                       <div><span className="mr-2">{kindIcon}</span>{m.label}</div>
@@ -329,7 +331,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       <div className="fixed inset-0 z-[210] pointer-events-auto flex flex-col bg-slatepanel-900">
         <div className="flex items-center justify-between px-4 py-3 border-b border-borderline-900 flex-shrink-0 bg-slatepanel-900">
           <div className="flex items-center gap-3">
-            <button onClick={handleBackToMethodList} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors">
+            <button onClick={handleBackToMethodList} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors cursor-pointer">
               <ArrowLeft className="w-4 h-4 text-slate-300" />
             </button>
             <div>
@@ -367,7 +369,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                       <p className="text-sm font-bold text-white font-mono">{selected.upiId || '—'}</p>
                       {selected.upiDisplayName && <p className="text-[10px] text-slate-400">{selected.upiDisplayName}</p>}
                     </div>
-                    <button type="button" onClick={() => copyToClipboard(selected.upiId || '')} className="btn-ghost px-2 py-1">
+                    <button type="button" onClick={() => copyToClipboard(selected.upiId || '')} className="btn-ghost px-2 py-1 cursor-pointer">
                       <Copy className="w-4 h-4 text-neon-400" />
                     </button>
                   </div>
@@ -401,7 +403,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                     <div><p className="text-[10px] text-slate-500">IFSC</p><p className="text-white font-semibold font-mono">{selected.ifsc || '—'}</p></div>
                     <div><p className="text-[10px] text-slate-500">Holder</p><p className="text-white font-semibold">{selected.holderName || '—'}</p></div>
                   </div>
-                  <button type="button" onClick={() => copyToClipboard(`Bank: ${selected.bankName}\nA/C: ${selected.accountNumber}\nIFSC: ${selected.ifsc}\nHolder: ${selected.holderName}`)} className="btn-ghost px-2 py-1 text-xs mt-2">
+                  <button type="button" onClick={() => copyToClipboard(`Bank: ${selected.bankName}\nA/C: ${selected.accountNumber}\nIFSC: ${selected.ifsc}\nHolder: ${selected.holderName}`)} className="btn-ghost px-2 py-1 text-xs mt-2 cursor-pointer">
                     <Copy className="w-3.5 h-3.5 mr-1" /> Copy Details
                   </button>
                 </div>
@@ -436,7 +438,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                 <div className="grid grid-cols-2 gap-2">
                   {(selected.cryptoCurrencies || []).map((cc) => (
                     <button key={cc.id} type="button" onClick={() => setSelectedCrypto(cc)}
-                      className={`p-3 rounded-xl border text-left transition-all ${selectedCrypto?.id === cc.id ? 'bg-blue-500/15 border-blue-400 text-white' : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-blue-400/50'}`}
+                      className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${selectedCrypto?.id === cc.id ? 'bg-blue-500/15 border-blue-400 text-white' : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-blue-400/50'}`}
                     >
                       <div className="flex items-center gap-2">
                         <Coins className={`w-4 h-4 ${selectedCrypto?.id === cc.id ? 'text-blue-400' : 'text-slate-500'}`} />
@@ -455,7 +457,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                     <p className="text-xs font-mono text-white break-all mt-1">{selectedCrypto.walletAddress || '—'}</p>
                     {selectedCrypto.gasFee > 0 && <p className="text-[10px] text-amberx-300 mt-1">Network Gas Fee: {selectedCrypto.gasFee}</p>}
                   </div>
-                  <button type="button" onClick={() => copyToClipboard(selectedCrypto.walletAddress)} className="btn-ghost px-2 py-1 text-xs flex items-center gap-1">
+                  <button type="button" onClick={() => copyToClipboard(selectedCrypto.walletAddress)} className="btn-ghost px-2 py-1 text-xs flex items-center gap-1 cursor-pointer">
                     <Copy className="w-3.5 h-3.5 text-blue-400" /> Copy Address
                   </button>
                 </div>
@@ -488,7 +490,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             type="button"
             disabled={submitting}
             onClick={(e) => { void handleSubmit(e); }}
-            className="w-full py-4 flex items-center justify-center gap-2 text-base font-semibold rounded-xl transition-all bg-green-500 hover:bg-green-600 disabled:opacity-60 disabled:cursor-not-allowed text-white shadow-lg shadow-green-500/30"
+            className="w-full py-4 flex items-center justify-center gap-2 text-base font-semibold rounded-xl transition-all bg-green-500 hover:bg-green-600 disabled:opacity-60 disabled:cursor-not-allowed text-white shadow-lg shadow-green-500/30 cursor-pointer"
           >
             {submitting
               ? <><Loader2 className="w-5 h-5 animate-spin" /> Submitting…</>
