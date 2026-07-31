@@ -13,6 +13,9 @@ interface Props {
   onClose: () => void;
 }
 
+type PopupKind = 'error' | 'success';
+interface PopupState { title: string; body: string; kind: PopupKind; }
+
 export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const session = useAuth();
   const balance = useBalance();
@@ -29,28 +32,28 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const [details, setDetails] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [alertPopup, setAlertPopup] = useState<{ title: string; body: string } | null>(null);
-  const [alertVisible, setAlertVisible] = useState(false);
-  const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const alertFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [popup, setPopup] = useState<PopupState | null>(null);
+  const [popupVisible, setPopupVisible] = useState(false);
+  const popupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const popupFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const selectedRef = useRef<ManualMethod | null>(null);
   selectedRef.current = selected;
 
-  const showAlert = (title: string, body: string) => {
-    if (alertTimer.current) clearTimeout(alertTimer.current);
-    if (alertFadeTimer.current) clearTimeout(alertFadeTimer.current);
-    setAlertPopup({ title, body });
-    setAlertVisible(true);
-    alertTimer.current = setTimeout(() => {
-      setAlertVisible(false);
-      alertFadeTimer.current = setTimeout(() => setAlertPopup(null), 300);
+  const showPopup = (title: string, body: string, kind: PopupKind = 'error') => {
+    if (popupTimer.current) clearTimeout(popupTimer.current);
+    if (popupFadeTimer.current) clearTimeout(popupFadeTimer.current);
+    setPopup({ title, body, kind });
+    setPopupVisible(true);
+    popupTimer.current = setTimeout(() => {
+      setPopupVisible(false);
+      popupFadeTimer.current = setTimeout(() => setPopup(null), 300);
     }, 2500);
   };
 
   useEffect(() => () => {
-    if (alertTimer.current) clearTimeout(alertTimer.current);
-    if (alertFadeTimer.current) clearTimeout(alertFadeTimer.current);
+    if (popupTimer.current) clearTimeout(popupTimer.current);
+    if (popupFadeTimer.current) clearTimeout(popupFadeTimer.current);
   }, []);
 
   useEffect(() => {
@@ -66,11 +69,10 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   }, [open]);
 
-  // Mobile back button — push ONE state on open, handle popstate with React state only
+  // Mobile back button
   useEffect(() => {
     if (!open) return;
     window.history.pushState({ pmf: true }, '');
-
     const onPop = () => {
       if (selectedRef.current) {
         setSelected(null);
@@ -96,23 +98,16 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     if (selected.kind === 'crypto' && selectedCrypto) {
       const cc = selectedCrypto;
       if (flow === 'deposit') {
-        const ccMin = cc.minDeposit > 0 ? cc.minDeposit : selected.minAmount;
-        const ccMax = cc.maxDeposit > 0 ? cc.maxDeposit : selected.maxAmount;
-        return { min: ccMin, max: ccMax, gasFee: cc.gasFee || 0 };
+        return { min: cc.minDeposit > 0 ? cc.minDeposit : selected.minAmount, max: cc.maxDeposit > 0 ? cc.maxDeposit : selected.maxAmount, gasFee: cc.gasFee || 0 };
       } else {
-        const ccMin = cc.minWithdrawal > 0 ? cc.minWithdrawal : selected.minAmount;
-        const ccMax = cc.maxWithdrawal > 0 ? cc.maxWithdrawal : selected.maxAmount;
-        return { min: ccMin, max: ccMax, gasFee: cc.gasFee || 0 };
+        return { min: cc.minWithdrawal > 0 ? cc.minWithdrawal : selected.minAmount, max: cc.maxWithdrawal > 0 ? cc.maxWithdrawal : selected.maxAmount, gasFee: cc.gasFee || 0 };
       }
     }
     return { min: selected.minAmount || 0, max: selected.maxAmount || Infinity };
   };
 
   const handleClose = () => onClose();
-  const handleBackToMethodList = () => {
-    setSelected(null);
-    setSelectedCrypto(null);
-  };
+  const handleBackToMethodList = () => { setSelected(null); setSelectedCrypto(null); };
 
   const handleSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
     if (e && 'preventDefault' in e) e.preventDefault();
@@ -121,30 +116,25 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     const amt = Number(amount);
     const limits = getEffectiveLimits();
 
-    // Validations
-    if (!amt || amt <= 0) { showAlert('Enter Amount', 'Amount must be greater than 0.'); return; }
-    if (limits.min > 0 && amt < limits.min) { showAlert('Invalid Amount', `Minimum ${flow} amount is ${store.currency}${limits.min}.`); return; }
-    if (limits.max > 0 && limits.max < Infinity && amt > limits.max) { showAlert('Invalid Amount', `Maximum ${flow} amount is ${store.currency}${limits.max}.`); return; }
-    if (flow === 'withdrawal' && amt > balance) { showAlert('Insufficient Balance', `Available: ${store.currency}${balance.toFixed(2)}`); return; }
+    if (!amt || amt <= 0) { showPopup('Enter Amount', 'Amount must be greater than 0.'); return; }
+    if (limits.min > 0 && amt < limits.min) { showPopup('Invalid Amount', `Minimum ${flow} amount is ${store.currency}${limits.min}.`); return; }
+    if (limits.max > 0 && limits.max < Infinity && amt > limits.max) { showPopup('Invalid Amount', `Maximum ${flow} amount is ${store.currency}${limits.max}.`); return; }
+    if (flow === 'withdrawal' && amt > balance) { showPopup('Insufficient Balance', `Available: ${store.currency}${balance.toFixed(2)}`); return; }
 
     if (selected.kind === 'upi') {
-      if (flow === 'withdrawal' && !destination.trim()) { showAlert('UPI ID Required', 'Enter your UPI ID.'); return; }
+      if (flow === 'withdrawal' && !destination.trim()) { showPopup('UPI ID Required', 'Enter your UPI ID.'); return; }
     } else if (selected.kind === 'bank') {
-      if (flow === 'withdrawal' && !destination.trim()) { showAlert('Account Details Required', 'Enter your bank account number.'); return; }
+      if (flow === 'withdrawal' && !destination.trim()) { showPopup('Account Details Required', 'Enter your bank account number.'); return; }
     } else if (selected.kind === 'crypto') {
-      if (!selectedCrypto) { showAlert('Select Currency', 'Please select a crypto currency.'); return; }
-      if (flow === 'withdrawal' && !destination.trim()) { showAlert('Wallet Address Required', 'Enter your withdrawal wallet address.'); return; }
+      if (!selectedCrypto) { showPopup('Select Currency', 'Please select a crypto currency.'); return; }
+      if (flow === 'withdrawal' && !destination.trim()) { showPopup('Wallet Address Required', 'Enter your withdrawal wallet address.'); return; }
     }
 
-    if (flow === 'deposit' && !utr.trim()) {
-      showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.');
-      return;
-    }
+    if (flow === 'deposit' && !utr.trim()) { showPopup('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.'); return; }
 
     setSubmitting(true);
 
     try {
-      // Build metadata
       let destLabel = selected.label;
       const destDetails: Record<string, string> = { amount: String(amt) };
 
@@ -168,15 +158,11 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       };
 
       if (flow === 'withdrawal') {
-        // Deduct balance first
         const newBal = Math.max(0, balance - amt);
-        if (userId) {
-          await supabase.from('profiles').update({ balance: newBal }).eq('id', userId);
-        }
+        if (userId) await supabase.from('profiles').update({ balance: newBal }).eq('id', userId);
         store.debitLocalOnly(amt);
       }
 
-      // Insert transaction
       const { error: insertErr } = await supabase.from('transactions').insert({
         user_id: userId ?? null,
         type: flow,
@@ -187,64 +173,81 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       });
 
       if (insertErr) {
-        // Rollback balance deduction for withdrawal
         if (flow === 'withdrawal' && userId) {
           await supabase.from('profiles').update({ balance: balance }).eq('id', userId);
           store.creditLocalOnly(amt);
         }
-        showAlert('Submission Failed', insertErr.message || 'Please try again.');
+        showPopup('Submission Failed', insertErr.message || 'Please try again.');
         setSubmitting(false);
         return;
       }
 
-      // Success
+      // Show success popup, then close after 2.5s
       setSubmitted(true);
-      setTimeout(() => {
-        handleClose();
-      }, 1500);
+      showPopup(
+        flow === 'deposit' ? 'Deposit Submitted!' : 'Withdrawal Requested!',
+        flow === 'deposit' ? 'Request received. Processing soon.' : 'Your request has been submitted.',
+        'success',
+      );
+      setTimeout(() => handleClose(), 2600);
 
     } catch (err) {
       console.error('[PaymentMethodFlow] submit error:', err);
       setSubmitting(false);
-      showAlert('Submission Failed', 'Something went wrong. Please try again.');
+      showPopup('Submission Failed', 'Something went wrong. Please try again.');
     }
   };
 
   const copyToClipboard = (text: string) => {
-    navigator.clipboard?.writeText(text).then(() => {
-      // Simple visual feedback without using cms.toast
-      alert('Copied!');
-    }).catch(() => {});
+    navigator.clipboard?.writeText(text).then(() => { alert('Copied!'); }).catch(() => {});
   };
 
-  const alertPortal = alertPopup
+  // Unified popup portal (error = red, success = green)
+  const popupPortal = popup
     ? createPortal(
         <div
           className="fixed inset-0 z-[9998] flex items-center justify-center px-6 pointer-events-none"
-          style={{ transition: 'opacity 0.3s ease', opacity: alertVisible ? 1 : 0 }}
+          style={{ transition: 'opacity 0.3s ease', opacity: popupVisible ? 1 : 0 }}
         >
-          <div className="pointer-events-auto w-full max-w-[320px] overflow-hidden rounded-2xl shadow-2xl"
+          <div
+            className="pointer-events-auto w-full max-w-[320px] overflow-hidden rounded-2xl shadow-2xl"
             style={{
               background: 'linear-gradient(145deg, #1e1e2e 0%, #16162a 100%)',
-              border: '1px solid rgba(239,68,68,0.25)',
-              boxShadow: '0 0 0 1px rgba(239,68,68,0.08), 0 24px 48px rgba(0,0,0,0.6)',
-              transform: alertVisible ? 'scale(1) translateY(0)' : 'scale(0.95) translateY(8px)',
+              border: popup.kind === 'success' ? '1px solid rgba(16,185,129,0.25)' : '1px solid rgba(239,68,68,0.25)',
+              boxShadow: popup.kind === 'success'
+                ? '0 0 0 1px rgba(16,185,129,0.08), 0 24px 48px rgba(0,0,0,0.6)'
+                : '0 0 0 1px rgba(239,68,68,0.08), 0 24px 48px rgba(0,0,0,0.6)',
+              transform: popupVisible ? 'scale(1) translateY(0)' : 'scale(0.95) translateY(8px)',
               transition: 'transform 0.3s cubic-bezier(0.34,1.56,0.64,1), opacity 0.3s ease',
             }}
           >
-            <div className="h-[3px] w-full" style={{ background: 'linear-gradient(90deg, #ef4444, #f97316)' }} />
+            <div
+              className="h-[3px] w-full"
+              style={{ background: popup.kind === 'success' ? 'linear-gradient(90deg, #10b981, #34d399)' : 'linear-gradient(90deg, #ef4444, #f97316)' }}
+            />
             <div className="px-6 py-5 flex flex-col items-center text-center gap-3">
-              <div className="w-12 h-12 rounded-full flex items-center justify-center"
-                style={{ background: 'rgba(239,68,68,0.12)', border: '1.5px solid rgba(239,68,68,0.3)' }}
+              <div
+                className="w-12 h-12 rounded-full flex items-center justify-center"
+                style={popup.kind === 'success'
+                  ? { background: 'rgba(16,185,129,0.12)', border: '1.5px solid rgba(16,185,129,0.3)' }
+                  : { background: 'rgba(239,68,68,0.12)', border: '1.5px solid rgba(239,68,68,0.3)' }}
               >
-                <AlertTriangle className="w-5 h-5" style={{ color: '#f87171' }} />
+                {popup.kind === 'success'
+                  ? <CheckCircle2 className="w-5 h-5" style={{ color: '#34d399' }} />
+                  : <AlertTriangle className="w-5 h-5" style={{ color: '#f87171' }} />}
               </div>
               <div>
-                <p className="font-semibold text-white text-[15px] leading-snug tracking-tight">{alertPopup.title}</p>
-                <p className="text-[13px] mt-1 leading-relaxed" style={{ color: '#94a3b8' }}>{alertPopup.body}</p>
+                <p className="font-semibold text-white text-[15px] leading-snug tracking-tight">{popup.title}</p>
+                <p className="text-[13px] mt-1 leading-relaxed" style={{ color: '#94a3b8' }}>{popup.body}</p>
               </div>
               <div className="w-full h-[3px] rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
-                <div className="h-full rounded-full" style={{ background: 'linear-gradient(90deg, #ef4444, #f97316)', animation: 'shrink 2.5s linear forwards' }} />
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    background: popup.kind === 'success' ? 'linear-gradient(90deg, #10b981, #34d399)' : 'linear-gradient(90deg, #ef4444, #f97316)',
+                    animation: 'shrink 2.5s linear forwards',
+                  }}
+                />
               </div>
             </div>
             <style>{`@keyframes shrink { from { width: 100%; } to { width: 0%; } }`}</style>
@@ -257,7 +260,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   if (!selected) {
     return (
       <>
-        {alertPortal}
+        {popupPortal}
         <div className="fixed inset-0 z-[200] pointer-events-auto flex flex-col bg-slatepanel-900">
           <div className="flex items-center justify-between px-4 py-3 border-b border-borderline-900 flex-shrink-0">
             <h3 className="font-display font-bold text-white flex items-center gap-2">
@@ -312,28 +315,9 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
   const limits = getEffectiveLimits();
 
-  // Success screen
-  if (submitted) {
-    return (
-      <div className="fixed inset-0 z-[210] pointer-events-auto flex flex-col items-center justify-center bg-slatepanel-900 p-8">
-        <div className="w-20 h-20 rounded-full bg-emeraldwin-500/20 border-2 border-emeraldwin-500/50 flex items-center justify-center mb-6">
-          <CheckCircle2 className="w-10 h-10 text-emeraldwin-400" />
-        </div>
-        <h2 className="font-display font-bold text-2xl text-white mb-2">
-          {flow === 'deposit' ? 'Deposit Submitted!' : 'Withdrawal Requested!'}
-        </h2>
-        <p className="text-slate-400 text-center text-sm">
-          {flow === 'deposit'
-            ? 'Your deposit request has been received. Please wait up to 5 minutes for it to be processed.'
-            : 'Your withdrawal request has been submitted. It will be processed shortly.'}
-        </p>
-      </div>
-    );
-  }
-
   return (
     <>
-      {alertPortal}
+      {popupPortal}
       <div className="fixed inset-0 z-[210] pointer-events-auto flex flex-col bg-slatepanel-900">
         <div className="flex items-center justify-between px-4 py-3 border-b border-borderline-900 flex-shrink-0 bg-slatepanel-900">
           <div className="flex items-center gap-3">
