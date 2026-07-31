@@ -272,6 +272,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
   useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
 
+  // Load my bets on mount
   useEffect(() => {
     const session = auth.getSession();
     if (!session?.userId) return;
@@ -326,44 +327,74 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
 
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
         settledRoundRef.current = rn;
-        const sb     = selectedChoiceRef.current;
-        const placed = betPlacedRef.current;
+        const sb          = selectedChoiceRef.current;
+        const placed      = betPlacedRef.current;
         const localOutcome = s.result;
 
         setHistory((prev) => [{ round: rn, result: localOutcome }, ...prev].slice(0, 20));
         saveSunMoonBet(null);
 
         if (sb !== null && placed) {
-          const stake = betAmountRef.current;
+          const stake   = betAmountRef.current;
           const session = auth.getSession();
           if (!session) return;
+
+          // ── OPTIMISTIC UPDATE: turant My Bets mein dikhao ──
+          // Server se response aane ka wait mat karo
+          const optimisticBet: MyBetEntry = {
+            id: `optimistic-${rn}`,
+            round: rn,
+            bet: sb,
+            result: localOutcome,
+            stake,
+            win: 0, // server confirm karega actual win amount
+          };
+          setMyBets((prev) => [optimisticBet, ...prev].slice(0, 20));
+          setOverlayResult(localOutcome);
 
           setSettling(true);
           void GameService.sunMoonSettle(session.userId, rn, sb, stake)
             .then(async (res) => {
               store.setBalance(res.balance_after);
               const serverOutcome = res.result as BetChoice;
+              const won           = res.won;
+              const profit        = res.profit;
 
               setHistory((prev) => prev.map((h) => h.round === rn ? { ...h, result: serverOutcome } : h));
               setResult(serverOutcome);
               setOverlayResult(serverOutcome);
-              setLastWon(res.won);
-              setLastPayout(res.profit);
+              setLastWon(won);
+              setLastPayout(profit);
+
+              // Optimistic entry ko real data se replace karo
+              const realBet: MyBetEntry = {
+                id: `optimistic-${rn}`,
+                round: rn,
+                bet: sb,
+                result: serverOutcome,
+                stake,
+                win: won ? profit : 0,
+              };
+              setMyBets((prev) => prev.map((b) => b.id === `optimistic-${rn}` ? realBet : b));
 
               const record: Omit<SunMoonRoundRecord, 'id' | 'ts'> = {
                 roundNumber: rn, stake, bet: sb, result: serverOutcome,
-                payout: PAYOUTS[sb], win: res.won ? res.profit : 0,
+                payout: PAYOUTS[sb], win: won ? profit : 0,
               };
               store.recordSunMoonRound(record);
 
-              // Refresh my bets after settle
-              const updated = await fetchMyBetsFromSupabase(session.userId);
-              if (updated.length > 0) setMyBets(updated);
+              // Background mein DB se fresh bets bhi fetch karo
+              void fetchMyBetsFromSupabase(session.userId).then((fresh) => {
+                if (fresh.length > 0) {
+                  setMyBets(fresh);
+                }
+              });
             })
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : 'Server error';
               cms.toast({ title: 'Settle failed', body: msg, kind: 'alert' });
-              setOverlayResult(localOutcome);
+              // Optimistic entry hatao error pe
+              setMyBets((prev) => prev.filter((b) => b.id !== `optimistic-${rn}`));
             })
             .finally(() => setSettling(false));
         } else {
