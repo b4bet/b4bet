@@ -49,6 +49,13 @@ export default function CrashView({ onBack }: Props) {
     };
   }, []);
 
+  // Lock body scroll while crash game is mounted so App's pb-[52px] doesn't cause overflow scroll
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
   // Mobile back button — go home
   useEffect(() => {
     if (!onBack) return;
@@ -61,10 +68,14 @@ export default function CrashView({ onBack }: Props) {
   const recentHistory = history.slice(0, 10);
 
   return (
-    <div className="flex flex-col h-[100dvh] bg-midnight-950" style={{ overflow: 'hidden' }}>
+    // Use fixed inset-0 so the game truly fills the viewport and ignores any parent padding/scroll
+    <div className="fixed inset-0 flex flex-col bg-midnight-950" style={{ zIndex: 10 }}>
 
-      {/* ── Game Header (fixed at top) ── */}
-      <div className="flex items-center justify-between px-3 h-[52px] bg-slatepanel-900 border-b border-borderline-900" style={{ flexShrink: 0 }}>
+      {/* ── Game Header — sticky at top, always visible ── */}
+      <div
+        className="flex items-center justify-between px-3 bg-slatepanel-900 border-b border-borderline-900"
+        style={{ height: 52, flexShrink: 0, position: 'sticky', top: 0, zIndex: 20 }}
+      >
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-slatepanel-800 border border-borderline-900 grid place-items-center">
             {logos.crash ? (
@@ -135,7 +146,6 @@ export default function CrashView({ onBack }: Props) {
         <div className="px-3 pt-2">
           <DualBetPanel />
         </div>
-        {/* History tabs — remove fixed height so content is fully visible when scrolled */}
         <div className="px-3 py-2 pb-6">
           <CrashHistoryTabs />
         </div>
