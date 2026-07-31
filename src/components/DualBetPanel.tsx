@@ -50,6 +50,8 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
   const amount = parseFloat(amountStr);
   const stake = isNaN(amount) ? 0 : amount;
 
+  const limits = store.getGameLimits('crash');
+
   // ── spec §2: inject queued bet as soon as the next countdown opens ────────
   useEffect(() => {
     if (!queued) return;
@@ -150,15 +152,15 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
     }
   }, [autoBet, phase, slot.placed, amountStr, id, autoEnabled, autoTarget]);
 
-  // ── spec §5: cumulative quick-stake clicks ────────────────────────────────
+  // ── spec §5: cumulative quick-stake chips (clamped to max) ───────────────
   const quickAmt = (base: number) => {
     if (lastQuickRef.current === base) {
       setAmountStr((prev) => {
         const cur = parseFloat(prev) || 0;
-        return String(cur + base);
+        return String(Math.min(cur + base, limits.max));
       });
     } else {
-      setAmountStr(String(base));
+      setAmountStr(String(Math.min(base, limits.max)));
       lastQuickRef.current = base;
     }
   };
@@ -166,8 +168,14 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
   const quickStakes = (cfg.gameHandlers['crash']?.quickStakes?.length ? cfg.gameHandlers['crash'].quickStakes : null) ?? (cfg.crashQuickStakes?.length ? cfg.crashQuickStakes : [200, 500, 1000, 2000]);
 
   const stepDelta = stake < 100 ? 5 : stake < 1000 ? 25 : 100;
-  const inc = () => { setAmountStr(String(Math.round((stake + stepDelta) * 100) / 100)); lastQuickRef.current = null; };
-  const dec = () => { setAmountStr(String(Math.max(1, Math.round((stake - stepDelta) * 100) / 100))); lastQuickRef.current = null; };
+  const inc = () => {
+    setAmountStr(String(Math.min(limits.max, Math.round((stake + stepDelta) * 100) / 100)));
+    lastQuickRef.current = null;
+  };
+  const dec = () => {
+    setAmountStr(String(Math.max(limits.min, Math.round((stake - stepDelta) * 100) / 100)));
+    lastQuickRef.current = null;
+  };
 
   const isQueued = !!queued;
 
@@ -258,8 +266,6 @@ function BetConsole({ id }: { id: 'A' | 'B' }) {
       </button>
     );
   };
-
-  const limits = store.getGameLimits('crash');
 
   return (
     <div
