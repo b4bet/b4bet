@@ -157,9 +157,16 @@ export function BettingPanel({
     if (phase === 'crashed' && bet.placed && bet.cashedOutAt === null) {
       cashoutFiredRef.current = false;
       const session = auth.getSession();
+      // FIX: snapshot bet_id before clearing state so each panel settles its own row.
+      // Without bet_id, Edge Function used maybeSingle() on round_uuid which fails
+      // when 2 bets exist in the same round for the same user.
+      const snapBetId = bet.betId;
+      const snapAmount = bet.amount;
+      const snapRoundUuid = aviatorLoop.getRoundUuid();
+      const snapRoundId = bet.roundId;
       if (session) {
         void import('../../lib/game-service').then(({ GameService }) => {
-          void GameService.aviatorSettle(session.userId, aviatorLoop.getRoundUuid(), bet.roundId, bet.amount)
+          void GameService.aviatorSettle(session.userId, snapRoundUuid, snapRoundId, snapAmount, snapBetId)
             .then((res) => { if (res.crash_point) aviatorLoop.reportServerCrash(res.crash_point); })
             .catch(() => {});
         });
