@@ -674,11 +674,10 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'sunvsmoon', amount: rec.stake, win: rec.win,
       result: `${rec.bet === 'tie' ? 'Eclipse' : rec.bet.toUpperCase()} \u2192 ${rec.result === 'tie' ? 'Eclipse' : rec.result.toUpperCase()}` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.stake, win_amount: rec.win,
-      multiplier: rec.payout, status: rec.win > 0 ? 'won' : 'lost',
-      bet_details: { bet: rec.bet, result: rec.result },
-    }).then(() => {}).catch(() => {});
+    // NOTE: Do NOT insert into bets table here.
+    // The process-bet Edge Function (sunvsmoon_settle) already handles the DB write
+    // with all required fields (game, round_number, bet_choice).
+    // Inserting here would create duplicate rows that break the My Bets filter.
   }
 
   recordTradingBet(rec: Omit<TradingBetRecord, 'id' | 'ts'>) {

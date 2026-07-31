@@ -104,10 +104,12 @@ async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
     p_limit: 40,
   });
   if (error) {
+    // Fallback: filter by game:'sunvsmoon' inside bet_details to avoid showing bets from other games
     const { data: fbData, error: fbError } = await supabase
       .from('bets')
       .select('id, round_id, bet_amount, win_amount, status, placed_at, bet_details')
       .eq('user_id', userId)
+      .eq('bet_details->>game', 'sunvsmoon')
       .order('placed_at', { ascending: false })
       .limit(40);
     if (fbError || !fbData) return [];
