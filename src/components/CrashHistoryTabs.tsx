@@ -1,9 +1,5 @@
 /**
  * CrashHistoryTabs
- *
- * All Bets  — current live round ki bets from crash_pending_bets (realtime)
- * My Bets   — logged-in user ki settled bets from Supabase
- * Top       — top earners in time range
  */
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../integrations/supabase/client';
@@ -25,30 +21,20 @@ function fmtTime(ts: string) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function dedup<T extends { id: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  return rows.filter((r) => { if (seen.has(r.id)) return false; seen.add(r.id); return true; });
+}
+
 interface PendingBetRow {
-  id: string;
-  username: string;
-  bet_amount: number;
-  win_amount: number;
-  cash_out_at: number | null;
-  status: string;
-  placed_at: string;
+  id: string; username: string; bet_amount: number; win_amount: number;
+  cash_out_at: number | null; status: string; placed_at: string;
 }
-
 interface MyBetRow {
-  id: string;
-  bet_amount: number;
-  win_amount: number;
-  status: string;
-  placed_at: string;
-  cash_out_at: number | null;
+  id: string; bet_amount: number; win_amount: number;
+  status: string; placed_at: string; cash_out_at: number | null;
 }
-
-interface TopRow {
-  user_id: string;
-  username: string;
-  earnings: number;
-}
+interface TopRow { user_id: string; username: string; earnings: number; }
 
 export default function CrashHistoryTabs() {
   const [tab, setTab] = useState<Tab>('all');
@@ -57,136 +43,109 @@ export default function CrashHistoryTabs() {
   const engineBets = useCrashBets();
   const crashState = useCrashState();
 
-  // ── All Bets: realtime from crash_pending_bets ──────────────────────────
+  // ── All Bets ──────────────────────────────────────────────────────────
   const [pendingBets, setPendingBets] = useState<PendingBetRow[]>([]);
   const channelRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
     if (tab !== 'all') return;
-
-    void supabase
-      .from('crash_pending_bets')
-      .select('*')
-      .order('placed_at', { ascending: false })
-      .limit(50)
-      .then(({ data }) => {
-        if (data) setPendingBets(data as PendingBetRow[]);
-      });
-
-    const ch = supabase
-      .channel('crash_pending_bets_live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'crash_pending_bets' }, () => {
-        void supabase
-          .from('crash_pending_bets')
-          .select('*')
-          .order('placed_at', { ascending: false })
-          .limit(50)
-          .then(({ data }) => {
-            if (data) setPendingBets(data as PendingBetRow[]);
-          });
-      })
-      .subscribe();
-
-    channelRef.current = ch;
-    return () => {
-      void supabase.removeChannel(ch);
-      channelRef.current = null;
+    const fetch = () => {
+      void supabase.from('crash_pending_bets').select('*')
+        .order('placed_at', { ascending: false }).limit(50)
+        .then(({ data }) => { if (data) setPendingBets(data as PendingBetRow[]); });
     };
+    fetch();
+    const ch = supabase.channel('crash_pending_bets_live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'crash_pending_bets' }, fetch)
+      .subscribe();
+    channelRef.current = ch;
+    return () => { void supabase.removeChannel(ch); channelRef.current = null; };
   }, [tab]);
 
   const myUsername = (session?.username ?? '').toLowerCase();
-
-  const engineRows = Object.values(engineBets)
-    .filter((slot) => slot.placed)
-    .map((slot) => ({
-      id: `local-${slot.id}`,
-      username: session?.username ?? 'You',
-      bet_amount: slot.amount,
-      win_amount: slot.win ?? 0,
-      cash_out_at: slot.cashedOutAt,
-      status: slot.cashedOut
-        ? 'won'
-        : crashState.phase === 'busted' && !slot.cashedOut
-        ? 'lost'
-        : 'active',
-      placed_at: new Date().toISOString(),
-    } satisfies PendingBetRow));
-
+  const engineRows = Object.values(engineBets).filter((s) => s.placed).map((slot) => ({
+    id: `local-${slot.id}`,
+    username: session?.username ?? 'You',
+    bet_amount: slot.amount,
+    win_amount: slot.win ?? 0,
+    cash_out_at: slot.cashedOutAt,
+    status: slot.cashedOut ? 'won' : crashState.phase === 'busted' ? 'lost' : 'active',
+    placed_at: new Date().toISOString(),
+  } satisfies PendingBetRow));
   const otherRows = pendingBets.filter((r) => r.username.toLowerCase() !== myUsername);
   const allBetsDisplay = [...engineRows, ...otherRows];
 
-  // ── My Bets ─────────────────────────────────────────────────────────────
+  // ── My Bets — fetched ONCE per (tab, userId) change ──────────────────
   const [myBets, setMyBets] = useState<MyBetRow[]>([]);
   const [myLoading, setMyLoading] = useState(false);
+  // Track the userId for which we already fetched so re-renders don't re-fetch
+  const myFetchedForRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (tab !== 'mine') return;
-    if (!session?.userId) { setMyLoading(false); return; }
+    const uid = session?.userId ?? null;
+    if (!uid) { setMyLoading(false); setMyBets([]); return; }
+    // Skip if already fetched for this userId in this tab session
+    if (myFetchedForRef.current === uid) return;
 
-    // cancelled flag — if effect re-runs before async completes, discard stale result
     let cancelled = false;
+    myFetchedForRef.current = uid;
     setMyLoading(true);
 
-    const applyRows = (rows: MyBetRow[]) => {
-      if (cancelled) return;
-      // Deduplicate by id in case RPC + fallback both fire
-      const seen = new Set<string>();
-      const unique = rows.filter((r) => {
-        if (seen.has(r.id)) return false;
-        seen.add(r.id);
-        return true;
-      });
-      setMyBets(unique);
-      setMyLoading(false);
-    };
-
     void (async () => {
-      // Try RPC first
+      // Try RPC
       const { data: rpcData, error: rpcError } = await supabase
-        .rpc('get_crash_my_bets', { p_user_id: session.userId, p_limit: 50 });
+        .rpc('get_crash_my_bets', { p_user_id: uid, p_limit: 50 });
 
-      if (!rpcError && rpcData && Array.isArray(rpcData) && rpcData.length >= 0) {
-        applyRows(
-          (rpcData as MyBetRow[]).map((r) => ({
-            ...r,
-            bet_amount: Number(r.bet_amount),
-            win_amount: Number(r.win_amount),
-            cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
-          }))
-        );
+      if (cancelled) return;
+
+      if (!rpcError && Array.isArray(rpcData)) {
+        setMyBets(dedup((rpcData as MyBetRow[]).map((r) => ({
+          ...r,
+          bet_amount: Number(r.bet_amount),
+          win_amount: Number(r.win_amount),
+          cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
+        }))));
+        setMyLoading(false);
         return;
       }
 
-      // Fallback: direct bets table query
-      console.warn('[CrashHistoryTabs] RPC unavailable, using direct query:', rpcError?.message);
-      const { data: fbData, error: fbError } = await supabase
+      // Fallback
+      console.warn('[CrashHistoryTabs] RPC failed, fallback:', rpcError?.message);
+      const { data: fbData } = await supabase
         .from('bets')
-        .select('id, bet_amount, win_amount, multiplier, status, placed_at, bet_details')
-        .eq('user_id', session.userId)
+        .select('id, bet_amount, win_amount, status, placed_at, bet_details')
+        .eq('user_id', uid)
         .or('bet_details->>game.eq.crash,game_id.eq.crash')
         .order('placed_at', { ascending: false })
         .limit(50);
 
-      if (!fbError && fbData) {
-        applyRows(
-          (fbData as { id: string; bet_amount: unknown; win_amount: unknown; multiplier: unknown; status: string; placed_at: string; bet_details: Record<string, unknown> | null }[]).map((r) => ({
-            id: r.id,
-            bet_amount: Number(r.bet_amount),
-            win_amount: Number(r.win_amount ?? 0),
-            status: r.status,
-            placed_at: r.placed_at,
-            cash_out_at: r.bet_details?.cashOutAt != null ? Number(r.bet_details.cashOutAt) : null,
-          }))
-        );
-      } else {
-        if (!cancelled) setMyLoading(false);
+      if (cancelled) return;
+      if (fbData) {
+        setMyBets(dedup((fbData as { id: string; bet_amount: unknown; win_amount: unknown; status: string; placed_at: string; bet_details: Record<string, unknown> | null }[]).map((r) => ({
+          id: r.id,
+          bet_amount: Number(r.bet_amount),
+          win_amount: Number(r.win_amount ?? 0),
+          status: r.status,
+          placed_at: r.placed_at,
+          cash_out_at: r.bet_details?.cashOutAt != null ? Number(r.bet_details.cashOutAt) : null,
+        }))));
       }
+      setMyLoading(false);
     })();
 
     return () => { cancelled = true; };
   }, [tab, session?.userId]);
 
-  // ── Top Players ─────────────────────────────────────────────────────────
+  // Reset fetch cache when tab changes away from mine
+  useEffect(() => {
+    if (tab !== 'mine') {
+      myFetchedForRef.current = null;
+      setMyBets([]);
+    }
+  }, [tab]);
+
+  // ── Top Players ───────────────────────────────────────────────────────
   const [topRows, setTopRows] = useState<TopRow[]>([]);
   const [topLoading, setTopLoading] = useState(false);
 
@@ -195,58 +154,38 @@ export default function CrashHistoryTabs() {
     let cancelled = false;
     setTopLoading(true);
     const since = new Date(Date.now() - RANGE_MS[range]).toISOString();
-    void supabase
-      .rpc('get_crash_top_players', { p_since: since, p_limit: 10 })
+    void supabase.rpc('get_crash_top_players', { p_since: since, p_limit: 10 })
       .then(({ data, error }) => {
         if (cancelled) return;
-        if (error) console.error('[CrashHistoryTabs] top error:', error);
-        if (!error && data) {
-          setTopRows((data as TopRow[]).map((r) => ({ ...r, earnings: Number(r.earnings) })));
-        }
+        if (!error && data) setTopRows((data as TopRow[]).map((r) => ({ ...r, earnings: Number(r.earnings) })));
         setTopLoading(false);
       });
     return () => { cancelled = true; };
   }, [tab, range]);
 
-  // ── Render ───────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────
   return (
     <div className="rounded-xl border border-borderline-900 bg-slatepanel-900">
-
-      {/* Tab bar — sticky so it stays at top when scrolling rows */}
-      <div
-        className="bg-slatepanel-900 rounded-t-xl px-2 pt-2 pb-1.5 border-b border-borderline-900"
-        style={{ position: 'sticky', top: 0, zIndex: 5 }}
-      >
+      {/* Tab bar */}
+      <div className="bg-slatepanel-900 rounded-t-xl px-2 pt-2 pb-1.5 border-b border-borderline-900"
+        style={{ position: 'sticky', top: 0, zIndex: 5 }}>
         <div className="grid grid-cols-3 gap-1.5">
           {(['all', 'mine', 'top'] as Tab[]).map((k) => (
-            <button
-              key={k}
-              onClick={() => setTab(k)}
-              className={[
-                'py-1.5 rounded-lg text-xs font-bold transition-all border',
-                tab === k
-                  ? 'bg-slatepanel-700 border-slate-500 text-white'
-                  : 'bg-slatepanel-800 border-borderline-900 text-slate-400',
-              ].join(' ')}
-            >
+            <button key={k} onClick={() => setTab(k)}
+              className={['py-1.5 rounded-lg text-xs font-bold transition-all border',
+                tab === k ? 'bg-slatepanel-700 border-slate-500 text-white'
+                  : 'bg-slatepanel-800 border-borderline-900 text-slate-400'].join(' ')}>
               {k === 'all' ? 'All Bets' : k === 'mine' ? 'My Bets' : 'Top'}
             </button>
           ))}
         </div>
-
         {tab === 'top' && (
           <div className="flex gap-1.5 mt-1.5 flex-wrap">
             {(['day', 'week', 'month', 'year'] as Range[]).map((r) => (
-              <button
-                key={r}
-                onClick={() => setRange(r)}
-                className={[
-                  'px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide transition-all',
-                  range === r
-                    ? 'bg-neon-500/20 border border-neon-400/50 text-neon-300'
-                    : 'bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white',
-                ].join(' ')}
-              >
+              <button key={r} onClick={() => setRange(r)}
+                className={['px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide transition-all',
+                  range === r ? 'bg-neon-500/20 border border-neon-400/50 text-neon-300'
+                    : 'bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white'].join(' ')}>
                 {r}
               </button>
             ))}
@@ -254,7 +193,7 @@ export default function CrashHistoryTabs() {
         )}
       </div>
 
-      {/* ── ALL BETS ── */}
+      {/* ALL BETS */}
       {tab === 'all' && (
         <table className="w-full text-xs text-left">
           <thead className="bg-slatepanel-800 text-slate-400">
@@ -266,29 +205,15 @@ export default function CrashHistoryTabs() {
             </tr>
           </thead>
           <tbody>
-            {allBetsDisplay.length === 0 && (
-              <tr><td colSpan={4} className="py-4 text-center text-slate-500">Waiting for bets…</td></tr>
-            )}
+            {allBetsDisplay.length === 0 && <tr><td colSpan={4} className="py-4 text-center text-slate-500">Waiting for bets…</td></tr>}
             {allBetsDisplay.map((b) => (
               <tr key={b.id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
                 <td className="py-1.5 px-2 text-slate-200 truncate max-w-[80px]">{b.username}</td>
                 <td className="py-1.5 px-2 text-slate-300">{store.currency}{Number(b.bet_amount)}</td>
-                <td className={`py-1.5 px-2 font-bold ${
-                  b.status === 'won'
-                    ? 'text-emeraldwin-400'
-                    : b.status === 'lost'
-                    ? 'text-coral-400'
-                    : 'text-slate-300 animate-pulse'
-                }`}>
-                  {b.status === 'won' && b.cash_out_at != null
-                    ? `${Number(b.cash_out_at).toFixed(2)}×`
-                    : b.status === 'active'
-                    ? `${crashState.multiplier.toFixed(2)}×`
-                    : '—'}
+                <td className={`py-1.5 px-2 font-bold ${b.status === 'won' ? 'text-emeraldwin-400' : b.status === 'lost' ? 'text-coral-400' : 'text-slate-300 animate-pulse'}`}>
+                  {b.status === 'won' && b.cash_out_at != null ? `${Number(b.cash_out_at).toFixed(2)}×` : b.status === 'active' ? `${crashState.multiplier.toFixed(2)}×` : '—'}
                 </td>
-                <td className={`py-1.5 px-2 ${
-                  b.status === 'won' ? 'text-emeraldwin-300' : 'text-slate-500'
-                }`}>
+                <td className={`py-1.5 px-2 ${b.status === 'won' ? 'text-emeraldwin-300' : 'text-slate-500'}`}>
                   {b.status === 'won' ? `${store.currency}${Number(b.win_amount)}` : '—'}
                 </td>
               </tr>
@@ -297,7 +222,7 @@ export default function CrashHistoryTabs() {
         </table>
       )}
 
-      {/* ── MY BETS ── */}
+      {/* MY BETS */}
       {tab === 'mine' && (
         <table className="w-full text-xs text-left">
           <thead className="bg-slatepanel-800 text-slate-400">
@@ -310,34 +235,22 @@ export default function CrashHistoryTabs() {
             </tr>
           </thead>
           <tbody>
-            {myLoading && (
-              <tr><td colSpan={5} className="py-4 text-center text-slate-500">Loading…</td></tr>
-            )}
-            {!myLoading && !session?.userId && (
-              <tr><td colSpan={5} className="py-4 text-center text-slate-500">Login to see your bets.</td></tr>
-            )}
-            {!myLoading && session?.userId && myBets.length === 0 && (
-              <tr><td colSpan={5} className="py-4 text-center text-slate-500">No bets yet.</td></tr>
-            )}
+            {myLoading && <tr><td colSpan={5} className="py-4 text-center text-slate-500">Loading…</td></tr>}
+            {!myLoading && !session?.userId && <tr><td colSpan={5} className="py-4 text-center text-slate-500">Login to see your bets.</td></tr>}
+            {!myLoading && session?.userId && myBets.length === 0 && <tr><td colSpan={5} className="py-4 text-center text-slate-500">No bets yet.</td></tr>}
             {myBets.map((b) => {
               const netpl = b.win_amount - b.bet_amount;
               return (
                 <tr key={b.id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
                   <td className="py-1.5 px-2 text-slate-400">{fmtTime(b.placed_at)}</td>
                   <td className="py-1.5 px-2 text-slate-300">{store.currency}{b.bet_amount}</td>
-                  <td className={`py-1.5 px-2 font-bold ${
-                    b.status === 'won' ? 'text-emeraldwin-400' : 'text-coral-400'
-                  }`}>
+                  <td className={`py-1.5 px-2 font-bold ${b.status === 'won' ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
                     {b.cash_out_at != null ? `${b.cash_out_at.toFixed(2)}×` : '—'}
                   </td>
-                  <td className={`py-1.5 px-2 ${
-                    b.status === 'won' ? 'text-emeraldwin-300' : 'text-slate-500'
-                  }`}>
+                  <td className={`py-1.5 px-2 ${b.status === 'won' ? 'text-emeraldwin-300' : 'text-slate-500'}`}>
                     {b.status === 'won' ? `${store.currency}${b.win_amount}` : '—'}
                   </td>
-                  <td className={`py-1.5 px-2 font-semibold ${
-                    netpl >= 0 ? 'text-emeraldwin-400' : 'text-coral-400'
-                  }`}>
+                  <td className={`py-1.5 px-2 font-semibold ${netpl >= 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
                     {netpl >= 0 ? '+' : ''}{store.currency}{netpl}
                   </td>
                 </tr>
@@ -347,7 +260,7 @@ export default function CrashHistoryTabs() {
         </table>
       )}
 
-      {/* ── TOP PLAYERS ── */}
+      {/* TOP PLAYERS */}
       {tab === 'top' && (
         <table className="w-full text-xs text-left">
           <thead className="bg-slatepanel-800 text-slate-400">
@@ -358,12 +271,8 @@ export default function CrashHistoryTabs() {
             </tr>
           </thead>
           <tbody>
-            {topLoading && (
-              <tr><td colSpan={3} className="py-4 text-center text-slate-500">Loading…</td></tr>
-            )}
-            {!topLoading && topRows.length === 0 && (
-              <tr><td colSpan={3} className="py-4 text-center text-slate-500">No data in range.</td></tr>
-            )}
+            {topLoading && <tr><td colSpan={3} className="py-4 text-center text-slate-500">Loading…</td></tr>}
+            {!topLoading && topRows.length === 0 && <tr><td colSpan={3} className="py-4 text-center text-slate-500">No data in range.</td></tr>}
             {topRows.map((r, i) => (
               <tr key={r.user_id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
                 <td className="py-1.5 px-2 text-slate-400">{i + 1}</td>
