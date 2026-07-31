@@ -18,7 +18,7 @@ import { aviatorLoop } from '../../lib/persistentGameEngine';
 const PLAYER_NAME = 'You';
 
 // BettingPanel imports this type — do NOT remove this export.
-export type PlaceBetResult = { ok: boolean; reason?: string };
+export type PlaceBetResult = { ok: boolean; reason?: string; betId?: string | null };
 
 interface AviatorGameProps {
   onBack?: () => void;
@@ -225,11 +225,10 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         return { ok: false, reason: 'server_rejected' };
       }
 
-      if (result.bet_id) {
-        const event = new CustomEvent('aviator:bet_registered', { detail: { betId: result.bet_id } });
-        window.dispatchEvent(event);
-      }
-      return { ok: true };
+      // FIX: return betId directly so each panel captures its own betId.
+      // Previously used a global window event which caused panel 1 to receive
+      // panel 0's betId when 2 bets were placed simultaneously.
+      return { ok: true, betId: result.bet_id ?? null };
     } catch {
       store.credit(amount);
       return { ok: false, reason: 'error' };
@@ -280,14 +279,10 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         const next = updater(prev);
         if (!prev.placed && next.placed && prev.roundId === roundId) {
           pendingPlayerBets.current.push({ panel, amount: next.amount });
-          const handler = (e: Event) => {
-            const detail = (e as CustomEvent<{ betId: string }>).detail;
-            const setter2 = panel === 0 ? setBet0 : setBet1;
-            setter2((b) => ({ ...b, betId: detail.betId }));
-            window.removeEventListener('aviator:bet_registered', handler);
-          };
-          window.addEventListener('aviator:bet_registered', handler);
-          setTimeout(() => window.removeEventListener('aviator:bet_registered', handler), 10_000);
+          // FIX: betId is now returned directly from onPlaceBet result in BettingPanel.
+          // The global window event ('aviator:bet_registered') has been removed because
+          // it caused both panels to capture the first betId dispatched, giving panel 1
+          // the wrong betId when 2 bets were placed simultaneously.
         }
         return next;
       });
