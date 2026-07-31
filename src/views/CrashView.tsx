@@ -49,7 +49,7 @@ export default function CrashView({ onBack }: Props) {
     };
   }, []);
 
-  // Lock body scroll while crash game is mounted so App's pb-[52px] doesn't cause overflow scroll
+  // Lock body scroll while crash game is mounted
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -68,13 +68,16 @@ export default function CrashView({ onBack }: Props) {
   const recentHistory = history.slice(0, 10);
 
   return (
-    // Use fixed inset-0 so the game truly fills the viewport and ignores any parent padding/scroll
-    <div className="fixed inset-0 flex flex-col bg-midnight-950" style={{ zIndex: 10 }}>
+    // fixed inset-0 but leave 52px at bottom for the bottom nav
+    <div
+      className="flex flex-col bg-midnight-950"
+      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 52, zIndex: 10, overflow: 'hidden' }}
+    >
 
-      {/* ── Game Header — sticky at top, always visible ── */}
+      {/* ── Game Header ── */}
       <div
         className="flex items-center justify-between px-3 bg-slatepanel-900 border-b border-borderline-900"
-        style={{ height: 52, flexShrink: 0, position: 'sticky', top: 0, zIndex: 20 }}
+        style={{ height: 52, flexShrink: 0 }}
       >
         <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-slatepanel-800 border border-borderline-900 grid place-items-center">
@@ -134,9 +137,9 @@ export default function CrashView({ onBack }: Props) {
         }
       </div>
 
-      {/* ── Scrollable area: Canvas + Bet Panel + History ── */}
+      {/* ── Scrollable area — canvas + bet panel + history tabs ── */}
       <div
-        className="overflow-y-auto"
+        className="overflow-y-auto overflow-x-hidden"
         style={{ flex: '1 1 0', minHeight: 0 }}
       >
         <div className="relative px-3 pt-2">
@@ -146,7 +149,8 @@ export default function CrashView({ onBack }: Props) {
         <div className="px-3 pt-2">
           <DualBetPanel />
         </div>
-        <div className="px-3 py-2 pb-6">
+        {/* Extra bottom padding so last row clears the edge */}
+        <div className="px-3 pt-2 pb-4">
           <CrashHistoryTabs />
         </div>
       </div>
