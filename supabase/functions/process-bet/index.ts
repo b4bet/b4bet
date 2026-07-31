@@ -480,7 +480,8 @@ serve(async (req) => {
       const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
       if (updateError) throw new Error(`Balance update failed: ${updateError.message}`);
 
-      // Fire-and-forget bet record using safeInsert (avoids .catch() on builder)
+      // FIX: Always include game:'sunvsmoon', round_number, bet_choice so My Bets
+      // filter (bet_details->>'game' = 'sunvsmoon') always matches these rows.
       const now = new Date().toISOString();
       await safeInsert(
         supabase.from("bets").insert({
@@ -490,7 +491,14 @@ serve(async (req) => {
           win_amount: winAmount,
           multiplier: won ? totalMultiplier : 0,
           status: won ? "won" : "lost",
-          bet_details: { game: "sunvsmoon", result: roundResult, bet_choice: bet, profit },
+          bet_details: {
+            game: "sunvsmoon",
+            round_number: round_id,
+            bet: bet,
+            bet_choice: bet,
+            result: roundResult,
+            profit,
+          },
           placed_at: now,
           resolved_at: now,
         })
