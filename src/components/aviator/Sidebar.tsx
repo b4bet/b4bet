@@ -8,6 +8,7 @@ import {
   initials,
 } from './game/format';
 import { auth } from '../../lib/auth';
+import { supabase } from '../../integrations/supabase/client';
 
 export interface BetRecord {
   id: string;
@@ -84,15 +85,20 @@ async function fetchMyBetsHistory(): Promise<BetRecord[]> {
   }
 }
 
+// FIX: Use Supabase RPC directly instead of Edge Function.
+// The Edge Function requires VITE_SUPABASE_ANON_KEY in the env, but production
+// build only has VITE_SUPABASE_PUBLISHABLE_KEY — causing silent fetch failures.
+// The supabase client has hardcoded fallback credentials so it always works.
 async function fetchTopWins(): Promise<TopWinRecord[]> {
   try {
-    const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
-    const res = await fetch(`${EDGE_FN}?action=aviator_top_wins`, {
-      headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
-    });
-    const data = await res.json() as { wins?: TopWinRecord[] };
-    return data.wins ?? [];
-  } catch {
+    const { data, error } = await supabase.rpc('get_aviator_top_wins', { p_limit: 10 });
+    if (error) {
+      console.error('[Sidebar] fetchTopWins RPC error:', error.message);
+      return [];
+    }
+    return (data ?? []) as TopWinRecord[];
+  } catch (err) {
+    console.error('[Sidebar] fetchTopWins exception:', err);
     return [];
   }
 }
@@ -150,9 +156,7 @@ export function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // FIX: Load top wins EVERY time Top tab is opened (not just once).
-  // Previously topWinsLoaded flag prevented reload, causing empty list on first open
-  // if the fetch failed or the tab was opened before data arrived.
+  // Load top wins EVERY time Top tab is opened (fresh data each time)
   useEffect(() => {
     if (tab === 'top') {
       setTopWinsLoading(true);
@@ -344,8 +348,6 @@ function SideTab({
 function BetRow({ bet, phase, multiplier }: { bet: BetRecord; phase: Phase; multiplier: number }) {
   const liveWin = bet.amount * multiplier;
 
-  // A bet is "in-flight" only when it's explicitly pending (current round, not yet settled).
-  // Lost/won bets from previous rounds must NOT show the live multiplier.
   const isPending = bet.status === 'pending' || (bet.status === undefined && bet.cashedOutAt === null && bet.win === null);
   const inFlight = isPending && bet.cashedOutAt === null && bet.win === null;
 
@@ -384,7 +386,6 @@ export function makeSimBet(roundId: number, phase: Phase, multiplier: number): B
   const amount = [50, 100, 100, 200, 200, 500, 1000, 25, 75, 300][Math.floor(Math.random() * 10)];
   const name = randomName();
   const color = randomAvatarColor();
-  // Some sims cash out during flight.
   let cashedOutAt: number | null = null;
   let win: number | null = null;
   if (phase === 'flying' && Math.random() < 0.18 && multiplier > 1.05) {
