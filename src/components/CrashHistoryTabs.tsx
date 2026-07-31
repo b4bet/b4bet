@@ -122,49 +122,68 @@ export default function CrashHistoryTabs() {
   useEffect(() => {
     if (tab !== 'mine') return;
     if (!session?.userId) { setMyLoading(false); return; }
+
+    // cancelled flag — if effect re-runs before async completes, discard stale result
+    let cancelled = false;
     setMyLoading(true);
 
-    void supabase
-      .rpc('get_crash_my_bets', { p_user_id: session.userId, p_limit: 50 })
-      .then(({ data, error }) => {
-        if (!error && data && Array.isArray(data)) {
-          setMyBets(
-            (data as MyBetRow[]).map((r) => ({
-              ...r,
-              bet_amount: Number(r.bet_amount),
-              win_amount: Number(r.win_amount),
-              cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
-            }))
-          );
-          setMyLoading(false);
-          return;
-        }
-        console.warn('[CrashHistoryTabs] RPC unavailable, using direct query:', error?.message);
-        return supabase
-          .from('bets')
-          .select('id, bet_amount, win_amount, multiplier, status, placed_at, bet_details')
-          .eq('user_id', session.userId)
-          .or('bet_details->>game.eq.crash,game_id.eq.crash')
-          .order('placed_at', { ascending: false })
-          .limit(50);
-      })
-      .then((result) => {
-        if (!result) return;
-        const { data: fbData, error: fbError } = result as { data: unknown[] | null; error: { message: string } | null };
-        if (!fbError && fbData) {
-          setMyBets(
-            (fbData as { id: string; bet_amount: unknown; win_amount: unknown; multiplier: unknown; status: string; placed_at: string; bet_details: Record<string, unknown> | null }[]).map((r) => ({
-              id: r.id,
-              bet_amount: Number(r.bet_amount),
-              win_amount: Number(r.win_amount ?? 0),
-              status: r.status,
-              placed_at: r.placed_at,
-              cash_out_at: r.bet_details?.cashOutAt != null ? Number(r.bet_details.cashOutAt) : null,
-            }))
-          );
-        }
-        setMyLoading(false);
+    const applyRows = (rows: MyBetRow[]) => {
+      if (cancelled) return;
+      // Deduplicate by id in case RPC + fallback both fire
+      const seen = new Set<string>();
+      const unique = rows.filter((r) => {
+        if (seen.has(r.id)) return false;
+        seen.add(r.id);
+        return true;
       });
+      setMyBets(unique);
+      setMyLoading(false);
+    };
+
+    void (async () => {
+      // Try RPC first
+      const { data: rpcData, error: rpcError } = await supabase
+        .rpc('get_crash_my_bets', { p_user_id: session.userId, p_limit: 50 });
+
+      if (!rpcError && rpcData && Array.isArray(rpcData) && rpcData.length >= 0) {
+        applyRows(
+          (rpcData as MyBetRow[]).map((r) => ({
+            ...r,
+            bet_amount: Number(r.bet_amount),
+            win_amount: Number(r.win_amount),
+            cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
+          }))
+        );
+        return;
+      }
+
+      // Fallback: direct bets table query
+      console.warn('[CrashHistoryTabs] RPC unavailable, using direct query:', rpcError?.message);
+      const { data: fbData, error: fbError } = await supabase
+        .from('bets')
+        .select('id, bet_amount, win_amount, multiplier, status, placed_at, bet_details')
+        .eq('user_id', session.userId)
+        .or('bet_details->>game.eq.crash,game_id.eq.crash')
+        .order('placed_at', { ascending: false })
+        .limit(50);
+
+      if (!fbError && fbData) {
+        applyRows(
+          (fbData as { id: string; bet_amount: unknown; win_amount: unknown; multiplier: unknown; status: string; placed_at: string; bet_details: Record<string, unknown> | null }[]).map((r) => ({
+            id: r.id,
+            bet_amount: Number(r.bet_amount),
+            win_amount: Number(r.win_amount ?? 0),
+            status: r.status,
+            placed_at: r.placed_at,
+            cash_out_at: r.bet_details?.cashOutAt != null ? Number(r.bet_details.cashOutAt) : null,
+          }))
+        );
+      } else {
+        if (!cancelled) setMyLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, [tab, session?.userId]);
 
   // ── Top Players ─────────────────────────────────────────────────────────
@@ -173,22 +192,23 @@ export default function CrashHistoryTabs() {
 
   useEffect(() => {
     if (tab !== 'top') return;
+    let cancelled = false;
     setTopLoading(true);
     const since = new Date(Date.now() - RANGE_MS[range]).toISOString();
     void supabase
       .rpc('get_crash_top_players', { p_since: since, p_limit: 10 })
       .then(({ data, error }) => {
+        if (cancelled) return;
         if (error) console.error('[CrashHistoryTabs] top error:', error);
         if (!error && data) {
           setTopRows((data as TopRow[]).map((r) => ({ ...r, earnings: Number(r.earnings) })));
         }
         setTopLoading(false);
       });
+    return () => { cancelled = true; };
   }, [tab, range]);
 
   // ── Render ───────────────────────────────────────────────────────────────
-  // NO inner scroll container — outer CrashView scroll handles everything.
-  // Tab bar is sticky so it stays visible when user scrolls through rows.
   return (
     <div className="rounded-xl border border-borderline-900 bg-slatepanel-900">
 
@@ -214,7 +234,6 @@ export default function CrashHistoryTabs() {
           ))}
         </div>
 
-        {/* Range chips — Top only */}
         {tab === 'top' && (
           <div className="flex gap-1.5 mt-1.5 flex-wrap">
             {(['day', 'week', 'month', 'year'] as Range[]).map((r) => (
@@ -234,8 +253,6 @@ export default function CrashHistoryTabs() {
           </div>
         )}
       </div>
-
-      {/* Table — NO height cap, rows flow naturally and outer scroll handles it */}
 
       {/* ── ALL BETS ── */}
       {tab === 'all' && (
