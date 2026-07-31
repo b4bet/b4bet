@@ -35,10 +35,11 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const popupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const popupFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const selectedRef = useRef<ManualMethod | null>(null);
-  selectedRef.current = selected;
+  // Always-fresh refs so closures never go stale
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const selectedRef = useRef<ManualMethod | null>(null);
+  selectedRef.current = selected;
 
   const showPopup = (title: string, body: string, kind: PopupKind = 'error') => {
     if (popupTimer.current) clearTimeout(popupTimer.current);
@@ -51,11 +52,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }, 2500);
   };
 
+  // Cleanup timers on unmount
   useEffect(() => () => {
     if (popupTimer.current) clearTimeout(popupTimer.current);
     if (popupFadeTimer.current) clearTimeout(popupFadeTimer.current);
   }, []);
 
+  // Reset form when opened
   useEffect(() => {
     if (open) {
       setSelected(null);
@@ -68,22 +71,24 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   }, [open]);
 
-  // Mobile back button
+  // Mobile hardware back button support
   useEffect(() => {
     if (!open) return;
     window.history.pushState({ pmf: true }, '');
     const onPop = () => {
       if (selectedRef.current) {
+        // Go back to method list
         setSelected(null);
         setSelectedCrypto(null);
         window.history.pushState({ pmf: true }, '');
       } else {
+        // Close the flow
         onCloseRef.current();
       }
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
-  }, [open]);
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) return null;
 
@@ -104,6 +109,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     return { min: selected.minAmount || 0, max: selected.maxAmount || Infinity };
   };
 
+  const doClose = () => onCloseRef.current();
   const handleBackToMethodList = () => { setSelected(null); setSelectedCrypto(null); };
 
   const resetForm = () => {
@@ -128,15 +134,12 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     if (limits.max > 0 && limits.max < Infinity && amt > limits.max) { showPopup('Invalid Amount', `Maximum ${flow} amount is ${store.currency}${limits.max}.`); return; }
     if (flow === 'withdrawal' && amt > balance) { showPopup('Insufficient Balance', `Available: ${store.currency}${balance.toFixed(2)}`); return; }
 
-    if (selected.kind === 'upi') {
-      if (flow === 'withdrawal' && !destination.trim()) { showPopup('UPI ID Required', 'Enter your UPI ID.'); return; }
-    } else if (selected.kind === 'bank') {
-      if (flow === 'withdrawal' && !destination.trim()) { showPopup('Account Details Required', 'Enter your bank account number.'); return; }
-    } else if (selected.kind === 'crypto') {
+    if (selected.kind === 'upi' && flow === 'withdrawal' && !destination.trim()) { showPopup('UPI ID Required', 'Enter your UPI ID.'); return; }
+    if (selected.kind === 'bank' && flow === 'withdrawal' && !destination.trim()) { showPopup('Account Details Required', 'Enter your bank account number.'); return; }
+    if (selected.kind === 'crypto') {
       if (!selectedCrypto) { showPopup('Select Currency', 'Please select a crypto currency.'); return; }
       if (flow === 'withdrawal' && !destination.trim()) { showPopup('Wallet Address Required', 'Enter your withdrawal wallet address.'); return; }
     }
-
     if (flow === 'deposit' && !utr.trim()) { showPopup('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.'); return; }
 
     setSubmitting(true);
@@ -189,6 +192,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
         return;
       }
 
+      // Success: go back to method list and show toast
       resetForm();
       showPopup(
         flow === 'deposit' ? 'Deposit Submitted!' : 'Withdrawal Requested!',
@@ -207,41 +211,49 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     navigator.clipboard?.writeText(text).then(() => { alert('Copied!'); }).catch(() => {});
   };
 
-  // Inline toast — rendered inside the page, no portal, no z-index conflict
-  const inlineToast = popup ? (
+  // Small toast at bottom — NOT fixed/portal so it never blocks buttons
+  const toast = popup ? (
     <div
-      className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[220] pointer-events-none w-[calc(100%-32px)] max-w-[340px]"
       style={{
-        opacity: popupVisible ? 1 : 0,
+        position: 'absolute',
+        bottom: 16,
+        left: '50%',
         transform: `translateX(-50%) translateY(${popupVisible ? '0' : '12px'})`,
-        transition: 'opacity 0.25s ease, transform 0.3s cubic-bezier(0.34,1.56,0.64,1)',
+        opacity: popupVisible ? 1 : 0,
+        transition: 'opacity 0.25s ease, transform 0.3s ease',
+        width: 'calc(100% - 32px)',
+        maxWidth: 340,
+        zIndex: 10,
+        pointerEvents: 'none',
       }}
     >
-      <div
-        className="overflow-hidden rounded-xl shadow-xl"
-        style={{
-          background: 'linear-gradient(145deg, #1e1e2e, #16162a)',
-          border: popup.kind === 'success' ? '1px solid rgba(16,185,129,0.35)' : '1px solid rgba(239,68,68,0.35)',
-        }}
-      >
-        <div className="h-[3px]" style={{ background: popup.kind === 'success' ? 'linear-gradient(90deg,#10b981,#34d399)' : 'linear-gradient(90deg,#ef4444,#f97316)' }} />
-        <div className="px-4 py-3 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
-            style={popup.kind === 'success'
-              ? { background: 'rgba(16,185,129,0.15)', border: '1.5px solid rgba(16,185,129,0.35)' }
-              : { background: 'rgba(239,68,68,0.15)', border: '1.5px solid rgba(239,68,68,0.35)' }}>
+      <div style={{
+        overflow: 'hidden',
+        borderRadius: 12,
+        background: 'linear-gradient(145deg,#1e1e2e,#16162a)',
+        border: popup.kind === 'success' ? '1px solid rgba(16,185,129,0.35)' : '1px solid rgba(239,68,68,0.35)',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.5)',
+      }}>
+        <div style={{ height: 3, background: popup.kind === 'success' ? 'linear-gradient(90deg,#10b981,#34d399)' : 'linear-gradient(90deg,#ef4444,#f97316)' }} />
+        <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{
+            width: 32, height: 32, borderRadius: '50%', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: popup.kind === 'success' ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)',
+            border: popup.kind === 'success' ? '1.5px solid rgba(16,185,129,0.35)' : '1.5px solid rgba(239,68,68,0.35)',
+          }}>
             {popup.kind === 'success'
-              ? <CheckCircle2 className="w-4 h-4" style={{ color: '#34d399' }} />
-              : <AlertTriangle className="w-4 h-4" style={{ color: '#f87171' }} />}
+              ? <CheckCircle2 style={{ width: 16, height: 16, color: '#34d399' }} />
+              : <AlertTriangle style={{ width: 16, height: 16, color: '#f87171' }} />}
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-semibold text-white text-[13px] leading-tight">{popup.title}</p>
-            <p className="text-[11px] text-slate-400 mt-0.5 leading-snug">{popup.body}</p>
+          <div>
+            <p style={{ color: '#fff', fontWeight: 600, fontSize: 13, margin: 0 }}>{popup.title}</p>
+            <p style={{ color: '#94a3b8', fontSize: 11, margin: '2px 0 0' }}>{popup.body}</p>
           </div>
         </div>
-        <div className="px-4 pb-2">
-          <div className="h-[2px] rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
-            <div className="h-full rounded-full" style={{
+        <div style={{ padding: '0 16px 8px' }}>
+          <div style={{ height: 2, borderRadius: 2, overflow: 'hidden', background: 'rgba(255,255,255,0.06)' }}>
+            <div style={{
+              height: '100%',
               background: popup.kind === 'success' ? 'linear-gradient(90deg,#10b981,#34d399)' : 'linear-gradient(90deg,#ef4444,#f97316)',
               animation: 'pmfshrink 2.5s linear forwards',
             }} />
@@ -252,49 +264,53 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     </div>
   ) : null;
 
+  // ── Method list page ──────────────────────────────────────────────────────
   if (!selected) {
     return (
-      <div className="fixed inset-0 z-[200] pointer-events-auto flex flex-col bg-slatepanel-900">
-        {inlineToast}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-borderline-900 flex-shrink-0">
-          <h3 className="font-display font-bold text-white flex items-center gap-2">
-            <Wallet className="w-4 h-4 text-neon-400" /> Select {title} Method
+      <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', flexDirection: 'column' }} className="bg-slatepanel-900">
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
+          <h3 className="font-display font-bold text-white" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Wallet style={{ width: 16, height: 16, color: 'var(--color-neon-400, #00ff88)' }} />
+            Select {title} Method
           </h3>
           <button
-            onClick={() => onCloseRef.current()}
-            className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors cursor-pointer"
+            type="button"
+            onClick={doClose}
+            style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', display: 'grid', placeItems: 'center', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}
           >
-            <X className="w-4 h-4 text-slate-300" />
+            <X style={{ width: 16, height: 16, color: '#cbd5e1' }} />
           </button>
         </div>
-        <div className="p-4 space-y-3 flex-1 overflow-y-auto scrollbar-thin">
+
+        {/* Method list */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12, position: 'relative' }}>
           {flowMethods.length === 0 ? (
-            <div className="text-center py-12 space-y-2">
-              <p className="text-sm text-slate-400">No {title.toLowerCase()} methods available right now.</p>
-              <p className="text-xs text-slate-500">Please check again later.</p>
+            <div style={{ textAlign: 'center', paddingTop: 48 }}>
+              <p className="text-slate-400 text-sm">No {title.toLowerCase()} methods available right now.</p>
+              <p className="text-slate-500 text-xs" style={{ marginTop: 4 }}>Please check again later.</p>
             </div>
           ) : (
             flowMethods.map((m) => {
               const kindIcon = m.kind === 'upi' ? '📱' : m.kind === 'bank' ? '🏦' : m.kind === 'crypto' ? '🪙' : '📄';
-              const kindColor = m.kind === 'upi' ? 'border-neon-400/30 hover:border-neon-400/60' :
-                m.kind === 'bank' ? 'border-amberx-500/30 hover:border-amberx-500/60' :
-                m.kind === 'crypto' ? 'border-blue-400/30 hover:border-blue-400/60' :
-                'border-borderline-900 hover:border-neon-400/60';
               return (
-                <button key={m.id} onClick={() => setSelected(m)}
-                  className={`w-full text-left px-4 py-4 rounded-xl border transition-all bg-slatepanel-800 text-white font-semibold hover:bg-slatepanel-700 text-base cursor-pointer ${kindColor}`}
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setSelected(m)}
+                  style={{ width: '100%', textAlign: 'left', padding: '14px 16px', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontWeight: 600, fontSize: 15, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}
                 >
-                  <div className="flex items-center justify-between">
-                    <div><span className="mr-2">{kindIcon}</span>{m.label}</div>
-                    <div className="text-[10px] text-slate-500 font-normal">
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>{kindIcon} {m.label}</span>
+                    <span style={{ fontSize: 10, color: '#64748b', fontWeight: 400 }}>
                       {m.minAmount > 0 && `Min ${store.currency}${m.minAmount}`}
                       {m.maxAmount > 0 && m.maxAmount < Infinity && ` · Max ${store.currency}${m.maxAmount}`}
-                    </div>
+                    </span>
                   </div>
                   {m.kind === 'crypto' && m.cryptoCurrencies && (
-                    <div className="flex gap-1 mt-2 flex-wrap">
+                    <div style={{ display: 'flex', gap: 4, marginTop: 8, flexWrap: 'wrap' }}>
                       {m.cryptoCurrencies.map((cc) => (
-                        <span key={cc.id} className="chip text-[9px] bg-blue-500/10 text-blue-300 border border-blue-500/20">
+                        <span key={cc.id} style={{ fontSize: 9, padding: '2px 6px', borderRadius: 4, background: 'rgba(59,130,246,0.1)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.2)' }}>
                           {cc.name} ({cc.network})
                         </span>
                       ))}
@@ -304,33 +320,40 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
               );
             })
           )}
+          {toast}
         </div>
       </div>
     );
   }
 
+  // ── Form page ─────────────────────────────────────────────────────────────
   const limits = getEffectiveLimits();
 
   return (
-    <div className="fixed inset-0 z-[210] pointer-events-auto flex flex-col bg-slatepanel-900">
-      {inlineToast}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-borderline-900 flex-shrink-0 bg-slatepanel-900">
-        <div className="flex items-center gap-3">
-          <button onClick={handleBackToMethodList} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60 transition-colors cursor-pointer">
-            <ArrowLeft className="w-4 h-4 text-slate-300" />
+    <div style={{ position: 'fixed', inset: 0, zIndex: 210, display: 'flex', flexDirection: 'column' }} className="bg-slatepanel-900">
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0, background: 'var(--bg-slatepanel-900, #0f1225)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <button
+            type="button"
+            onClick={handleBackToMethodList}
+            style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', display: 'grid', placeItems: 'center', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}
+          >
+            <ArrowLeft style={{ width: 16, height: 16, color: '#cbd5e1' }} />
           </button>
           <div>
-            <h3 className="font-display font-bold text-white text-sm">{selected.label}</h3>
-            <p className="text-[10px] text-slate-500 capitalize">{selected.kind} · {title}</p>
+            <p className="font-display font-bold text-white text-sm">{selected.label}</p>
+            <p style={{ fontSize: 10, color: '#64748b', textTransform: 'capitalize' }}>{selected.kind} · {title}</p>
           </div>
         </div>
-        <div className="text-right">
-          <p className="text-[10px] text-slate-500">Balance</p>
+        <div style={{ textAlign: 'right' }}>
+          <p style={{ fontSize: 10, color: '#64748b' }}>Balance</p>
           <p className="font-display font-bold text-sm text-emeraldwin-400">{store.currency}{balance.toFixed(2)}</p>
         </div>
       </div>
 
-      <form onSubmit={(e) => { void handleSubmit(e); }} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
+      <form onSubmit={(e) => { void handleSubmit(e); }} style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 16, position: 'relative' }}>
+        {/* Amount */}
         <div>
           <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Amount ({store.currency})</label>
           <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className="input w-full py-3 text-lg font-bold" />
@@ -344,6 +367,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
           )}
         </div>
 
+        {/* UPI fields */}
         {selected.kind === 'upi' && (
           <div className="space-y-3">
             {flow === 'deposit' && (
@@ -368,15 +392,14 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             )}
             {flow === 'deposit' && (
               <div>
-                <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">
-                  UTR / Transaction Ref <span className="text-coral-400">*</span>
-                </label>
+                <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">UTR / Transaction Ref <span className="text-coral-400">*</span></label>
                 <input value={utr} onChange={(e) => setUtr(e.target.value)} placeholder="e.g. UTR123456789" className="input w-full py-3" />
               </div>
             )}
           </div>
         )}
 
+        {/* Bank fields */}
         {selected.kind === 'bank' && (
           <div className="space-y-3">
             {flow === 'deposit' && (
@@ -407,15 +430,14 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             )}
             {flow === 'deposit' && (
               <div>
-                <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">
-                  UTR / Transaction Ref <span className="text-coral-400">*</span>
-                </label>
+                <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">UTR / Transaction Ref <span className="text-coral-400">*</span></label>
                 <input value={utr} onChange={(e) => setUtr(e.target.value)} placeholder="UTR or Transaction Reference ID" className="input w-full py-3" />
               </div>
             )}
           </div>
         )}
 
+        {/* Crypto fields */}
         {selected.kind === 'crypto' && (
           <div className="space-y-3">
             <div>
@@ -462,9 +484,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             )}
             {flow === 'deposit' && (
               <div>
-                <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">
-                  Transaction Hash / Ref <span className="text-coral-400">*</span>
-                </label>
+                <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Transaction Hash / Ref <span className="text-coral-400">*</span></label>
                 <input value={utr} onChange={(e) => setUtr(e.target.value)} placeholder="Enter transaction hash (TXID)" className="input w-full py-3 font-mono text-xs" />
               </div>
             )}
@@ -481,6 +501,8 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             ? <><Loader2 className="w-5 h-5 animate-spin" /> Submitting…</>
             : (flow === 'deposit' ? 'Submit Deposit Request' : 'Request Withdrawal')}
         </button>
+
+        {toast}
       </form>
     </div>
   );
