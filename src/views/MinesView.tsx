@@ -323,7 +323,6 @@ export default function MinesView() {
   const historyMaxHeight = HISTORY_ROW_HEIGHT * HISTORY_VISIBLE_ROWS;
 
   return (
-    // Full-screen flex column — header is sticky, content scrolls below
     <div className="flex flex-col bg-midnight-900" style={{ height: 'calc(100dvh - 52px)' }}>
 
       {/* ── STICKY HEADER ── */}
@@ -345,10 +344,10 @@ export default function MinesView() {
       </div>
 
       {/* ── SCROLLABLE CONTENT ── */}
-      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-3">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
 
         {/* Grid */}
-        <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-3">
+        <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-2.5">
           <div className="grid grid-cols-5 gap-1.5">
             {Array.from({ length: 25 }, (_, i) => (
               <Cell
@@ -365,22 +364,22 @@ export default function MinesView() {
 
         {/* Status overlay for busted/cashedOut */}
         {(game.busted || game.cashedOut) && (
-          <div className={`rounded-2xl border p-4 text-center ${
+          <div className={`rounded-2xl border p-3 text-center ${
             game.busted
               ? 'bg-coral-500/10 border-coral-500/30'
               : 'bg-emeraldwin-500/10 border-emeraldwin-500/30'
           }`}>
             {game.busted ? (
               <>
-                <Bomb className="w-8 h-8 text-coral-400 mx-auto mb-2" />
-                <p className="font-display font-extrabold text-coral-300 text-lg">BUSTED!</p>
-                <p className="text-[11px] text-slate-500 mt-1">{game.gemsFound} gems found before hitting a mine</p>
+                <Bomb className="w-7 h-7 text-coral-400 mx-auto mb-1.5" />
+                <p className="font-display font-extrabold text-coral-300 text-base">BUSTED!</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">{game.gemsFound} gems found before hitting a mine</p>
               </>
             ) : (
               <>
-                <HandCoins className="w-8 h-8 text-emeraldwin-400 mx-auto mb-2" />
-                <p className="font-display font-extrabold text-emeraldwin-300 text-lg">CASHED OUT!</p>
-                <p className="text-[11px] text-slate-500 mt-1">{game.gemsFound} gems · {game.currentMultiplier.toFixed(2)}x multiplier</p>
+                <HandCoins className="w-7 h-7 text-emeraldwin-400 mx-auto mb-1.5" />
+                <p className="font-display font-extrabold text-emeraldwin-300 text-base">CASHED OUT!</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">{game.gemsFound} gems · {game.currentMultiplier.toFixed(2)}x multiplier</p>
               </>
             )}
             <button
@@ -390,7 +389,7 @@ export default function MinesView() {
                 setGame(initialState(minesInput, def));
                 setStakeStr(String(def));
               }}
-              className="mt-3 flex items-center gap-2 mx-auto px-4 py-2 rounded-lg bg-slatepanel-700 border border-borderline-800 text-slate-300 text-xs font-semibold active:scale-95 transition-transform"
+              className="mt-2 flex items-center gap-2 mx-auto px-4 py-1.5 rounded-lg bg-slatepanel-700 border border-borderline-800 text-slate-300 text-xs font-semibold active:scale-95 transition-transform"
             >
               <RefreshCw className="w-3 h-3" /> New Game
             </button>
@@ -399,37 +398,37 @@ export default function MinesView() {
 
         {/* Multiplier display when active */}
         {game.active && (
-          <div className="flex items-center justify-between px-4 py-2.5 rounded-xl bg-slatepanel-800 border border-borderline-900">
+          <div className="flex items-center justify-between px-4 py-2 rounded-xl bg-slatepanel-800 border border-borderline-900">
             <div className="text-center">
               <p className="text-[9px] text-slate-500 uppercase tracking-widest">Current</p>
-              <p className="font-display font-extrabold text-emeraldwin-400 text-lg tabular">{game.currentMultiplier.toFixed(2)}x</p>
+              <p className="font-display font-extrabold text-emeraldwin-400 text-base tabular">{game.currentMultiplier.toFixed(2)}x</p>
             </div>
-            <div className="w-px h-8 bg-borderline-900" />
+            <div className="w-px h-7 bg-borderline-900" />
             <div className="text-center">
               <p className="text-[9px] text-slate-500 uppercase tracking-widest">Next gem</p>
-              <p className="font-display font-extrabold text-neon-300 text-lg tabular">{game.nextMultiplier.toFixed(2)}x</p>
+              <p className="font-display font-extrabold text-neon-300 text-base tabular">{game.nextMultiplier.toFixed(2)}x</p>
             </div>
-            <div className="w-px h-8 bg-borderline-900" />
+            <div className="w-px h-7 bg-borderline-900" />
             <div className="text-center">
               <p className="text-[9px] text-slate-500 uppercase tracking-widest">Gems found</p>
-              <p className="font-display font-extrabold text-white text-lg tabular">{game.gemsFound}</p>
+              <p className="font-display font-extrabold text-white text-base tabular">{game.gemsFound}</p>
             </div>
           </div>
         )}
 
         {/* Bet controls (only when not active) */}
         {!game.active && !game.busted && !game.cashedOut && (
-          <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-3 space-y-3">
-            {/* Mines count */}
+          <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-2.5 space-y-2">
+            {/* Mines count — centered between left and right edges */}
             <div>
-              <label className="text-[10px] text-slate-500 uppercase tracking-widest mb-2 block">Mines count</label>
-              <div className="flex gap-2 flex-wrap">
+              <label className="text-[10px] text-slate-500 uppercase tracking-widest mb-1.5 block text-center">Mines count</label>
+              <div className="flex gap-1.5 flex-wrap justify-center">
                 {[1, 2, 3, 5, 8, 10, 15].map((n) => (
                   <button
                     key={n}
                     type="button"
                     onClick={() => setMinesInput(n)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
+                    className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all ${
                       minesInput === n
                         ? 'bg-neon-500/20 border-neon-400/60 text-neon-300'
                         : 'bg-slatepanel-800 border-borderline-800 text-slate-400 hover:border-slate-600'
@@ -443,14 +442,14 @@ export default function MinesView() {
 
             {/* Stake input */}
             <div>
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center justify-between mb-1">
                 <label className="text-[10px] text-slate-500 uppercase tracking-widest">Stake</label>
                 <span className="text-[9px] text-slate-600">
                   Min {store.currency}{limits.min} · Max {store.currency}{limits.max.toLocaleString()}
                 </span>
               </div>
               <div
-                className="rounded-xl border border-borderline-900 p-2 flex flex-col gap-2"
+                className="rounded-xl border border-borderline-900 p-2 flex flex-col gap-1.5"
                 style={{ background: 'rgba(10,12,26,0.8)' }}
               >
                 <div className="flex items-center gap-2">
@@ -520,7 +519,7 @@ export default function MinesView() {
               type="button"
               disabled={isDisabled || stakeNum < limits.min || stakeNum > limits.max || stakeNum > balance}
               onClick={() => void start()}
-              className="w-full py-3 rounded-xl font-display font-extrabold text-white text-base uppercase tracking-wider
+              className="w-full py-2.5 rounded-xl font-display font-extrabold text-white text-base uppercase tracking-wider
                          bg-gradient-to-r from-neon-500 to-emeraldwin-500 border border-neon-400/40
                          active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed
                          flex items-center justify-center gap-2"
@@ -541,7 +540,7 @@ export default function MinesView() {
             type="button"
             disabled={isDisabled}
             onClick={() => void cashout()}
-            className="w-full py-3 rounded-xl font-display font-extrabold text-white text-base uppercase tracking-wider
+            className="w-full py-2.5 rounded-xl font-display font-extrabold text-white text-base uppercase tracking-wider
                        bg-gradient-to-r from-amberx-400 to-amberx-600 border border-amberx-400/40
                        active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed
                        flex items-center justify-center gap-2"
@@ -557,22 +556,21 @@ export default function MinesView() {
 
         {/* My History — 4 rows visible, rest scroll inside box */}
         <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-borderline-900">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-borderline-900">
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">My Bets</p>
             <button type="button" onClick={refreshHistory} className="p-1 rounded-lg hover:bg-slatepanel-800 transition-colors">
               <RefreshCw className="w-3 h-3 text-slate-500" />
             </button>
           </div>
           {histLoading ? (
-            <div className="py-6 flex justify-center">
+            <div className="py-5 flex justify-center">
               <div className="w-4 h-4 border-2 border-neon-500 border-t-transparent rounded-full animate-spin" />
             </div>
           ) : histError ? (
             <p className="px-4 py-3 text-[11px] text-coral-400">{histError}</p>
           ) : myHistory.length === 0 ? (
-            <p className="px-4 py-4 text-[11px] text-slate-600 text-center">No bets yet — start playing!</p>
+            <p className="px-4 py-3 text-[11px] text-slate-600 text-center">No bets yet — start playing!</p>
           ) : (
-            // Fixed max-height showing ~4 rows; overflow scrolls within this box
             <div
               className="overflow-y-auto divide-y divide-borderline-900 scrollbar-none"
               style={{ maxHeight: `${historyMaxHeight}px` }}
