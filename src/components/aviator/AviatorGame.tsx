@@ -14,6 +14,7 @@ import { cms } from '../../lib/cms';
 import { auth } from '../../lib/auth';
 import { GameService } from '../../lib/game-service';
 import { aviatorLoop } from '../../lib/persistentGameEngine';
+import { supabase } from '../../integrations/supabase/client';
 
 // BettingPanel imports this type — do NOT remove this export.
 export type PlaceBetResult = { ok: boolean; reason?: string; betId?: string | null };
@@ -59,39 +60,40 @@ function clearAviatorBets() {
   try { localStorage.removeItem(AV_BETS_KEY); } catch { /* ignore */ }
 }
 
+// FIX: Use Supabase RPC directly to fetch round bets with real usernames.
+// The Edge Function's aviator_bets action did not join profiles so username
+// was missing. The new get_aviator_round_bets RPC joins profiles server-side.
 async function fetchRoundBets(roundUuid: string): Promise<BetRecord[]> {
   try {
-    const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
-    const res = await fetch(`${EDGE_FN}?action=aviator_bets&round_uuid=${roundUuid}`, {
-      headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
-    });
-    const data = await res.json() as {
-      bets?: {
-        user_id: string;
-        username?: string | null;
-        bet_amount: number;
-        win_amount: number | null;
-        multiplier: number | null;
-        status: string;
-        placed_at: string;
-      }[];
-    };
+    const { data, error } = await supabase.rpc('get_aviator_round_bets', { p_round_uuid: roundUuid });
+    if (error) {
+      console.error('[AviatorGame] fetchRoundBets RPC error:', error.message);
+      return [];
+    }
     const session = auth.getSession();
-    // FIX: use actual username from session for current player, and from server response for others
     const playerUsername = session?.username ?? null;
-    return (data.bets ?? []).map((b, i) => ({
+    return ((data ?? []) as {
+      user_id: string;
+      username: string;
+      bet_amount: number;
+      win_amount: number;
+      multiplier: number;
+      status: string;
+      placed_at: string;
+    }[]).map((b, i) => ({
       id: `server-${b.user_id}-${i}`,
       name: b.user_id === session?.userId
         ? (playerUsername ?? b.username ?? 'Player')
         : (b.username ?? randomName()),
       color: b.user_id === session?.userId ? '#22c55e' : randomAvatarColor(),
-      amount: b.bet_amount,
-      cashedOutAt: b.status === 'won' && b.multiplier != null ? b.multiplier : null,
-      win: b.status === 'won' && b.win_amount != null ? b.win_amount : null,
+      amount: Number(b.bet_amount),
+      cashedOutAt: b.status === 'won' && b.multiplier != null ? Number(b.multiplier) : null,
+      win: b.status === 'won' && b.win_amount != null ? Number(b.win_amount) : null,
       isPlayer: b.user_id === session?.userId,
       status: b.status === 'won' ? 'won' : b.status === 'pending' ? 'pending' : 'lost',
     } satisfies BetRecord));
-  } catch {
+  } catch (err) {
+    console.error('[AviatorGame] fetchRoundBets exception:', err);
     return [];
   }
 }
