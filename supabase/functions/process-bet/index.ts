@@ -389,6 +389,25 @@ serve(async (req) => {
       );
     }
 
+    // ── aviator_top_wins — all-time top 10 highest aviator wins ──────────────
+    if (action === "aviator_top_wins") {
+      const { data, error } = await supabase
+        .rpc("get_aviator_top_wins", { p_limit: 10 });
+
+      if (error) {
+        console.error("[process-bet] aviator_top_wins RPC error:", error.message);
+        return new Response(
+          JSON.stringify({ wins: [] }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ wins: data ?? [] }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // ── sunvsmoon_result ─────────────────────────────────────────────────────
     // FIX: now respects admin manual override (and reverts to AUTO after use),
     // consistent with sunvsmoon_settle behaviour.
@@ -705,6 +724,9 @@ serve(async (req) => {
     }
 
     // ── aviator_place_bet ────────────────────────────────────────────────────
+    // FIX: Uses atomic profiles_deduct_balance RPC (balance - amount WHERE balance >= amount)
+    // Prevents race condition when 2 bets placed simultaneously: both would read the
+    // same balance and only one deduction would stick with the old read-then-write pattern.
     if (action === "aviator_place_bet") {
       const { user_id, bet_amount, round_id } = payload;
       const betNum = Number(bet_amount);
@@ -740,28 +762,22 @@ serve(async (req) => {
         );
       }
 
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("balance")
-        .eq("id", user_id)
-        .single();
-      if (profileError || !profile) throw new Error("User profile not found");
+      // Atomic deduction: UPDATE balance = balance - betNum WHERE balance >= betNum
+      // This is safe for concurrent bets — Postgres row lock prevents double-deduction
+      const { data: newBalanceData, error: deductError } = await supabase
+        .rpc("profiles_deduct_balance", { p_user_id: user_id, p_amount: betNum });
 
-      const currentBalance = Number(profile.balance);
-
-      if (currentBalance < betNum) {
+      if (deductError) {
+        // Deduction failed — either insufficient balance or user not found
+        const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+        const currentBalance = Number(profile?.balance ?? 0);
         return new Response(
           JSON.stringify({ success: false, error: "Insufficient balance", balance_after: currentBalance }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
         );
       }
 
-      const newBalance = currentBalance - betNum;
-      const { error: updateError } = await supabase
-        .from("profiles")
-        .update({ balance: newBalance })
-        .eq("id", user_id);
-      if (updateError) throw new Error(`Balance deduction failed: ${updateError.message}`);
+      const newBalance = Number(newBalanceData);
 
       const { data: betRecord, error: betInsertError } = await supabase
         .from("bets")
@@ -780,7 +796,8 @@ serve(async (req) => {
         .maybeSingle();
 
       if (betInsertError) {
-        await supabase.from("profiles").update({ balance: currentBalance }).eq("id", user_id);
+        // Rollback balance on bet insert failure
+        await supabase.rpc("profiles_add_balance", { p_user_id: user_id, p_amount: betNum }).catch(() => {});
         throw new Error(`Bet record failed: ${betInsertError.message}`);
       }
 
