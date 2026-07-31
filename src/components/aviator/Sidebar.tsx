@@ -18,7 +18,6 @@ export interface BetRecord {
   cashedOutAt: number | null;
   win: number | null;
   isPlayer: boolean;
-  /** 'pending' = in-flight this round, 'won' = cashed out, 'lost' = crashed out */
   status?: 'pending' | 'won' | 'lost';
 }
 
@@ -70,9 +69,11 @@ async function fetchMyBetsHistory(): Promise<BetRecord[]> {
         cash_out_at: number | null;
       }[];
     };
+    // FIX: use actual username from session, not hardcoded 'You'
+    const playerName = session.username ?? 'You';
     return (data.bets ?? []).map((b) => ({
       id: b.id,
-      name: 'You',
+      name: playerName,
       color: '#22c55e',
       amount: b.bet_amount,
       cashedOutAt: b.status === 'won' ? (b.cash_out_at ?? b.multiplier) : null,
@@ -85,9 +86,8 @@ async function fetchMyBetsHistory(): Promise<BetRecord[]> {
   }
 }
 
-// FIX: Use Supabase RPC directly instead of Edge Function.
-// The Edge Function requires VITE_SUPABASE_ANON_KEY in the env, but production
-// build only has VITE_SUPABASE_PUBLISHABLE_KEY — causing silent fetch failures.
+// Use Supabase RPC directly — Edge Function requires VITE_SUPABASE_ANON_KEY
+// which is not set in production (only VITE_SUPABASE_PUBLISHABLE_KEY is set).
 // The supabase client has hardcoded fallback credentials so it always works.
 async function fetchTopWins(): Promise<TopWinRecord[]> {
   try {
@@ -126,11 +126,9 @@ export function Sidebar({
   const [input, setInput] = useState('');
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
-  // Historical my bets from server (loaded when Mine tab is opened)
   const [historyMyBets, setHistoryMyBets] = useState<BetRecord[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
 
-  // All-time top wins from server
   const [topWins, setTopWins] = useState<TopWinRecord[]>([]);
   const [topWinsLoading, setTopWinsLoading] = useState(false);
 
@@ -140,7 +138,6 @@ export function Sidebar({
     }
   }, [chat]);
 
-  // Load history when Mine tab selected
   useEffect(() => {
     if (tab === 'mine' && !historyLoaded) {
       setHistoryLoaded(true);
@@ -148,7 +145,6 @@ export function Sidebar({
     }
   }, [tab, historyLoaded]);
 
-  // Reload history when phase changes to waiting (new round settled)
   useEffect(() => {
     if (phase === 'waiting' && historyLoaded) {
       void fetchMyBetsHistory().then(setHistoryMyBets);
@@ -156,7 +152,6 @@ export function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // Load top wins EVERY time Top tab is opened (fresh data each time)
   useEffect(() => {
     if (tab === 'top') {
       setTopWinsLoading(true);
@@ -174,7 +169,6 @@ export function Sidebar({
     setInput('');
   }
 
-  // Merge current-round myBets with history (deduplicate by id)
   const combinedMyBets: BetRecord[] = [...myBets];
   const existingIds = new Set(myBets.map((b) => b.id));
   for (const h of historyMyBets) {
@@ -185,7 +179,6 @@ export function Sidebar({
 
   return (
     <div className="flex flex-col bg-[#151a27] rounded-xl mx-2 mb-2 overflow-hidden border border-white/5">
-      {/* Tabs */}
       <div className="flex border-b border-white/10">
         <SideTab active={tab === 'all'} onClick={() => setTab('all')} icon={<Users className="w-3.5 h-3.5" />}>
           All Bets
@@ -200,14 +193,12 @@ export function Sidebar({
 
       {tab !== 'top' && (
         <>
-          {/* Column headers */}
           <div className="grid grid-cols-4 gap-1 px-3 py-1.5 text-[10px] font-semibold text-white/30 uppercase tracking-wider">
             <span className="col-span-2">Player</span>
             <span className="text-right">Bet</span>
             <span className="text-right">Win</span>
           </div>
 
-          {/* Bet list */}
           <div className="max-h-48 overflow-y-auto">
             {list.length === 0 ? (
               <div className="text-center text-white/30 text-xs py-6">
@@ -222,7 +213,6 @@ export function Sidebar({
         </>
       )}
 
-      {/* Top wins tab — all-time highest wins */}
       {tab === 'top' && (
         <div className="max-h-64 overflow-y-auto">
           {topWinsLoading ? (
@@ -260,7 +250,6 @@ export function Sidebar({
         </div>
       )}
 
-      {/* Share bet button (visible when cashed out) */}
       {canShareBet && (
         <div className="px-3 py-1.5 border-t border-white/5">
           <button
@@ -273,7 +262,6 @@ export function Sidebar({
         </div>
       )}
 
-      {/* Chat */}
       <div className="border-t border-white/10">
         <div className="flex items-center justify-between px-3 pt-2 pb-1">
           <span className="text-xs font-semibold text-white/50 uppercase tracking-wider">Live Chat</span>
@@ -362,7 +350,6 @@ function BetRow({ bet, phase, multiplier }: { bet: BetRecord; phase: Phase; mult
         </div>
         <div className="min-w-0">
           <div className="text-white/80 truncate">{bet.name}</div>
-          {bet.isPlayer && <div className="text-[9px] text-green-400/70">(you)</div>}
         </div>
       </div>
       <span className="text-right text-white/60 self-center">{formatMoney(bet.amount)}</span>

@@ -15,8 +15,6 @@ import { auth } from '../../lib/auth';
 import { GameService } from '../../lib/game-service';
 import { aviatorLoop } from '../../lib/persistentGameEngine';
 
-const PLAYER_NAME = 'You';
-
 // BettingPanel imports this type — do NOT remove this export.
 export type PlaceBetResult = { ok: boolean; reason?: string; betId?: string | null };
 
@@ -79,15 +77,18 @@ async function fetchRoundBets(roundUuid: string): Promise<BetRecord[]> {
       }[];
     };
     const session = auth.getSession();
+    // FIX: use actual username from session for current player, and from server response for others
+    const playerUsername = session?.username ?? null;
     return (data.bets ?? []).map((b, i) => ({
       id: `server-${b.user_id}-${i}`,
-      name: b.user_id === session?.userId ? PLAYER_NAME : (b.username ?? randomName()),
+      name: b.user_id === session?.userId
+        ? (playerUsername ?? b.username ?? 'Player')
+        : (b.username ?? randomName()),
       color: b.user_id === session?.userId ? '#22c55e' : randomAvatarColor(),
       amount: b.bet_amount,
       cashedOutAt: b.status === 'won' && b.multiplier != null ? b.multiplier : null,
       win: b.status === 'won' && b.win_amount != null ? b.win_amount : null,
       isPlayer: b.user_id === session?.userId,
-      // FIX: pass status so BetRow knows lost bets are NOT in-flight
       status: b.status === 'won' ? 'won' : b.status === 'pending' ? 'pending' : 'lost',
     } satisfies BetRecord));
   } catch {
@@ -139,7 +140,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
     const roundUuid = aviatorLoop.getRoundUuid();
     if (!roundUuid) return;
 
-    // New round started — reset bets display
     if (roundUuid !== lastFetchedRoundUuid.current) {
       lastFetchedRoundUuid.current = roundUuid;
       crashedFetchDone.current = false;
@@ -155,7 +155,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
       }
     };
 
-    // During crashed phase: do one final fetch to show settled bets, then stop
     if (phase === 'crashed') {
       if (!crashedFetchDone.current) {
         crashedFetchDone.current = true;
@@ -225,9 +224,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         return { ok: false, reason: 'server_rejected' };
       }
 
-      // FIX: return betId directly so each panel captures its own betId.
-      // Previously used a global window event which caused panel 1 to receive
-      // panel 0's betId when 2 bets were placed simultaneously.
       return { ok: true, betId: result.bet_id ?? null };
     } catch {
       store.credit(amount);
@@ -279,10 +275,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         const next = updater(prev);
         if (!prev.placed && next.placed && prev.roundId === roundId) {
           pendingPlayerBets.current.push({ panel, amount: next.amount });
-          // FIX: betId is now returned directly from onPlaceBet result in BettingPanel.
-          // The global window event ('aviator:bet_registered') has been removed because
-          // it caused both panels to capture the first betId dispatched, giving panel 1
-          // the wrong betId when 2 bets were placed simultaneously.
         }
         return next;
       });
@@ -292,18 +284,23 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   const canShareBet = bet0.cashedOutAt !== null || bet1.cashedOutAt !== null;
 
+  // Use actual username for chat messages
+  const playerName = auth.getSession()?.username ?? 'You';
+
   const handleSendChat = useCallback((text: string) => {
     setChat((c) => [
       ...c,
-      { id: `c-${Date.now()}`, name: PLAYER_NAME, color: '#22c55e', text },
+      { id: `c-${Date.now()}`, name: playerName, color: '#22c55e', text },
     ]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleShareBet = useCallback(() => {
     const cashed = [bet0, bet1].find((b) => b.cashedOutAt !== null);
     if (!cashed || cashed.cashedOutAt === null) return;
     const win = cashed.amount * cashed.cashedOutAt;
-    const text = `✈️ ${PLAYER_NAME} cashed out at ${cashed.cashedOutAt.toFixed(2)}x (Won ${formatMoney(win)})`;
+    const name = auth.getSession()?.username ?? 'Player';
+    const text = `✈️ ${name} cashed out at ${cashed.cashedOutAt.toFixed(2)}x (Won ${formatMoney(win)})`;
     setChat((c) => [
       ...c,
       { id: `sys-${Date.now()}`, name: 'system', color: '#e11d48', text, system: true },
@@ -315,10 +312,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   }, []);
 
   return (
-    // Full height flex column — header+HistoryBar are fixed on top, content scrolls below
     <div className="flex flex-col h-full w-full bg-aviator-bg">
 
-      {/* Fixed header — always visible, never scrolls away */}
       <div className="flex-shrink-0 z-20 bg-aviator-bg">
         <Header
           balance={balance}
@@ -333,7 +328,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         <HistoryBar history={history} />
       </div>
 
-      {/* Scrollable content area — fills remaining height */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
         <FlightCanvas
           phase={phase}
