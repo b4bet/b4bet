@@ -66,6 +66,10 @@ interface EngineState {
   serverCrashPoint: number | null;
   /** Last server-reported elapsed_ms during flying — used to prevent overshoot */
   lastServerElapsedMs: number;
+  /** When the poll last set countdown (for smooth animation) */
+  countdownSetAt: number;
+  /** Countdown value at the time it was last set by poll */
+  countdownAtSet: number;
 }
 
 const POLL_MS = 300;
@@ -113,7 +117,6 @@ async function settleSlotOnServer(
   }
 }
 
-/** Insert a pending bet row to bets table so All Bets tab shows it immediately. */
 async function insertPendingBet(
   userId: string,
   amount: number,
@@ -144,7 +147,6 @@ async function insertPendingBet(
   }
 }
 
-/** Update a pending bet row to won or lost when the round settles. */
 async function settlePendingBet(
   dbId: string,
   winAmount: number,
@@ -169,7 +171,6 @@ async function settlePendingBet(
   }
 }
 
-/** Delete a pending bet row when the user cancels before round starts. */
 async function deletePendingBet(dbId: string): Promise<void> {
   try {
     await supabase.from('bets').delete().eq('id', dbId);
@@ -194,6 +195,8 @@ class CrashEngine {
     connectTime: Date.now(),
     serverCrashPoint: null,
     lastServerElapsedMs: 0,
+    countdownSetAt: Date.now(),
+    countdownAtSet: 6,
   };
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -244,9 +247,6 @@ class CrashEngine {
         this.state.win = null;
         this.state.roundId = r.round_uuid ?? '';
         this.state.roundSeq += 1;
-        // NOTE: Don't clear serverCrashPoint here — it will be set when the
-        // first flying poll arrives. Clearing it creates a brief window where
-        // the animation is uncapped, causing the multiplier to overshoot.
         this.state.lastServerElapsedMs = 0;
         this.didPlayStart = false;
         this.didPlayCrash = false;
@@ -262,9 +262,10 @@ class CrashEngine {
         const remaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
         this.state.phase = 'countdown';
         this.state.countdown = remaining;
+        // Track when this was set for smooth animation
+        this.state.countdownAtSet = remaining;
+        this.state.countdownSetAt = Date.now();
         this.state.multiplier = 1.0;
-        // Reset server crash point during waiting so a stale value from the
-        // previous round doesn't incorrectly cap the next round's animation.
         this.state.serverCrashPoint = null;
         this.state.lastServerElapsedMs = 0;
         if (r.last_crash_point) {
@@ -289,12 +290,9 @@ class CrashEngine {
             this.didPlayStart = true;
           }
         } else {
-          // Resync timing on every poll to prevent client clock drift/overshoot
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.lastServerElapsedMs = r.elapsed_ms;
         }
-        // Store server crash point if provided (used to cap animation)
-        // Accept any positive value (crash points are always >= 1.0)
         if (r.crash_point != null && Number(r.crash_point) >= 1.0) {
           this.state.serverCrashPoint = Number(r.crash_point);
         }
@@ -308,9 +306,7 @@ class CrashEngine {
           const serverBust = r.crash_point != null ? Number(r.crash_point) : null;
           this.state.phase = 'busted';
           this.state.bustPoint = serverBust ?? this.state.multiplier;
-          // CRITICAL FIX: Always set multiplier to bustPoint so the displayed
-          // value never exceeds the actual crash point. This prevents the visual
-          // where the animation was briefly showing a higher value.
+          // Always snap multiplier to exact bust point — prevents overshoot display
           this.state.multiplier = this.state.bustPoint;
           this.state.serverCrashPoint = null;
           this.state.lastServerElapsedMs = 0;
@@ -340,17 +336,15 @@ class CrashEngine {
     if (this.state.phase === 'flying') {
       const elapsed = Date.now() - this.state.startedAt;
 
-      // PRIMARY CAP: Never let local elapsed exceed the last server-reported
-      // elapsed + one poll interval. This prevents the animation from running
-      // ahead of the server and overshooting the crash point.
+      // Cap local animation to server elapsed + one poll interval
       const maxElapsed = this.state.lastServerElapsedMs > 0
         ? this.state.lastServerElapsedMs + MAX_AHEAD_MS
-        : elapsed; // fallback: no cap if we haven't received a server elapsed yet
+        : elapsed;
       const cappedElapsed = Math.min(elapsed, maxElapsed);
 
       let m = multiplierFromElapsed(cappedElapsed);
 
-      // SECONDARY CAP: Cap at known server crash point
+      // Cap at known server crash point
       if (this.state.serverCrashPoint != null && m >= this.state.serverCrashPoint) {
         m = this.state.serverCrashPoint;
       }
@@ -358,6 +352,11 @@ class CrashEngine {
       playTickSound(m);
       this.state.multiplier = m;
       this.checkAutoCashouts();
+      this.publish();
+    } else if (this.state.phase === 'countdown') {
+      // Smooth countdown: subtract real elapsed since last poll set it
+      const elapsed = (Date.now() - this.state.countdownSetAt) / 1000;
+      this.state.countdown = Math.max(0, this.state.countdownAtSet - elapsed);
       this.publish();
     }
     this.rafId = requestAnimationFrame(() => this.animate());
@@ -445,7 +444,6 @@ class CrashEngine {
 
   // ─── Public API ────────────────────────────────────────────────────────────
 
-  /** Returns a snapshot of the current game state. Called by useCrashState() in hooks.ts. */
   getState(): CrashState {
     return {
       phase: this.state.phase,
@@ -460,12 +458,10 @@ class CrashEngine {
     };
   }
 
-  /** Returns current bets for both slots. Called by useCrashBets() in hooks.ts. */
   getBets(): Record<'A' | 'B', BetSlot> {
     return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
   }
 
-  /** Place a bet in the current countdown window. */
   placeBet(id: 'A' | 'B', amount: number): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (this.state.phase !== 'countdown') return { ok: false, reason: 'Round not in betting phase' };
@@ -477,7 +473,6 @@ class CrashEngine {
     store.debit(amount);
     this.broadcastBets();
 
-    // Insert pending row to Supabase → appears in All Bets tab immediately
     const session = auth.getSession();
     if (session?.userId) {
       void insertPendingBet(session.userId, amount, this.state.roundId).then((dbId) => {
@@ -488,13 +483,11 @@ class CrashEngine {
     return { ok: true };
   }
 
-  /** Cancel a bet during the countdown window. */
   cancelBet(id: 'A' | 'B'): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (this.state.phase !== 'countdown') return { ok: false, reason: 'Cannot cancel after round starts' };
     if (!slot.placed) return { ok: false, reason: 'No bet to cancel' };
     store.addBalance(slot.amount);
-    // Delete the pending DB row if it was already inserted
     if (slot.dbId) {
       void deletePendingBet(slot.dbId);
     }
@@ -503,26 +496,25 @@ class CrashEngine {
     return { ok: true };
   }
 
-  /** Set the raw auto cash-out target multiplier for a slot (used internally). */
   setAutoCashAt(id: 'A' | 'B', at: number | null) {
     this.state.bets[id].autoCashAt = at;
   }
 
-  /**
-   * Enable/disable auto cash-out and set the target multiplier.
-   * Called by DualBetPanel: crashEngine.setAuto(id, enabled, target)
-   */
   setAuto(id: 'A' | 'B', enabled: boolean, target: number) {
     this.state.bets[id].autoEnabled = enabled;
     this.state.bets[id].autoCashAt = enabled ? target : null;
   }
 
-  /** Cash out a slot at the current multiplier. */
   cashOut(id: 'A' | 'B'): { ok: boolean; reason?: string } {
     const slot = this.state.bets[id];
     if (this.state.phase !== 'flying') return { ok: false, reason: 'Not in flight' };
     if (!slot.placed) return { ok: false, reason: 'No bet placed' };
     if (slot.cashedOut) return { ok: false, reason: 'Already cashed out' };
+    // CRITICAL FIX: If the multiplier has reached the known server crash point,
+    // the round has already ended — block cashout to prevent overshoot win.
+    if (this.state.serverCrashPoint != null && this.state.multiplier >= this.state.serverCrashPoint) {
+      return { ok: false, reason: 'Round has ended' };
+    }
     this.performCashOut(id, this.state.multiplier);
     return { ok: true };
   }

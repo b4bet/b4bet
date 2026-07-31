@@ -61,11 +61,9 @@ export default function CrashHistoryTabs() {
   const [pendingBets, setPendingBets] = useState<PendingBetRow[]>([]);
   const channelRef = useRef<RealtimeChannel | null>(null);
 
-  // Initial load + realtime subscribe for All Bets
   useEffect(() => {
     if (tab !== 'all') return;
 
-    // Initial fetch
     void supabase
       .from('crash_pending_bets')
       .select('*')
@@ -75,24 +73,18 @@ export default function CrashHistoryTabs() {
         if (data) setPendingBets(data as PendingBetRow[]);
       });
 
-    // Realtime: any INSERT/UPDATE/DELETE on crash_pending_bets
     const ch = supabase
       .channel('crash_pending_bets_live')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'crash_pending_bets' },
-        () => {
-          // Reload on any change
-          void supabase
-            .from('crash_pending_bets')
-            .select('*')
-            .order('placed_at', { ascending: false })
-            .limit(50)
-            .then(({ data }) => {
-              if (data) setPendingBets(data as PendingBetRow[]);
-            });
-        }
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'crash_pending_bets' }, () => {
+        void supabase
+          .from('crash_pending_bets')
+          .select('*')
+          .order('placed_at', { ascending: false })
+          .limit(50)
+          .then(({ data }) => {
+            if (data) setPendingBets(data as PendingBetRow[]);
+          });
+      })
       .subscribe();
 
     channelRef.current = ch;
@@ -102,8 +94,6 @@ export default function CrashHistoryTabs() {
     };
   }, [tab]);
 
-  // Merge engine local bets (self) with pending bets from DB (others)
-  // Engine bets are source of truth for the current user
   const myUsername = (session?.username ?? '').toLowerCase();
 
   const engineRows = Object.values(engineBets)
@@ -122,11 +112,7 @@ export default function CrashHistoryTabs() {
       placed_at: new Date().toISOString(),
     } satisfies PendingBetRow));
 
-  // Remove own rows from DB list (engine is source of truth for self)
-  const otherRows = pendingBets.filter(
-    (r) => r.username.toLowerCase() !== myUsername
-  );
-
+  const otherRows = pendingBets.filter((r) => r.username.toLowerCase() !== myUsername);
   const allBetsDisplay = [...engineRows, ...otherRows];
 
   // ── My Bets ─────────────────────────────────────────────────────────────
@@ -215,12 +201,16 @@ export default function CrashHistoryTabs() {
         </div>
       )}
 
-      <div className="overflow-auto max-h-56 rounded-xl border border-borderline-900">
+      {/* Table container — fixed height with scroll */}
+      <div
+        className="rounded-xl border border-borderline-900 bg-slatepanel-900"
+        style={{ height: 224, overflowY: 'auto', overflowX: 'hidden' }}
+      >
 
-        {/* ── ALL BETS (live current round) ── */}
+        {/* ── ALL BETS ── */}
         {tab === 'all' && (
           <table className="w-full text-xs text-left">
-            <thead className="sticky top-0 bg-slatepanel-800 text-slate-400">
+            <thead className="sticky top-0 bg-slatepanel-800 text-slate-400 z-10">
               <tr>
                 <th className="py-2 px-2 font-semibold" style={{ minWidth: 80 }}>Player</th>
                 <th className="py-2 px-2 font-semibold" style={{ minWidth: 70 }}>Stake</th>
@@ -263,7 +253,7 @@ export default function CrashHistoryTabs() {
         {/* ── MY BETS ── */}
         {tab === 'mine' && (
           <table className="w-full text-xs text-left">
-            <thead className="sticky top-0 bg-slatepanel-800 text-slate-400">
+            <thead className="sticky top-0 bg-slatepanel-800 text-slate-400 z-10">
               <tr>
                 <th className="py-2 px-2 font-semibold" style={{ minWidth: 60 }}>Time</th>
                 <th className="py-2 px-2 font-semibold" style={{ minWidth: 65 }}>Stake</th>
@@ -313,7 +303,7 @@ export default function CrashHistoryTabs() {
         {/* ── TOP PLAYERS ── */}
         {tab === 'top' && (
           <table className="w-full text-xs text-left">
-            <thead className="sticky top-0 bg-slatepanel-800 text-slate-400">
+            <thead className="sticky top-0 bg-slatepanel-800 text-slate-400 z-10">
               <tr>
                 <th className="py-2 px-2 font-semibold" style={{ minWidth: 30 }}>#</th>
                 <th className="py-2 px-2 font-semibold" style={{ minWidth: 90 }}>Player</th>
