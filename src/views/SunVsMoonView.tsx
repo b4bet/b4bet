@@ -69,7 +69,7 @@ interface RpcBetRow {
 
 type MyBetEntry = {
   id: string;
-  round: number | null;
+  round: number;
   bet: BetChoice;
   result: BetChoice;
   stake: number;
@@ -86,9 +86,11 @@ function rowToMyBet(row: RpcBetRow): MyBetEntry | null {
   const betChoice = d.bet_choice ?? d.bet;
   if (!isBetChoice(betChoice) || !isBetChoice(d.result)) return null;
   const rn = d.round_number != null ? Number(d.round_number) : NaN;
+  // Round number valid nahi hai to show mat karo
+  if (isNaN(rn) || rn <= 0) return null;
   return {
     id: row.id,
-    round: !isNaN(rn) && rn > 0 ? rn : null,
+    round: rn,
     bet: betChoice,
     result: d.result,
     stake: Number(row.bet_amount),
@@ -591,9 +593,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                     <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
                       <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-white">
-                          {b.round !== null ? `#${b.round}` : 'Old Bet'}
-                        </p>
+                        <p className="text-xs font-bold text-white">#{b.round}</p>
                         <p className="text-[10px] text-slate-400">Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}</p>
                       </div>
                       <div className="text-right flex-shrink-0">
