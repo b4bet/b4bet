@@ -67,13 +67,24 @@ export default function CrashView({ onBack }: Props) {
 
   const recentHistory = history.slice(0, 10);
 
+  // Total height = 100dvh minus bottom nav (52px)
+  // Header = 52px, history bar ~36px, rest scrolls
   return (
-    // fixed inset-0 but leave 52px at bottom for the bottom nav
     <div
-      className="flex flex-col bg-midnight-950"
-      style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 52, zIndex: 10, overflow: 'hidden' }}
+      className="bg-midnight-950"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 10,
+        display: 'flex',
+        flexDirection: 'column',
+        // Reserve space for bottom nav
+        paddingBottom: 52,
+      }}
     >
-
       {/* ── Game Header ── */}
       <div
         className="flex items-center justify-between px-3 bg-slatepanel-900 border-b border-borderline-900"
@@ -137,10 +148,15 @@ export default function CrashView({ onBack }: Props) {
         }
       </div>
 
-      {/* ── Scrollable area — canvas + bet panel + history tabs ── */}
+      {/* ── Scrollable content ── */}
       <div
-        className="overflow-y-auto overflow-x-hidden"
-        style={{ flex: '1 1 0', minHeight: 0 }}
+        style={{
+          flex: 1,
+          overflowY: 'scroll',
+          overflowX: 'hidden',
+          WebkitOverflowScrolling: 'touch', // smooth momentum scroll on iOS/Android
+          overscrollBehavior: 'contain',
+        }}
       >
         <div className="relative px-3 pt-2">
           <CrashCanvas state={state} />
@@ -149,7 +165,6 @@ export default function CrashView({ onBack }: Props) {
         <div className="px-3 pt-2">
           <DualBetPanel />
         </div>
-        {/* Extra bottom padding so last row clears the edge */}
         <div className="px-3 pt-2 pb-4">
           <CrashHistoryTabs />
         </div>
