@@ -3,7 +3,7 @@
  *
  * All Bets  — current live round bets from crash_pending_bets (realtime)
  * My Bets   — logged-in user's settled bets from Supabase
- * Top       — all-time top 10 highest winning bets
+ * Top       — top 10 highest winning bets (all-time)
  */
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../integrations/supabase/client';
@@ -141,7 +141,7 @@ export default function CrashHistoryTabs() {
     }
   }, [tab]);
 
-  // ── Top Wins (all-time top 10 highest winning bets) ───────────────────
+  // ── Top Wins ──────────────────────────────────────────────────────────
   const [topWins, setTopWins] = useState<TopWinRow[]>([]);
   const [topLoading, setTopLoading] = useState(false);
 
@@ -151,7 +151,6 @@ export default function CrashHistoryTabs() {
     setTopLoading(true);
 
     void (async () => {
-      // Try RPC first for top wins
       const { data: rpcData, error: rpcError } = await supabase
         .rpc('get_crash_top_wins', { p_limit: 10 });
 
@@ -169,7 +168,6 @@ export default function CrashHistoryTabs() {
         return;
       }
 
-      // Fallback: query bets table directly
       const { data: fbData } = await supabase
         .from('bets')
         .select('id, user_id, bet_amount, win_amount, multiplier, bet_details')
@@ -181,7 +179,6 @@ export default function CrashHistoryTabs() {
       if (cancelled) return;
 
       if (fbData) {
-        // Fetch usernames for each unique user_id
         const userIds = [...new Set((fbData as { user_id: string }[]).map((r) => r.user_id))];
         const { data: profiles } = await supabase
           .from('profiles')
@@ -298,37 +295,32 @@ export default function CrashHistoryTabs() {
 
       {/* TOP WINS */}
       {tab === 'top' && (
-        <div>
-          <div className="px-3 py-2 border-b border-borderline-900/50 bg-slatepanel-800/50">
-            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">All-Time Top 10 Highest Wins</span>
-          </div>
-          <table className="w-full text-xs text-left">
-            <thead className="bg-slatepanel-800 text-slate-400">
-              <tr>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 28 }}>#</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 75 }}>Player</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 60 }}>Stake</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 50 }}>×</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 70 }}>Win</th>
+        <table className="w-full text-xs text-left">
+          <thead className="bg-slatepanel-800 text-slate-400">
+            <tr>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 28 }}>#</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 75 }}>Player</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 60 }}>Stake</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 50 }}>×</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 70 }}>Win</th>
+            </tr>
+          </thead>
+          <tbody>
+            {topLoading && <tr><td colSpan={5} className="py-4 text-center text-slate-500">Loading…</td></tr>}
+            {!topLoading && topWins.length === 0 && <tr><td colSpan={5} className="py-4 text-center text-slate-500">No data yet.</td></tr>}
+            {topWins.map((r, i) => (
+              <tr key={r.id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
+                <td className="py-1.5 px-2 text-slate-400 font-bold">{i + 1}</td>
+                <td className="py-1.5 px-2 text-slate-200 truncate max-w-[75px]">{r.username}</td>
+                <td className="py-1.5 px-2 text-slate-300">{store.currency}{r.bet_amount}</td>
+                <td className="py-1.5 px-2 font-bold text-emeraldwin-400">
+                  {r.cash_out_at != null ? `${Number(r.cash_out_at).toFixed(2)}×` : '—'}
+                </td>
+                <td className="py-1.5 px-2 font-bold text-emeraldwin-300">{store.currency}{r.win_amount}</td>
               </tr>
-            </thead>
-            <tbody>
-              {topLoading && <tr><td colSpan={5} className="py-4 text-center text-slate-500">Loading…</td></tr>}
-              {!topLoading && topWins.length === 0 && <tr><td colSpan={5} className="py-4 text-center text-slate-500">No data yet.</td></tr>}
-              {topWins.map((r, i) => (
-                <tr key={r.id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
-                  <td className="py-1.5 px-2 text-slate-400 font-bold">{i + 1}</td>
-                  <td className="py-1.5 px-2 text-slate-200 truncate max-w-[75px]">{r.username}</td>
-                  <td className="py-1.5 px-2 text-slate-300">{store.currency}{r.bet_amount}</td>
-                  <td className="py-1.5 px-2 font-bold text-emeraldwin-400">
-                    {r.cash_out_at != null ? `${Number(r.cash_out_at).toFixed(2)}×` : '—'}
-                  </td>
-                  <td className="py-1.5 px-2 font-bold text-emeraldwin-300">{store.currency}{r.win_amount}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   );
