@@ -121,6 +121,8 @@ export function BettingPanel({
             nextRound.placed = true;
             nextRound.placedAtMs = Date.now();
             void onPlaceBet(b.amount).then((res) => {
+              // FIX: capture betId returned directly from server response
+              if (res.ok) { setBet((bb) => ({ ...bb, betId: res.betId ?? bb.betId })); }
               if (!res.ok) {
                 setBet((bb) => ({ ...bb, autoBetEnabled: false, pendingNextRound: false, placed: false }));
                 if (res.reason === 'insufficient') onInsufficientBalance?.();
@@ -199,6 +201,8 @@ export function BettingPanel({
       if (phase === 'waiting' && !bet.placed && countdown > 0) {
         setBet((b) => ({ ...b, autoBetEnabled: true, placed: true, placedAtMs: Date.now() }));
         void onPlaceBet(bet.amount).then((res) => {
+          // FIX: capture betId returned directly from server response
+          if (res.ok) { setBet((b) => ({ ...b, betId: res.betId ?? b.betId })); }
           if (!res.ok) { setBet((b) => ({ ...b, autoBetEnabled: false, placed: false })); if (res.reason === 'insufficient') onInsufficientBalance?.(); }
         });
       } else { setBet((b) => ({ ...b, autoBetEnabled: true })); }
@@ -221,6 +225,8 @@ export function BettingPanel({
       setBet((b) => ({ ...b, placed: true, placedAtMs }));
       void onPlaceBet(bet.amount).then((res) => {
         setIsProcessing(false);
+        // FIX: capture betId returned directly from server response
+        if (res.ok) { setBet((b) => ({ ...b, betId: res.betId ?? b.betId })); }
         if (!res.ok) { setBet((b) => ({ ...b, placed: false, betId: null })); if (res.reason === 'insufficient') onInsufficientBalance?.(); }
       });
       return;
