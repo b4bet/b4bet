@@ -185,6 +185,10 @@ export function BettingPanel({
   const canQueueNextRound = phase === 'flying' && !bet.placed && bet.cashedOutAt === null;
   const canCancelQueue = bet.pendingNextRound && !bet.placed;
 
+  // FIX: Autowithdrawal checkbox should be disabled once round has started and bet is placed.
+  // Changing it mid-flight would cause incorrect auto-cashout behaviour.
+  const autoCashoutLocked = phase === 'flying' && bet.placed && bet.cashedOutAt === null;
+
   function adjustAmount(delta: number) {
     lastQuickRef.current = null;
     setBet((b) => ({ ...b, amount: Math.max(limits.min, Math.min(limits.max, Math.round((b.amount + delta) * 100) / 100)) }));
@@ -373,11 +377,14 @@ export function BettingPanel({
 
         <div className="w-px h-4 bg-white/10" />
 
-        {/* Autowithdrawal */}
-        <label className="flex items-center gap-1.5 cursor-pointer select-none">
+        {/* Autowithdrawal — FIX: locked (disabled + dimmed) once round is flying and bet is placed */}
+        <label className={`flex items-center gap-1.5 select-none ${autoCashoutLocked ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}>
           <span
-            className={`w-[18px] h-[18px] rounded flex items-center justify-center border flex-shrink-0 transition-colors cursor-pointer ${bet.autoCashoutEnabled ? 'bg-green-500 border-green-500' : 'bg-transparent border-white/30'}`}
-            onClick={() => setBet((b) => ({ ...b, autoCashoutEnabled: !b.autoCashoutEnabled }))}
+            className={`w-[18px] h-[18px] rounded flex items-center justify-center border flex-shrink-0 transition-colors ${autoCashoutLocked ? 'cursor-not-allowed' : 'cursor-pointer'} ${bet.autoCashoutEnabled ? 'bg-green-500 border-green-500' : 'bg-transparent border-white/30'}`}
+            onClick={() => {
+              if (autoCashoutLocked) return;
+              setBet((b) => ({ ...b, autoCashoutEnabled: !b.autoCashoutEnabled }));
+            }}
           >
             {bet.autoCashoutEnabled && (
               <svg viewBox="0 0 12 10" className="w-2.5 h-2.5" xmlns="http://www.w3.org/2000/svg">
@@ -395,9 +402,9 @@ export function BettingPanel({
             type="number"
             min="1.1"
             step="0.1"
-            className={`w-14 rounded-lg px-2 py-0.5 text-white text-xs font-bold text-center focus:outline-none border transition-colors ${bet.autoCashoutEnabled ? 'bg-white/15 border-green-500/40 focus:ring-1 focus:ring-green-500/50' : 'bg-white/8 border-white/10 opacity-50'}`}
+            className={`w-14 rounded-lg px-2 py-0.5 text-white text-xs font-bold text-center focus:outline-none border transition-colors ${bet.autoCashoutEnabled && !autoCashoutLocked ? 'bg-white/15 border-green-500/40 focus:ring-1 focus:ring-green-500/50' : 'bg-white/8 border-white/10 opacity-50'}`}
             value={autoCashoutInput}
-            disabled={!bet.autoCashoutEnabled}
+            disabled={!bet.autoCashoutEnabled || autoCashoutLocked}
             onChange={(e) => {
               setAutoCashoutInput(e.target.value);
               const v = parseFloat(e.target.value);
