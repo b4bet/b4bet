@@ -272,12 +272,15 @@ export const GameService = {
     });
   },
 
-  aviatorSettle(userId: string, roundUuid: string | null, _legacyRoundId: number, betAmount: number): Promise<AviatorSettleResult> {
+  // FIX: pass bet_id so Edge Function settles exact row by ID — not by round_uuid
+  // When 2 bets placed in same round, maybeSingle() was failing (2 rows match user+round_uuid)
+  aviatorSettle(userId: string, roundUuid: string | null, _legacyRoundId: number, betAmount: number, betId?: string | null): Promise<AviatorSettleResult> {
     return post<AviatorSettleResult>({
       action: "aviator_settle",
       user_id: userId,
       round_uuid: roundUuid,
       bet_amount: betAmount,
+      bet_id: betId ?? null,
     });
   },
 
