@@ -8,7 +8,7 @@
  */
 
 import { bus } from './bus';
-import { globalRounds, store } from './store';
+import { store } from './store';
 import { GameService } from './game-service';
 import { auth } from './auth';
 
@@ -37,14 +37,12 @@ abstract class BaseLoop<TResult> {
   readonly cycleMs: number;
   protected anchor: PersistedAnchor;
   protected timer: ReturnType<typeof setInterval> | null = null;
-  protected lastEmittedRoundId = -1;
-  protected startRoundIdx = 0;
+  protected lastEmittedRoundIdx = -1;
 
   constructor(key: string, cycleMs: number) {
     this.key = key;
     this.cycleMs = cycleMs;
     this.anchor = this.load();
-    this.startRoundIdx = this.currentRoundIdx();
   }
 
   private storageKey(): string { return `b4bet:engine:${this.key}`; }
@@ -85,9 +83,14 @@ abstract class BaseLoop<TResult> {
     return total % this.cycleMs;
   }
 
+  /**
+   * Stable, time-based round ID — purely derived from epochStart (persisted in
+   * localStorage) and the current cycle index. This means the round number is
+   * identical on every tab and every page reload: no dependency on the in-memory
+   * globalRounds counter that reset to 1 on every load.
+   */
   protected uiRoundId(): number {
-    const base = globalRounds[this.key] ?? 1;
-    return base + this.currentRoundIdx() - this.startRoundIdx;
+    return 1 + this.currentRoundIdx();
   }
 
   protected abstract computeResult(roundId: number, rng: () => number): TResult;
@@ -108,9 +111,11 @@ abstract class BaseLoop<TResult> {
   protected tick() {
     const now = Date.now();
     const idx = this.currentRoundIdx(now);
-    while (this.anchor.historyCount < idx - this.startRoundIdx) {
-      const completedIdx = this.startRoundIdx + this.anchor.historyCount;
-      const rid = (globalRounds[this.key] ?? 1) + this.anchor.historyCount;
+
+    // Catch up history for any rounds completed while page was closed / inactive.
+    while (this.anchor.historyCount < idx) {
+      const completedIdx = this.anchor.historyCount;
+      const rid = 1 + completedIdx;
       const seed = Math.floor(this.anchor.epochStart / 1000) + completedIdx;
       const result = this.computeResult(rid, seededRng(seed));
       this.anchor.history.unshift(result as unknown);
@@ -119,8 +124,9 @@ abstract class BaseLoop<TResult> {
       try { store.advanceGameRound(this.key); } catch { /* ignore */ }
       bus.emit(`engine:${this.key}:round_end`, { roundId: rid, result });
     }
-    if (idx !== this.lastEmittedRoundId || true) {
-      this.lastEmittedRoundId = idx;
+
+    if (idx !== this.lastEmittedRoundIdx) {
+      this.lastEmittedRoundIdx = idx;
       this.save();
     }
     this.emit();
@@ -454,19 +460,6 @@ class AviatorLoop {
       this.lastPollMs = now;
       void this.syncFromServer();
     }
-
-    // NOTE: We do NOT advance waiting → flying locally.
-    // That transition only happens when the server confirms phase = 'flying'.
-    // This prevents a brief ~300ms window where multiplier shows 1.0x before
-    // the server confirms takeoff — which would prematurely trigger auto-cashout.
-
-    // NOTE: We do NOT advance crashed → waiting locally either.
-    // The previous implementation did this after 3.5s, but it caused a race
-    // condition: the client showed 'waiting' while the server was still in
-    // 'crashed'. If a user placed a bet during that window, the server rejected
-    // it with "Round already ended", causing the bet to silently cancel or queue.
-    // Now crashed → waiting only happens when the server poll confirms it,
-    // which adds at most 300ms (one poll cycle) of extra crash display time.
 
     if (this.phase === 'flying') {
       const elapsed = now - this.phaseStart;
