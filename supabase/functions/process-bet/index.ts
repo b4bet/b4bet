@@ -23,10 +23,6 @@ async function safeInsert(queryBuilder: PromiseLike<unknown>): Promise<void> {
 /**
  * Reads the admin-configured manual result for sunvsmoon from Supabase settings.
  * Returns null if no manual override is configured or mode is AUTO.
- *
- * FIX: checks BOTH cfg.gameHandlers.sunvsmoon AND cfg.sunvsmoon (top-level).
- * The frontend's loadAdminConfigFromSupabase gives priority to the top-level key,
- * so both must agree. We treat either one being MANUAL as an active override.
  */
 async function getAdminSunMoonManualResult(
   supabase: ReturnType<typeof createClient>
@@ -39,7 +35,6 @@ async function getAdminSunMoonManualResult(
     if (!row?.value || typeof row.value !== "object") return null;
     const cfg = row.value as Record<string, unknown>;
 
-    // Helper: parse a sunvsmoon config object into a valid result or null
     function parseSunMoonResult(obj: unknown): "sun" | "moon" | "tie" | null {
       if (!obj || typeof obj !== "object") return null;
       const sm = obj as Record<string, unknown>;
@@ -50,30 +45,19 @@ async function getAdminSunMoonManualResult(
       return null;
     }
 
-    // Check gameHandlers.sunvsmoon first
     const handlers = cfg.gameHandlers as Record<string, unknown> | undefined;
     if (handlers) {
       const fromHandlers = parseSunMoonResult(handlers["sunvsmoon"]);
       if (fromHandlers) return fromHandlers;
     }
-
-    // Fallback: check top-level cfg.sunvsmoon (this is what the frontend prioritises)
     const fromTopLevel = parseSunMoonResult(cfg["sunvsmoon"]);
     if (fromTopLevel) return fromTopLevel;
-
     return null;
   } catch {
     return null;
   }
 }
 
-/**
- * After using a manual result for a round, revert the sunvsmoon handler back to AUTO
- * so the next round uses random outcome.
- *
- * FIX: updates BOTH cfg.gameHandlers.sunvsmoon AND cfg.sunvsmoon (top-level key)
- * so the frontend sees AUTO mode immediately after the revert.
- */
 async function revertSunMoonToAuto(
   supabase: ReturnType<typeof createClient>
 ): Promise<void> {
@@ -84,25 +68,36 @@ async function revertSunMoonToAuto(
     const row = rows.find((r) => r.key === "admin_config");
     if (!row?.value || typeof row.value !== "object") return;
     const cfg = { ...(row.value as Record<string, unknown>) };
-
     const autoState = { mode: "AUTO", manualResult: "", manualTargetRoundId: null };
-
-    // Update gameHandlers.sunvsmoon
     const handlers = { ...(cfg.gameHandlers as Record<string, unknown> ?? {}) };
     const sunmoon = { ...(handlers["sunvsmoon"] as Record<string, unknown> ?? {}) };
     Object.assign(sunmoon, autoState);
     handlers["sunvsmoon"] = sunmoon;
     cfg.gameHandlers = handlers;
-
-    // Also update top-level cfg.sunvsmoon (what the frontend reads last / prioritises)
     const topLevelSunMoon = { ...(cfg["sunvsmoon"] as Record<string, unknown> ?? {}) };
     Object.assign(topLevelSunMoon, autoState);
     cfg["sunvsmoon"] = topLevelSunMoon;
-
     await supabase.rpc("admin_update_setting", { p_key: "admin_config", p_value: cfg });
-  } catch {
-    // Non-fatal — revert best-effort
+  } catch { /* Non-fatal */ }
+}
+
+// ── Mines multiplier table ────────────────────────────────────────────────────
+// Returns multiplier for revealing `gemsFound` gems with `mineCount` mines on a 5x5 grid.
+function minesMultiplier(mineCount: number, gemsFound: number): number {
+  const totalCells = 25;
+  const safeCells = totalCells - mineCount;
+  if (gemsFound <= 0 || gemsFound > safeCells) return 1.0;
+  // Product of odds: for each gem, probability of NOT hitting a mine on remaining cells
+  let prob = 1.0;
+  for (let i = 0; i < gemsFound; i++) {
+    const remaining = totalCells - i;
+    const mines = mineCount;
+    const safe = remaining - mines;
+    prob *= safe / remaining;
   }
+  // Payout = (1 / prob) * (1 - house_edge), house edge ~4%
+  const raw = 1 / prob;
+  return Math.max(1.0, Math.floor(raw * 0.96 * 100) / 100);
 }
 
 serve(async (req) => {
@@ -127,6 +122,219 @@ serve(async (req) => {
     }
 
     const action = (payload.action ?? payload.game_type ?? "") as string;
+
+    // ── mines_start ──────────────────────────────────────────────────────────
+    if (action === "mines_start") {
+      const { user_id, mine_count, stake } = payload;
+      const stakeNum = Number(stake);
+      const mineCountNum = Math.min(24, Math.max(1, Number(mine_count ?? 3)));
+
+      if (!user_id || !stakeNum || stakeNum <= 0) {
+        throw new Error("Missing required fields: user_id, stake");
+      }
+
+      // Deduct stake from balance atomically
+      const { data: newBalanceData, error: deductError } = await supabase
+        .rpc("profiles_deduct_balance", { p_user_id: user_id, p_amount: stakeNum });
+
+      if (deductError) {
+        const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+        return new Response(
+          JSON.stringify({ success: false, error: "Insufficient balance", balance_after: Number(profile?.balance ?? 0) }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        );
+      }
+
+      const newBalance = Number(newBalanceData);
+
+      // Randomly place mines on the 5x5 grid
+      const totalCells = 25;
+      const allPositions = Array.from({ length: totalCells }, (_, i) => i);
+      // Fisher-Yates shuffle to pick mine positions
+      for (let i = allPositions.length - 1; i > 0; i--) {
+        const j = Math.floor(getSecureRandom() * (i + 1));
+        [allPositions[i], allPositions[j]] = [allPositions[j], allPositions[i]];
+      }
+      const minePositions = allPositions.slice(0, mineCountNum);
+
+      // Store session in DB
+      const { data: session, error: sessionError } = await supabase
+        .from("mines_sessions")
+        .insert({
+          user_id,
+          mine_positions: minePositions,
+          mine_count: mineCountNum,
+          stake: stakeNum,
+          gems_found: 0,
+          status: "active",
+        })
+        .select("id")
+        .single();
+
+      if (sessionError || !session) {
+        // Refund on failure
+        await supabase.rpc("profiles_add_balance", { p_user_id: user_id, p_amount: stakeNum }).catch(() => {});
+        throw new Error(`Could not create session: ${sessionError?.message ?? "unknown"}`);
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          session_id: session.id,
+          balance_after: newBalance,
+          grid_size: totalCells,
+          mine_count: mineCountNum,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── mines_reveal ─────────────────────────────────────────────────────────
+    if (action === "mines_reveal") {
+      const { user_id, session_id, tile_index } = payload;
+      const tileIdx = Number(tile_index);
+
+      if (!user_id || !session_id || isNaN(tileIdx)) {
+        throw new Error("Missing required fields: user_id, session_id, tile_index");
+      }
+
+      // Load session
+      const { data: session, error: sessionError } = await supabase
+        .from("mines_sessions")
+        .select("id, user_id, mine_positions, mine_count, stake, gems_found, status")
+        .eq("id", session_id)
+        .eq("user_id", user_id)
+        .single();
+
+      if (sessionError || !session) throw new Error("Session not found");
+      if (session.status !== "active") throw new Error("Session is no longer active");
+
+      const minePositions: number[] = session.mine_positions as number[];
+      const isMine = minePositions.includes(tileIdx);
+
+      if (isMine) {
+        // Mark session as busted
+        await supabase.from("mines_sessions")
+          .update({ status: "busted", updated_at: new Date().toISOString() })
+          .eq("id", session_id);
+
+        // Record lost bet
+        const now = new Date().toISOString();
+        await safeInsert(
+          supabase.from("bets").insert({
+            user_id,
+            bet_amount: Number(session.stake),
+            win_amount: 0,
+            multiplier: 0,
+            status: "lost",
+            bet_details: { mines: session.mine_count, gems: session.gems_found },
+            placed_at: now,
+            resolved_at: now,
+          })
+        );
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            is_mine: true,
+            gems_found: session.gems_found,
+            current_multiplier: minesMultiplier(session.mine_count, session.gems_found),
+            next_multiplier: minesMultiplier(session.mine_count, session.gems_found),
+            mine_positions: minePositions,
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Safe tile — increment gems_found
+      const newGemsFound = (session.gems_found as number) + 1;
+      const currentMult = minesMultiplier(session.mine_count, newGemsFound);
+      const nextMult = minesMultiplier(session.mine_count, newGemsFound + 1);
+
+      await supabase.from("mines_sessions")
+        .update({ gems_found: newGemsFound, updated_at: new Date().toISOString() })
+        .eq("id", session_id);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          is_mine: false,
+          gems_found: newGemsFound,
+          current_multiplier: currentMult,
+          next_multiplier: nextMult,
+          mine_positions: null,
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── mines_cashout ────────────────────────────────────────────────────────
+    if (action === "mines_cashout") {
+      const { user_id, session_id } = payload;
+
+      if (!user_id || !session_id) {
+        throw new Error("Missing required fields: user_id, session_id");
+      }
+
+      const { data: session, error: sessionError } = await supabase
+        .from("mines_sessions")
+        .select("id, user_id, mine_positions, mine_count, stake, gems_found, status")
+        .eq("id", session_id)
+        .eq("user_id", user_id)
+        .single();
+
+      if (sessionError || !session) throw new Error("Session not found");
+      if (session.status !== "active") throw new Error("Session is no longer active");
+      if ((session.gems_found as number) === 0) throw new Error("Must reveal at least one gem before cashing out");
+
+      const multiplier = minesMultiplier(session.mine_count, session.gems_found as number);
+      const stakeNum = Number(session.stake);
+      const payout = Math.round(stakeNum * multiplier * 100) / 100;
+
+      // Mark session as cashed_out
+      await supabase.from("mines_sessions")
+        .update({ status: "cashed_out", updated_at: new Date().toISOString() })
+        .eq("id", session_id);
+
+      // Credit winnings
+      const { data: newBalanceData, error: balanceError } = await supabase
+        .rpc("profiles_add_balance", { p_user_id: user_id, p_amount: payout });
+
+      let newBalance: number;
+      if (balanceError) {
+        const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
+        newBalance = Number(profile?.balance ?? 0) + payout;
+        await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
+      } else {
+        newBalance = Number(newBalanceData);
+      }
+
+      // Record won bet
+      const now = new Date().toISOString();
+      await safeInsert(
+        supabase.from("bets").insert({
+          user_id,
+          bet_amount: stakeNum,
+          win_amount: payout,
+          multiplier,
+          status: "won",
+          bet_details: { mines: session.mine_count, gems: session.gems_found },
+          placed_at: now,
+          resolved_at: now,
+        })
+      );
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          payout,
+          multiplier,
+          balance_after: newBalance,
+          mine_positions: session.mine_positions as number[],
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     // ── aviator_current_round ────────────────────────────────────────────────
     if (action === "aviator_current_round") {
@@ -293,7 +501,7 @@ serve(async (req) => {
       );
     }
 
-    // ── aviator_bets — current round bets for the All Bets sidebar tab ───────
+    // ── aviator_bets ─────────────────────────────────────────────────────────
     if (action === "aviator_bets") {
       const round_uuid = payload.round_uuid as string | undefined;
       if (!round_uuid) {
@@ -303,7 +511,6 @@ serve(async (req) => {
         );
       }
 
-      // Search bets with game_id = aviator game id
       const { data: rows1 } = await supabase
         .from("bets")
         .select("user_id, bet_amount, win_amount, multiplier, status, placed_at, bet_details")
@@ -312,7 +519,6 @@ serve(async (req) => {
         .order("placed_at", { ascending: true })
         .limit(200);
 
-      // Also search null game_id bets that have this round_uuid in bet_details
       const { data: rows2 } = await supabase
         .from("bets")
         .select("user_id, bet_amount, win_amount, multiplier, status, placed_at, bet_details")
@@ -321,7 +527,6 @@ serve(async (req) => {
         .order("placed_at", { ascending: true })
         .limit(200);
 
-      // Also search by round_uuid key at top level of bet_details
       const { data: rows3 } = await supabase
         .from("bets")
         .select("user_id, bet_amount, win_amount, multiplier, status, placed_at, bet_details")
@@ -329,7 +534,6 @@ serve(async (req) => {
         .order("placed_at", { ascending: true })
         .limit(200);
 
-      // Merge and deduplicate by user_id+placed_at
       const seen = new Set<string>();
       const allRows: {
         user_id: unknown;
@@ -362,7 +566,7 @@ serve(async (req) => {
       );
     }
 
-    // ── aviator_my_bets — user's historical settled aviator bets ─────────────
+    // ── aviator_my_bets ──────────────────────────────────────────────────────
     if (action === "aviator_my_bets") {
       const user_id = payload.user_id as string | undefined;
       if (!user_id) {
@@ -376,7 +580,6 @@ serve(async (req) => {
         .rpc("get_aviator_my_bets", { p_user_id: user_id, p_limit: 50 });
 
       if (error) {
-        console.error("[process-bet] aviator_my_bets RPC error:", error.message);
         return new Response(
           JSON.stringify({ bets: [], error: error.message }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -389,13 +592,12 @@ serve(async (req) => {
       );
     }
 
-    // ── aviator_top_wins — all-time top 10 highest aviator wins ──────────────
+    // ── aviator_top_wins ─────────────────────────────────────────────────────
     if (action === "aviator_top_wins") {
       const { data, error } = await supabase
         .rpc("get_aviator_top_wins", { p_limit: 10 });
 
       if (error) {
-        console.error("[process-bet] aviator_top_wins RPC error:", error.message);
         return new Response(
           JSON.stringify({ wins: [] }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -409,15 +611,12 @@ serve(async (req) => {
     }
 
     // ── sunvsmoon_result ─────────────────────────────────────────────────────
-    // FIX: now respects admin manual override (and reverts to AUTO after use),
-    // consistent with sunvsmoon_settle behaviour.
     if (action === "sunvsmoon_result") {
       const round_id = payload.round_id;
       const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
       if (existing) {
         return new Response(JSON.stringify({ success: true, result: existing.result }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
-      // Check admin manual override
       const adminManual = await getAdminSunMoonManualResult(supabase);
       let result: string;
       if (adminManual) {
@@ -439,21 +638,16 @@ serve(async (req) => {
         throw new Error("Missing required fields: user_id, round_id, bet, stake");
       }
 
-      // Get or create the round result
       let roundResult: string;
       const { data: existing } = await supabase.from("sunvsmoon_rounds").select("result").eq("round_id", round_id).maybeSingle();
       if (existing) {
-        // Round result already fixed (another player settled first or sunvsmoon_result was called) — use it
         roundResult = existing.result;
       } else {
-        // First settler: check admin manual override from Supabase settings
         const adminManual = await getAdminSunMoonManualResult(supabase);
         if (adminManual) {
           roundResult = adminManual;
-          // Revert admin to AUTO so next round is random
           await revertSunMoonToAuto(supabase);
         } else {
-          // Auto random
           const rand = getSecureRandom();
           roundResult = rand < 0.45 ? "sun" : rand < 0.90 ? "moon" : "tie";
         }
@@ -461,8 +655,6 @@ serve(async (req) => {
       }
 
       const won = bet === roundResult;
-
-      // Payout multipliers: Sun/Moon = 2x total, Eclipse/Tie = 9x total
       const totalMultipliers: Record<string, number> = { sun: 2, moon: 2, tie: 9 };
       const totalMultiplier = totalMultipliers[bet as string] ?? 2;
       const winAmount = won ? Math.round(stakeNum * totalMultiplier) : 0;
@@ -472,16 +664,11 @@ serve(async (req) => {
       if (profileError || !profile) throw new Error("User profile not found");
 
       const currentBalance = Number(profile.balance);
-      // Always deduct stake first, then add winAmount back.
-      // Loss: newBalance = currentBalance - stake
-      // Win:  newBalance = currentBalance - stake + winAmount
       const newBalance = currentBalance - stakeNum + winAmount;
 
       const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
       if (updateError) throw new Error(`Balance update failed: ${updateError.message}`);
 
-      // FIX: Always include game:'sunvsmoon', round_number, bet_choice so My Bets
-      // filter (bet_details->>'game' = 'sunvsmoon') always matches these rows.
       const now = new Date().toISOString();
       await safeInsert(
         supabase.from("bets").insert({
@@ -547,17 +734,10 @@ serve(async (req) => {
         .rpc("profiles_add_balance", { p_user_id: user_id, p_amount: betNum });
 
       if (refundError) {
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("balance")
-          .eq("id", user_id)
-          .single();
+        const { data: profile, error: profileError } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
         if (profileError || !profile) throw new Error("User profile not found");
         const newBalance = Number(profile.balance) + betNum;
-        const { error: updateError } = await supabase
-          .from("profiles")
-          .update({ balance: newBalance })
-          .eq("id", user_id);
+        const { error: updateError } = await supabase.from("profiles").update({ balance: newBalance }).eq("id", user_id);
         if (updateError) throw new Error(`Balance refund failed: ${updateError.message}`);
         if (bet_id) {
           await safeInsert(supabase.from("bets").delete().eq("id", bet_id).eq("user_id", user_id).eq("status", "pending"));
@@ -732,9 +912,6 @@ serve(async (req) => {
     }
 
     // ── aviator_place_bet ────────────────────────────────────────────────────
-    // FIX: Uses atomic profiles_deduct_balance RPC (balance - amount WHERE balance >= amount)
-    // Prevents race condition when 2 bets placed simultaneously: both would read the
-    // same balance and only one deduction would stick with the old read-then-write pattern.
     if (action === "aviator_place_bet") {
       const { user_id, bet_amount, round_id } = payload;
       const betNum = Number(bet_amount);
@@ -770,13 +947,10 @@ serve(async (req) => {
         );
       }
 
-      // Atomic deduction: UPDATE balance = balance - betNum WHERE balance >= betNum
-      // This is safe for concurrent bets — Postgres row lock prevents double-deduction
       const { data: newBalanceData, error: deductError } = await supabase
         .rpc("profiles_deduct_balance", { p_user_id: user_id, p_amount: betNum });
 
       if (deductError) {
-        // Deduction failed — either insufficient balance or user not found
         const { data: profile } = await supabase.from("profiles").select("balance").eq("id", user_id).single();
         const currentBalance = Number(profile?.balance ?? 0);
         return new Response(
@@ -804,7 +978,6 @@ serve(async (req) => {
         .maybeSingle();
 
       if (betInsertError) {
-        // Rollback balance on bet insert failure
         await supabase.rpc("profiles_add_balance", { p_user_id: user_id, p_amount: betNum }).catch(() => {});
         throw new Error(`Bet record failed: ${betInsertError.message}`);
       }
@@ -833,7 +1006,7 @@ serve(async (req) => {
           }
         }
         await safeInsert(
-          supabase.from("bets").insert({ user_id, game_id: "dfec9812-9596-43db-8b70-791200770f2b", round_id: null, bet_amount: Number(bet_amount), win_amount: 0, multiplier: 0, status: "lost", bet_details: { game: "aviator", bustPoint: bustPt, cashOutAt: null }, placed_at: now, resolved_at: now })
+          supabase.from("bets").insert({ user_id, game_id: "dfec9812-9596-43db-8b70-791200770f2b", round_id: null, bet_amount: Number(bet_amount), win_amount: 0, multiplier: 0, status: "lost", bet_details: { game: "aviator", bustPoint: Number(bust_point ?? 0), cashOutAt: null }, placed_at: now, resolved_at: now })
         );
       }
       return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
