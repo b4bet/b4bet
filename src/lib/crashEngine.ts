@@ -415,9 +415,13 @@ class CrashEngine {
       win: slot.win ?? 0,
     });
     if (slot.dbId) {
+      // dbId exists: update the existing pending record — do NOT call settleSlotOnServer
+      // which would insert a duplicate record via process_bet_atomic RPC.
       void settlePendingBet(slot.dbId, slot.win ?? 0, cashOutAt, cashOutAt, this.state.bustPoint, 'won');
+    } else {
+      // No pending record in DB (e.g. insert was skipped) — fall back to server settle
+      void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
     }
-    void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
   }
 
   private settleBustedBets() {
@@ -435,9 +439,13 @@ class CrashEngine {
         win: 0,
       });
       if (slot.dbId) {
+        // dbId exists: update the existing pending record — do NOT call settleSlotOnServer
+        // which would insert a duplicate record via process_bet_atomic RPC.
         void settlePendingBet(slot.dbId, 0, bustPoint, null, bustPoint, 'lost');
+      } else {
+        // No pending record in DB — fall back to server settle
+        void settleSlotOnServer(slot, roundId, bustPoint);
       }
-      void settleSlotOnServer(slot, roundId, bustPoint);
     }
     this.broadcastBets();
   }
