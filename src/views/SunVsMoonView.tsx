@@ -1,11 +1,5 @@
 /**
  * SunVsMoonView — server-side outcome version.
- * FIX: use get_sunvsmoon_my_bets RPC (SECURITY DEFINER) instead of direct
- *      table query — the direct query was failing with RLS when JWT was not
- *      yet loaded in the Supabase client, returning 0 rows silently.
- * FIX: filter My Bets by game:'sunvsmoon' to exclude duplicate legacy rows.
- * FIX: call sunMoonGetResult at round start (processing phase) to lock in
- *      the admin MANUAL override BEFORE settle, so it cannot be bypassed.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -89,8 +83,7 @@ function isBetChoice(v: unknown): v is BetChoice {
 function rowToMyBet(row: RpcBetRow): MyBetEntry | null {
   const d = row.bet_details;
   if (!d) return null;
-  // Only process rows explicitly tagged as sunvsmoon (excludes legacy duplicates)
-  if (d.game !== 'sunvsmoon') return null;
+  // Accept all sun vs moon bets — with or without game field
   const betChoice = d.bet_choice ?? d.bet;
   if (!isBetChoice(betChoice) || !isBetChoice(d.result)) return null;
   const rn = d.round_number != null ? Number(d.round_number) : NaN;
@@ -104,10 +97,6 @@ function rowToMyBet(row: RpcBetRow): MyBetEntry | null {
   };
 }
 
-// FIX: Use SECURITY DEFINER RPC instead of direct table query.
-// Direct `.from('bets').select(...)` was blocked by RLS when the Supabase
-// client's JWT had not yet been loaded, returning 0 rows silently.
-// The RPC bypasses RLS and uses p_user_id for the filter instead.
 async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
   const { data, error } = await supabase.rpc('get_sunvsmoon_my_bets', {
     p_user_id: userId,
@@ -115,7 +104,6 @@ async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
   });
   if (error) {
     console.error('[SunVsMoon] fetchMyBets RPC error:', error.message);
-    // Fallback to direct query if RPC fails for some reason
     const { data: fbData, error: fbError } = await supabase
       .from('bets')
       .select('id, round_id, bet_amount, win_amount, status, placed_at, bet_details')
@@ -274,18 +262,16 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   const [historyTab,    setHistoryTab]    = useState<'rounds' | 'my'>('rounds');
   const [settling,      setSettling]      = useState(false);
 
-  const settledRoundRef   = useRef<number>(-1);
-  const resetForRoundRef  = useRef<number>(-1);
-  // FIX: track which rounds we've already called sunMoonGetResult on, to avoid duplicate calls
+  const settledRoundRef       = useRef<number>(-1);
+  const resetForRoundRef      = useRef<number>(-1);
   const resultFetchedRoundRef = useRef<number>(-1);
-  const selectedChoiceRef = useRef<BetChoice | null>(null);
-  const betAmountRef      = useRef<number>(betAmount);
-  const betPlacedRef      = useRef(false);
+  const selectedChoiceRef     = useRef<BetChoice | null>(null);
+  const betAmountRef          = useRef<number>(betAmount);
+  const betPlacedRef          = useRef(false);
   useEffect(() => { selectedChoiceRef.current = selectedChoice; }, [selectedChoice]);
   useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
   useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
 
-  // FIX: Use RPC with SECURITY DEFINER — bypasses RLS JWT timing issues
   useEffect(() => {
     const session = auth.getSession();
     if (!session?.userId) return;
@@ -333,15 +319,9 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
         saveSunMoonBet(null);
       }
 
-      // FIX: When processing phase begins, call sunMoonGetResult to lock in the
-      // admin MANUAL override on the server BEFORE any player settles. This ensures
-      // the round row in sunvsmoon_rounds is created with the manual result, so that
-      // subsequent settle calls use it (instead of falling back to random).
       if (s.phase === 'processing' && resultFetchedRoundRef.current !== rn) {
         resultFetchedRoundRef.current = rn;
-        void GameService.sunMoonGetResult(rn).catch(() => {
-          // Non-fatal — if this fails, settle will still check the manual override.
-        });
+        void GameService.sunMoonGetResult(rn).catch(() => {});
       }
 
       if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
@@ -376,7 +356,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               };
               store.recordSunMoonRound(record);
 
-              // Refresh my bets after settle completes
+              // Refresh my bets after settle
               const updated = await fetchMyBetsFromSupabase(session.userId);
               if (updated.length > 0) setMyBets(updated);
             })
@@ -588,7 +568,6 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               ) : myBets.length === 0 ? (
                 <p className="text-xs text-slate-500 text-center py-4">Place a bet to see your history here</p>
               ) : (
-                /* Fixed-height scroll container — shows ~4 bets, rest scroll inside this box */
                 <div className="overflow-y-auto space-y-2 scrollbar-none" style={{ maxHeight: '240px' }}>
                   {myBets.map((b) => (
                     <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
