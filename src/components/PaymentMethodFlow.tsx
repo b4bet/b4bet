@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Wallet, X, Info, Copy, Coins, AlertTriangle, Loader2 } from 'lucide-react';
+import { ArrowLeft, Wallet, X, Info, Copy, Coins, AlertTriangle, Loader2, CheckCircle2 } from 'lucide-react';
 import { useAuth, useBalance } from '../lib/hooks';
-import { cms } from '../lib/cms';
+import { supabase } from '../integrations/supabase/client';
 import { useManualMethods } from '../lib/cmsHooks';
 import type { ManualMethod, CryptoCurrency } from '../lib/cms';
 import { store } from '../lib/store';
@@ -28,6 +28,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const [destination, setDestination] = useState('');
   const [details, setDetails] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [alertPopup, setAlertPopup] = useState<{ title: string; body: string } | null>(null);
   const [alertVisible, setAlertVisible] = useState(false);
   const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -61,6 +62,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       setDestination('');
       setDetails('');
       setSubmitting(false);
+      setSubmitted(false);
     }
   }, [open]);
 
@@ -71,12 +73,10 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
     const onPop = () => {
       if (selectedRef.current) {
-        // form → method list (pure state, push again so next back closes)
         setSelected(null);
         setSelectedCrypto(null);
         window.history.pushState({ pmf: true }, '');
       } else {
-        // method list → close
         onClose();
       }
     };
@@ -88,6 +88,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   if (!open) return null;
 
   const user = session?.username ?? 'guest';
+  const userId = session?.userId ?? null;
   const title = flow === 'deposit' ? 'Deposit' : 'Withdrawal';
 
   const getEffectiveLimits = (): { min: number; max: number; gasFee?: number } => {
@@ -107,72 +108,101 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     return { min: selected.minAmount || 0, max: selected.maxAmount || Infinity };
   };
 
-  // X button — just close, no history navigation
   const handleClose = () => onClose();
-
-  // Back arrow on form screen — pure React state, no history
   const handleBackToMethodList = () => {
     setSelected(null);
     setSelectedCrypto(null);
   };
 
-  const handleSubmit = (e?: React.FormEvent | React.MouseEvent) => {
+  const handleSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
     if (e && 'preventDefault' in e) e.preventDefault();
-    if (!selected || submitting) return;
+    if (!selected || submitting || submitted) return;
 
     const amt = Number(amount);
     const limits = getEffectiveLimits();
 
+    // Validations
     if (!amt || amt <= 0) { showAlert('Enter Amount', 'Amount must be greater than 0.'); return; }
     if (limits.min > 0 && amt < limits.min) { showAlert('Invalid Amount', `Minimum ${flow} amount is ${store.currency}${limits.min}.`); return; }
     if (limits.max > 0 && limits.max < Infinity && amt > limits.max) { showAlert('Invalid Amount', `Maximum ${flow} amount is ${store.currency}${limits.max}.`); return; }
     if (flow === 'withdrawal' && amt > balance) { showAlert('Insufficient Balance', `Available: ${store.currency}${balance.toFixed(2)}`); return; }
 
-    let destLabel = selected.label;
-    let destDetails: Record<string, string> = { amount: String(amt) };
-
     if (selected.kind === 'upi') {
       if (flow === 'withdrawal' && !destination.trim()) { showAlert('UPI ID Required', 'Enter your UPI ID.'); return; }
-      if (destination.trim()) destDetails = { ...destDetails, upiId: destination.trim() };
     } else if (selected.kind === 'bank') {
       if (flow === 'withdrawal' && !destination.trim()) { showAlert('Account Details Required', 'Enter your bank account number.'); return; }
-      if (destination.trim()) destDetails = { ...destDetails, accountNumber: destination.trim(), ifsc: details.trim() };
     } else if (selected.kind === 'crypto') {
       if (!selectedCrypto) { showAlert('Select Currency', 'Please select a crypto currency.'); return; }
       if (flow === 'withdrawal' && !destination.trim()) { showAlert('Wallet Address Required', 'Enter your withdrawal wallet address.'); return; }
-      destLabel = `${selected.label} - ${selectedCrypto.name} (${selectedCrypto.network})`;
-      destDetails = { ...destDetails, currency: selectedCrypto.name, network: selectedCrypto.network, walletAddress: destination.trim(), gasFee: String(selectedCrypto.gasFee || 0) };
     }
 
-    // For deposit: UTR/transaction ref is required
     if (flow === 'deposit' && !utr.trim()) {
-      showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID or Transaction Hash.');
+      showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.');
       return;
     }
 
     setSubmitting(true);
 
     try {
-      // Suppress the internal admin-facing toast that cms.submitDeposit/submitWithdrawal fires.
-      // We show our own user-friendly success toast right after.
-      const originalToast = cms.toast.bind(cms);
-      cms.toast = () => { /* suppress internal admin toast */ };
+      // Build metadata
+      let destLabel = selected.label;
+      const destDetails: Record<string, string> = { amount: String(amt) };
 
-      if (flow === 'deposit') {
-        cms.submitDeposit(user, amt, destLabel, utr.trim(), JSON.stringify(destDetails), session?.userId);
-      } else {
-        cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails), session?.userId);
+      if (selected.kind === 'upi') {
+        if (destination.trim()) destDetails['upiId'] = destination.trim();
+      } else if (selected.kind === 'bank') {
+        if (destination.trim()) { destDetails['accountNumber'] = destination.trim(); destDetails['ifsc'] = details.trim(); }
+      } else if (selected.kind === 'crypto' && selectedCrypto) {
+        destLabel = `${selected.label} - ${selectedCrypto.name} (${selectedCrypto.network})`;
+        destDetails['currency'] = selectedCrypto.name;
+        destDetails['network'] = selectedCrypto.network;
+        destDetails['walletAddress'] = destination.trim();
+        destDetails['gasFee'] = String(selectedCrypto.gasFee || 0);
       }
 
-      // Restore toast and show our success notification
-      cms.toast = originalToast;
-      cms.toast({
-        title: flow === 'deposit' ? 'Deposit Request Submitted' : 'Withdrawal Request Submitted',
-        body: 'Please wait 5 minutes, your payment is processing...',
-        kind: 'success',
+      const meta: Record<string, unknown> = {
+        username: user,
+        method: destLabel,
+        ...(utr.trim() ? { utr: utr.trim() } : {}),
+        details: JSON.stringify(destDetails),
+      };
+
+      if (flow === 'withdrawal') {
+        // Deduct balance first
+        const newBal = Math.max(0, balance - amt);
+        if (userId) {
+          await supabase.from('profiles').update({ balance: newBal }).eq('id', userId);
+        }
+        store.debitLocalOnly(amt);
+      }
+
+      // Insert transaction
+      const { error: insertErr } = await supabase.from('transactions').insert({
+        user_id: userId ?? null,
+        type: flow,
+        amount: amt,
+        reference: `${user} - ${destLabel}`,
+        status: 'pending',
+        metadata: meta,
       });
 
-      handleClose();
+      if (insertErr) {
+        // Rollback balance deduction for withdrawal
+        if (flow === 'withdrawal' && userId) {
+          await supabase.from('profiles').update({ balance: balance }).eq('id', userId);
+          store.creditLocalOnly(amt);
+        }
+        showAlert('Submission Failed', insertErr.message || 'Please try again.');
+        setSubmitting(false);
+        return;
+      }
+
+      // Success
+      setSubmitted(true);
+      setTimeout(() => {
+        handleClose();
+      }, 1500);
+
     } catch (err) {
       console.error('[PaymentMethodFlow] submit error:', err);
       setSubmitting(false);
@@ -182,7 +212,8 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard?.writeText(text).then(() => {
-      cms.toast({ title: 'Copied', body: 'Address copied to clipboard.', kind: 'success' });
+      // Simple visual feedback without using cms.toast
+      alert('Copied!');
     }).catch(() => {});
   };
 
@@ -281,6 +312,25 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
   const limits = getEffectiveLimits();
 
+  // Success screen
+  if (submitted) {
+    return (
+      <div className="fixed inset-0 z-[210] pointer-events-auto flex flex-col items-center justify-center bg-slatepanel-900 p-8">
+        <div className="w-20 h-20 rounded-full bg-emeraldwin-500/20 border-2 border-emeraldwin-500/50 flex items-center justify-center mb-6">
+          <CheckCircle2 className="w-10 h-10 text-emeraldwin-400" />
+        </div>
+        <h2 className="font-display font-bold text-2xl text-white mb-2">
+          {flow === 'deposit' ? 'Deposit Submitted!' : 'Withdrawal Requested!'}
+        </h2>
+        <p className="text-slate-400 text-center text-sm">
+          {flow === 'deposit'
+            ? 'Your deposit request has been received. Please wait up to 5 minutes for it to be processed.'
+            : 'Your withdrawal request has been submitted. It will be processed shortly.'}
+        </p>
+      </div>
+    );
+  }
+
   return (
     <>
       {alertPortal}
@@ -301,7 +351,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
+        <form onSubmit={(e) => { void handleSubmit(e); }} className="flex-1 overflow-y-auto scrollbar-thin p-4 space-y-4">
           <div>
             <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Amount ({store.currency})</label>
             <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className="input w-full py-3 text-lg font-bold" />
@@ -444,8 +494,8 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
           <button
             type="button"
-            disabled={submitting}
-            onClick={(e) => handleSubmit(e)}
+            disabled={submitting || submitted}
+            onClick={(e) => { void handleSubmit(e); }}
             className="w-full py-4 flex items-center justify-center gap-2 text-base font-semibold rounded-xl transition-all bg-green-500 hover:bg-green-600 disabled:opacity-60 disabled:cursor-not-allowed text-white shadow-lg shadow-green-500/30"
           >
             {submitting
