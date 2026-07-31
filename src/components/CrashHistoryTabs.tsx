@@ -124,7 +124,6 @@ export default function CrashHistoryTabs() {
     if (!session?.userId) { setMyLoading(false); return; }
     setMyLoading(true);
 
-    // Try RPC first, fallback to direct bets table query
     void supabase
       .rpc('get_crash_my_bets', { p_user_id: session.userId, p_limit: 50 })
       .then(({ data, error }) => {
@@ -140,7 +139,6 @@ export default function CrashHistoryTabs() {
           setMyLoading(false);
           return;
         }
-        // Fallback: direct query from bets table
         console.warn('[CrashHistoryTabs] RPC unavailable, using direct query:', error?.message);
         return supabase
           .from('bets')
@@ -151,7 +149,7 @@ export default function CrashHistoryTabs() {
           .limit(50);
       })
       .then((result) => {
-        if (!result) return; // already handled above
+        if (!result) return;
         const { data: fbData, error: fbError } = result as { data: unknown[] | null; error: { message: string } | null };
         if (!fbError && fbData) {
           setMyBets(
@@ -189,11 +187,16 @@ export default function CrashHistoryTabs() {
   }, [tab, range]);
 
   // ── Render ───────────────────────────────────────────────────────────────
+  // NO inner scroll container — outer CrashView scroll handles everything.
+  // Tab bar is sticky so it stays visible when user scrolls through rows.
   return (
-    <div className="rounded-xl border border-borderline-900 bg-slatepanel-900 flex flex-col" style={{ maxHeight: 340 }}>
+    <div className="rounded-xl border border-borderline-900 bg-slatepanel-900">
 
-      {/* Tab bar — sticky inside this container so it never scrolls away */}
-      <div className="flex-shrink-0 bg-slatepanel-900 rounded-t-xl px-2 pt-2 pb-1.5 border-b border-borderline-900">
+      {/* Tab bar — sticky so it stays at top when scrolling rows */}
+      <div
+        className="bg-slatepanel-900 rounded-t-xl px-2 pt-2 pb-1.5 border-b border-borderline-900"
+        style={{ position: 'sticky', top: 0, zIndex: 5 }}
+      >
         <div className="grid grid-cols-3 gap-1.5">
           {(['all', 'mine', 'top'] as Tab[]).map((k) => (
             <button
@@ -232,130 +235,128 @@ export default function CrashHistoryTabs() {
         )}
       </div>
 
-      {/* Scrollable table area */}
-      <div className="overflow-y-auto overflow-x-hidden flex-1" style={{ minHeight: 0 }}>
+      {/* Table — NO height cap, rows flow naturally and outer scroll handles it */}
 
-        {/* ── ALL BETS ── */}
-        {tab === 'all' && (
-          <table className="w-full text-xs text-left">
-            <thead className="sticky top-0 bg-slatepanel-800 text-slate-400 z-10">
-              <tr>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 80 }}>Player</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 70 }}>Stake</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 55 }}>×</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 70 }}>Win</th>
+      {/* ── ALL BETS ── */}
+      {tab === 'all' && (
+        <table className="w-full text-xs text-left">
+          <thead className="bg-slatepanel-800 text-slate-400">
+            <tr>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 80 }}>Player</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 70 }}>Stake</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 55 }}>×</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 70 }}>Win</th>
+            </tr>
+          </thead>
+          <tbody>
+            {allBetsDisplay.length === 0 && (
+              <tr><td colSpan={4} className="py-4 text-center text-slate-500">Waiting for bets…</td></tr>
+            )}
+            {allBetsDisplay.map((b) => (
+              <tr key={b.id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
+                <td className="py-1.5 px-2 text-slate-200 truncate max-w-[80px]">{b.username}</td>
+                <td className="py-1.5 px-2 text-slate-300">{store.currency}{Number(b.bet_amount)}</td>
+                <td className={`py-1.5 px-2 font-bold ${
+                  b.status === 'won'
+                    ? 'text-emeraldwin-400'
+                    : b.status === 'lost'
+                    ? 'text-coral-400'
+                    : 'text-slate-300 animate-pulse'
+                }`}>
+                  {b.status === 'won' && b.cash_out_at != null
+                    ? `${Number(b.cash_out_at).toFixed(2)}×`
+                    : b.status === 'active'
+                    ? `${crashState.multiplier.toFixed(2)}×`
+                    : '—'}
+                </td>
+                <td className={`py-1.5 px-2 ${
+                  b.status === 'won' ? 'text-emeraldwin-300' : 'text-slate-500'
+                }`}>
+                  {b.status === 'won' ? `${store.currency}${Number(b.win_amount)}` : '—'}
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {allBetsDisplay.length === 0 && (
-                <tr><td colSpan={4} className="py-4 text-center text-slate-500">Waiting for bets…</td></tr>
-              )}
-              {allBetsDisplay.map((b) => (
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {/* ── MY BETS ── */}
+      {tab === 'mine' && (
+        <table className="w-full text-xs text-left">
+          <thead className="bg-slatepanel-800 text-slate-400">
+            <tr>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 60 }}>Time</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 65 }}>Stake</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 55 }}>×</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 65 }}>Win</th>
+              <th className="py-2 px-2 font-semibold whitespace-nowrap" style={{ minWidth: 70 }}>Net P/L</th>
+            </tr>
+          </thead>
+          <tbody>
+            {myLoading && (
+              <tr><td colSpan={5} className="py-4 text-center text-slate-500">Loading…</td></tr>
+            )}
+            {!myLoading && !session?.userId && (
+              <tr><td colSpan={5} className="py-4 text-center text-slate-500">Login to see your bets.</td></tr>
+            )}
+            {!myLoading && session?.userId && myBets.length === 0 && (
+              <tr><td colSpan={5} className="py-4 text-center text-slate-500">No bets yet.</td></tr>
+            )}
+            {myBets.map((b) => {
+              const netpl = b.win_amount - b.bet_amount;
+              return (
                 <tr key={b.id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
-                  <td className="py-1.5 px-2 text-slate-200 truncate max-w-[80px]">{b.username}</td>
-                  <td className="py-1.5 px-2 text-slate-300">{store.currency}{Number(b.bet_amount)}</td>
+                  <td className="py-1.5 px-2 text-slate-400">{fmtTime(b.placed_at)}</td>
+                  <td className="py-1.5 px-2 text-slate-300">{store.currency}{b.bet_amount}</td>
                   <td className={`py-1.5 px-2 font-bold ${
-                    b.status === 'won'
-                      ? 'text-emeraldwin-400'
-                      : b.status === 'lost'
-                      ? 'text-coral-400'
-                      : 'text-slate-300 animate-pulse'
+                    b.status === 'won' ? 'text-emeraldwin-400' : 'text-coral-400'
                   }`}>
-                    {b.status === 'won' && b.cash_out_at != null
-                      ? `${Number(b.cash_out_at).toFixed(2)}×`
-                      : b.status === 'active'
-                      ? `${crashState.multiplier.toFixed(2)}×`
-                      : '—'}
+                    {b.cash_out_at != null ? `${b.cash_out_at.toFixed(2)}×` : '—'}
                   </td>
                   <td className={`py-1.5 px-2 ${
                     b.status === 'won' ? 'text-emeraldwin-300' : 'text-slate-500'
                   }`}>
-                    {b.status === 'won' ? `${store.currency}${Number(b.win_amount)}` : '—'}
+                    {b.status === 'won' ? `${store.currency}${b.win_amount}` : '—'}
+                  </td>
+                  <td className={`py-1.5 px-2 font-semibold ${
+                    netpl >= 0 ? 'text-emeraldwin-400' : 'text-coral-400'
+                  }`}>
+                    {netpl >= 0 ? '+' : ''}{store.currency}{netpl}
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+              );
+            })}
+          </tbody>
+        </table>
+      )}
 
-        {/* ── MY BETS ── */}
-        {tab === 'mine' && (
-          <table className="w-full text-xs text-left">
-            <thead className="sticky top-0 bg-slatepanel-800 text-slate-400 z-10">
-              <tr>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 60 }}>Time</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 65 }}>Stake</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 55 }}>×</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 65 }}>Win</th>
-                <th className="py-2 px-2 font-semibold whitespace-nowrap" style={{ minWidth: 70 }}>Net P/L</th>
+      {/* ── TOP PLAYERS ── */}
+      {tab === 'top' && (
+        <table className="w-full text-xs text-left">
+          <thead className="bg-slatepanel-800 text-slate-400">
+            <tr>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 30 }}>#</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 90 }}>Player</th>
+              <th className="py-2 px-2 font-semibold" style={{ minWidth: 80 }}>Earnings</th>
+            </tr>
+          </thead>
+          <tbody>
+            {topLoading && (
+              <tr><td colSpan={3} className="py-4 text-center text-slate-500">Loading…</td></tr>
+            )}
+            {!topLoading && topRows.length === 0 && (
+              <tr><td colSpan={3} className="py-4 text-center text-slate-500">No data in range.</td></tr>
+            )}
+            {topRows.map((r, i) => (
+              <tr key={r.user_id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
+                <td className="py-1.5 px-2 text-slate-400">{i + 1}</td>
+                <td className="py-1.5 px-2 text-slate-200 truncate max-w-[90px]">{r.username}</td>
+                <td className="py-1.5 px-2 text-emeraldwin-400 font-semibold">{store.currency}{r.earnings}</td>
               </tr>
-            </thead>
-            <tbody>
-              {myLoading && (
-                <tr><td colSpan={5} className="py-4 text-center text-slate-500">Loading…</td></tr>
-              )}
-              {!myLoading && !session?.userId && (
-                <tr><td colSpan={5} className="py-4 text-center text-slate-500">Login to see your bets.</td></tr>
-              )}
-              {!myLoading && session?.userId && myBets.length === 0 && (
-                <tr><td colSpan={5} className="py-4 text-center text-slate-500">No bets yet.</td></tr>
-              )}
-              {myBets.map((b) => {
-                const netpl = b.win_amount - b.bet_amount;
-                return (
-                  <tr key={b.id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
-                    <td className="py-1.5 px-2 text-slate-400">{fmtTime(b.placed_at)}</td>
-                    <td className="py-1.5 px-2 text-slate-300">{store.currency}{b.bet_amount}</td>
-                    <td className={`py-1.5 px-2 font-bold ${
-                      b.status === 'won' ? 'text-emeraldwin-400' : 'text-coral-400'
-                    }`}>
-                      {b.cash_out_at != null ? `${b.cash_out_at.toFixed(2)}×` : '—'}
-                    </td>
-                    <td className={`py-1.5 px-2 ${
-                      b.status === 'won' ? 'text-emeraldwin-300' : 'text-slate-500'
-                    }`}>
-                      {b.status === 'won' ? `${store.currency}${b.win_amount}` : '—'}
-                    </td>
-                    <td className={`py-1.5 px-2 font-semibold ${
-                      netpl >= 0 ? 'text-emeraldwin-400' : 'text-coral-400'
-                    }`}>
-                      {netpl >= 0 ? '+' : ''}{store.currency}{netpl}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
-
-        {/* ── TOP PLAYERS ── */}
-        {tab === 'top' && (
-          <table className="w-full text-xs text-left">
-            <thead className="sticky top-0 bg-slatepanel-800 text-slate-400 z-10">
-              <tr>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 30 }}>#</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 90 }}>Player</th>
-                <th className="py-2 px-2 font-semibold" style={{ minWidth: 80 }}>Earnings</th>
-              </tr>
-            </thead>
-            <tbody>
-              {topLoading && (
-                <tr><td colSpan={3} className="py-4 text-center text-slate-500">Loading…</td></tr>
-              )}
-              {!topLoading && topRows.length === 0 && (
-                <tr><td colSpan={3} className="py-4 text-center text-slate-500">No data in range.</td></tr>
-              )}
-              {topRows.map((r, i) => (
-                <tr key={r.user_id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
-                  <td className="py-1.5 px-2 text-slate-400">{i + 1}</td>
-                  <td className="py-1.5 px-2 text-slate-200 truncate max-w-[90px]">{r.username}</td>
-                  <td className="py-1.5 px-2 text-emeraldwin-400 font-semibold">{store.currency}{r.earnings}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
