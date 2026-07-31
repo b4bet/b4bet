@@ -1,5 +1,9 @@
 /**
  * CrashHistoryTabs
+ *
+ * All Bets  — current live round bets from crash_pending_bets (realtime)
+ * My Bets   — logged-in user's settled bets from Supabase
+ * Top       — all-time top 10 highest winning bets
  */
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../integrations/supabase/client';
@@ -8,14 +12,6 @@ import { store } from '../lib/store';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 type Tab = 'all' | 'mine' | 'top';
-type Range = 'day' | 'week' | 'month' | 'year';
-
-const RANGE_MS: Record<Range, number> = {
-  day: 86_400_000,
-  week: 7 * 86_400_000,
-  month: 30 * 86_400_000,
-  year: 365 * 86_400_000,
-};
 
 function fmtTime(ts: string) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -34,11 +30,16 @@ interface MyBetRow {
   id: string; bet_amount: number; win_amount: number;
   status: string; placed_at: string; cash_out_at: number | null;
 }
-interface TopRow { user_id: string; username: string; earnings: number; }
+interface TopWinRow {
+  id: string;
+  username: string;
+  bet_amount: number;
+  win_amount: number;
+  cash_out_at: number | null;
+}
 
 export default function CrashHistoryTabs() {
   const [tab, setTab] = useState<Tab>('all');
-  const [range, setRange] = useState<Range>('day');
   const session = useAuth();
   const engineBets = useCrashBets();
   const crashState = useCrashState();
@@ -49,14 +50,14 @@ export default function CrashHistoryTabs() {
 
   useEffect(() => {
     if (tab !== 'all') return;
-    const fetch = () => {
+    const fetchBets = () => {
       void supabase.from('crash_pending_bets').select('*')
         .order('placed_at', { ascending: false }).limit(50)
         .then(({ data }) => { if (data) setPendingBets(data as PendingBetRow[]); });
     };
-    fetch();
+    fetchBets();
     const ch = supabase.channel('crash_pending_bets_live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'crash_pending_bets' }, fetch)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'crash_pending_bets' }, fetchBets)
       .subscribe();
     channelRef.current = ch;
     return () => { void supabase.removeChannel(ch); channelRef.current = null; };
@@ -75,17 +76,15 @@ export default function CrashHistoryTabs() {
   const otherRows = pendingBets.filter((r) => r.username.toLowerCase() !== myUsername);
   const allBetsDisplay = [...engineRows, ...otherRows];
 
-  // ── My Bets — fetched ONCE per (tab, userId) change ──────────────────
+  // ── My Bets ───────────────────────────────────────────────────────────
   const [myBets, setMyBets] = useState<MyBetRow[]>([]);
   const [myLoading, setMyLoading] = useState(false);
-  // Track the userId for which we already fetched so re-renders don't re-fetch
   const myFetchedForRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (tab !== 'mine') return;
     const uid = session?.userId ?? null;
     if (!uid) { setMyLoading(false); setMyBets([]); return; }
-    // Skip if already fetched for this userId in this tab session
     if (myFetchedForRef.current === uid) return;
 
     let cancelled = false;
@@ -93,7 +92,6 @@ export default function CrashHistoryTabs() {
     setMyLoading(true);
 
     void (async () => {
-      // Try RPC
       const { data: rpcData, error: rpcError } = await supabase
         .rpc('get_crash_my_bets', { p_user_id: uid, p_limit: 50 });
 
@@ -110,7 +108,6 @@ export default function CrashHistoryTabs() {
         return;
       }
 
-      // Fallback
       console.warn('[CrashHistoryTabs] RPC failed, fallback:', rpcError?.message);
       const { data: fbData } = await supabase
         .from('bets')
@@ -137,7 +134,6 @@ export default function CrashHistoryTabs() {
     return () => { cancelled = true; };
   }, [tab, session?.userId]);
 
-  // Reset fetch cache when tab changes away from mine
   useEffect(() => {
     if (tab !== 'mine') {
       myFetchedForRef.current = null;
@@ -145,23 +141,75 @@ export default function CrashHistoryTabs() {
     }
   }, [tab]);
 
-  // ── Top Players ───────────────────────────────────────────────────────
-  const [topRows, setTopRows] = useState<TopRow[]>([]);
+  // ── Top Wins (all-time top 10 highest winning bets) ───────────────────
+  const [topWins, setTopWins] = useState<TopWinRow[]>([]);
   const [topLoading, setTopLoading] = useState(false);
 
   useEffect(() => {
     if (tab !== 'top') return;
     let cancelled = false;
     setTopLoading(true);
-    const since = new Date(Date.now() - RANGE_MS[range]).toISOString();
-    void supabase.rpc('get_crash_top_players', { p_since: since, p_limit: 10 })
-      .then(({ data, error }) => {
-        if (cancelled) return;
-        if (!error && data) setTopRows((data as TopRow[]).map((r) => ({ ...r, earnings: Number(r.earnings) })));
+
+    void (async () => {
+      // Try RPC first for top wins
+      const { data: rpcData, error: rpcError } = await supabase
+        .rpc('get_crash_top_wins', { p_limit: 10 });
+
+      if (cancelled) return;
+
+      if (!rpcError && Array.isArray(rpcData)) {
+        setTopWins((rpcData as TopWinRow[]).map((r) => ({
+          id: String(r.id),
+          username: r.username ?? 'Unknown',
+          bet_amount: Number(r.bet_amount),
+          win_amount: Number(r.win_amount),
+          cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
+        })));
         setTopLoading(false);
-      });
+        return;
+      }
+
+      // Fallback: query bets table directly
+      const { data: fbData } = await supabase
+        .from('bets')
+        .select('id, user_id, bet_amount, win_amount, multiplier, bet_details')
+        .eq('status', 'won')
+        .or('bet_details->>game.eq.crash,game_id.eq.crash')
+        .order('win_amount', { ascending: false })
+        .limit(10);
+
+      if (cancelled) return;
+
+      if (fbData) {
+        // Fetch usernames for each unique user_id
+        const userIds = [...new Set((fbData as { user_id: string }[]).map((r) => r.user_id))];
+        const { data: profiles } = await supabase
+          .from('profiles')
+          .select('id, username')
+          .in('id', userIds);
+
+        if (cancelled) return;
+
+        const usernameMap: Record<string, string> = {};
+        ((profiles ?? []) as { id: string; username: string }[]).forEach((p) => {
+          usernameMap[p.id] = p.username;
+        });
+
+        setTopWins((fbData as { id: string; user_id: string; bet_amount: unknown; win_amount: unknown; multiplier: unknown; bet_details: Record<string, unknown> | null }[]).map((r) => ({
+          id: r.id,
+          username: usernameMap[r.user_id] ?? 'Unknown',
+          bet_amount: Number(r.bet_amount),
+          win_amount: Number(r.win_amount),
+          cash_out_at: r.bet_details?.cashOutAt != null
+            ? Number(r.bet_details.cashOutAt)
+            : r.multiplier != null ? Number(r.multiplier) : null,
+        })));
+      }
+      setTopLoading(false);
+    })();
+
     return () => { cancelled = true; };
-  }, [tab, range]);
+  }, [tab]);
 
   // ── Render ────────────────────────────────────────────────────────────
   return (
@@ -179,18 +227,6 @@ export default function CrashHistoryTabs() {
             </button>
           ))}
         </div>
-        {tab === 'top' && (
-          <div className="flex gap-1.5 mt-1.5 flex-wrap">
-            {(['day', 'week', 'month', 'year'] as Range[]).map((r) => (
-              <button key={r} onClick={() => setRange(r)}
-                className={['px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide transition-all',
-                  range === r ? 'bg-neon-500/20 border border-neon-400/50 text-neon-300'
-                    : 'bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white'].join(' ')}>
-                {r}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
 
       {/* ALL BETS */}
@@ -260,28 +296,39 @@ export default function CrashHistoryTabs() {
         </table>
       )}
 
-      {/* TOP PLAYERS */}
+      {/* TOP WINS */}
       {tab === 'top' && (
-        <table className="w-full text-xs text-left">
-          <thead className="bg-slatepanel-800 text-slate-400">
-            <tr>
-              <th className="py-2 px-2 font-semibold" style={{ minWidth: 30 }}>#</th>
-              <th className="py-2 px-2 font-semibold" style={{ minWidth: 90 }}>Player</th>
-              <th className="py-2 px-2 font-semibold" style={{ minWidth: 80 }}>Earnings</th>
-            </tr>
-          </thead>
-          <tbody>
-            {topLoading && <tr><td colSpan={3} className="py-4 text-center text-slate-500">Loading…</td></tr>}
-            {!topLoading && topRows.length === 0 && <tr><td colSpan={3} className="py-4 text-center text-slate-500">No data in range.</td></tr>}
-            {topRows.map((r, i) => (
-              <tr key={r.user_id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
-                <td className="py-1.5 px-2 text-slate-400">{i + 1}</td>
-                <td className="py-1.5 px-2 text-slate-200 truncate max-w-[90px]">{r.username}</td>
-                <td className="py-1.5 px-2 text-emeraldwin-400 font-semibold">{store.currency}{r.earnings}</td>
+        <div>
+          <div className="px-3 py-2 border-b border-borderline-900/50 bg-slatepanel-800/50">
+            <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">All-Time Top 10 Highest Wins</span>
+          </div>
+          <table className="w-full text-xs text-left">
+            <thead className="bg-slatepanel-800 text-slate-400">
+              <tr>
+                <th className="py-2 px-2 font-semibold" style={{ minWidth: 28 }}>#</th>
+                <th className="py-2 px-2 font-semibold" style={{ minWidth: 75 }}>Player</th>
+                <th className="py-2 px-2 font-semibold" style={{ minWidth: 60 }}>Stake</th>
+                <th className="py-2 px-2 font-semibold" style={{ minWidth: 50 }}>×</th>
+                <th className="py-2 px-2 font-semibold" style={{ minWidth: 70 }}>Win</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {topLoading && <tr><td colSpan={5} className="py-4 text-center text-slate-500">Loading…</td></tr>}
+              {!topLoading && topWins.length === 0 && <tr><td colSpan={5} className="py-4 text-center text-slate-500">No data yet.</td></tr>}
+              {topWins.map((r, i) => (
+                <tr key={r.id} className="border-t border-borderline-900/50 hover:bg-slatepanel-700/40">
+                  <td className="py-1.5 px-2 text-slate-400 font-bold">{i + 1}</td>
+                  <td className="py-1.5 px-2 text-slate-200 truncate max-w-[75px]">{r.username}</td>
+                  <td className="py-1.5 px-2 text-slate-300">{store.currency}{r.bet_amount}</td>
+                  <td className="py-1.5 px-2 font-bold text-emeraldwin-400">
+                    {r.cash_out_at != null ? `${Number(r.cash_out_at).toFixed(2)}×` : '—'}
+                  </td>
+                  <td className="py-1.5 px-2 font-bold text-emeraldwin-300">{store.currency}{r.win_amount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
