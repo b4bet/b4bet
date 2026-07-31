@@ -111,7 +111,7 @@ export default function BanSectionTab() {
         if (ab !== undefined) setAutoBanEnabled(String(ab.value) === 'true');
         const se = settings.find((s) => s.key === 'support_email');
         if (se) {
-          const email = String(se.value).replace(/^"|"$/g, '');
+          const email = String(se.value).replace(/^\"|\"$/g, '');
           setSupportEmail(email);
           setSupportEmailInput(email);
         }
@@ -195,18 +195,34 @@ export default function BanSectionTab() {
     } finally { setSupportEmailSaving(false); }
   }
 
-  // ── ban by ID ────────────────────────────────────────────────────────────
+  // ── ban / unban by ID ────────────────────────────────────────────────────
+  // Searches ALL users (banned + non-banned) so admin can also unban by ID.
   async function handleBanById() {
     const id = banIdInput.trim();
     if (!id) { flash(false, 'Please enter a User ID, username, or Account ID.'); return; }
-    if (!banReason.trim()) { flash(false, 'A ban reason is required.'); return; }
+    if (!banReason.trim()) { flash(false, 'A reason is required.'); return; }
+
+    // Search ALL users including banned ones
     const user = users.find(
       (u) => u.id === id ||
         (u.account_id ?? '').toLowerCase() === id.toLowerCase() ||
         (u.username ?? '').toLowerCase() === id.toLowerCase(),
     );
     if (!user) { flash(false, `No user found for "${id}".`); return; }
-    if (user.is_banned) { flash(false, `${user.username ?? user.id} is already banned.`); return; }
+
+    // If user is ALREADY BANNED → unban them
+    if (user.is_banned || user.is_active === false) {
+      try {
+        await supabaseUnbanUser(user.id, banReason.trim());
+        setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, is_banned: false, is_active: true } : u));
+        flash(true, `${user.username ?? user.id} has been unbanned.`);
+        setBanIdInput(''); setBanReason('');
+        void reloadBans();
+      } catch { flash(false, 'Failed to unban user. Please try again.'); }
+      return;
+    }
+
+    // User is NOT banned → ban them
     try {
       await supabaseBanUser(user.id, banReason.trim());
       setUsers((prev) => prev.map((u) => u.id === user.id ? { ...u, is_banned: true, is_active: false } : u));
@@ -246,6 +262,15 @@ export default function BanSectionTab() {
       void reloadIp(); void reloadBans();
     } catch { flash(false, `Failed to ${ipActionModal.action} user.`); }
   }
+
+  // ── Preview matched user while typing in ban/unban form ─────────────────
+  const previewUser = banIdInput.trim()
+    ? users.find(
+        (u) => u.id === banIdInput.trim() ||
+          (u.account_id ?? '').toLowerCase() === banIdInput.trim().toLowerCase() ||
+          (u.username ?? '').toLowerCase() === banIdInput.trim().toLowerCase(),
+      )
+    : null;
 
   return (
     <div className="space-y-4 pb-8">
@@ -336,11 +361,15 @@ export default function BanSectionTab() {
         </div>
       </div>
 
-      {/* ── Quick ban form ── */}
+      {/* ── Quick ban / unban form ── */}
       <div className="panel p-4 space-y-3">
         <h2 className="font-display font-bold text-base text-white flex items-center gap-2">
-          <ShieldAlert className="w-4 h-4 text-coral-400" /> Ban a User
+          <ShieldAlert className="w-4 h-4 text-coral-400" /> Ban / Unban a User
         </h2>
+        <p className="text-[11px] text-slate-500">
+          Search by <span className="text-white">Username, User ID, or Account ID</span>. If the user is already banned, they will be <span className="text-emeraldwin-300">unbanned</span>. If active, they will be <span className="text-coral-300">banned</span>.
+        </p>
+
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
           <div>
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Username / User ID / Account ID</p>
@@ -353,15 +382,31 @@ export default function BanSectionTab() {
               list="ban-user-list"
               className="input"
             />
+            {/* Datalist includes ALL users (banned + active) for easy search */}
             <datalist id="ban-user-list">
-              {users
-                .filter((u) => !u.is_banned)
-                .map((u) => (
-                  <option key={u.id} value={u.username ?? u.id}>
-                    {u.username} (#{u.account_id})
-                  </option>
-                ))}
+              {users.map((u) => (
+                <option key={u.id} value={u.username ?? u.id}>
+                  {u.username} (#{u.account_id}){u.is_banned ? ' [BANNED]' : ''}
+                </option>
+              ))}
             </datalist>
+            {/* Preview matched user */}
+            {previewUser && (
+              <div className={`mt-1.5 flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-xs ${
+                previewUser.is_banned || previewUser.is_active === false
+                  ? 'bg-emeraldwin-500/10 border-emeraldwin-500/30 text-emeraldwin-300'
+                  : 'bg-coral-500/10 border-coral-500/30 text-coral-300'
+              }`}>
+                {previewUser.is_banned || previewUser.is_active === false
+                  ? <Unlock className="w-3 h-3 flex-shrink-0" />
+                  : <ShieldBan className="w-3 h-3 flex-shrink-0" />}
+                <span className="font-semibold">{previewUser.username ?? '—'}</span>
+                <span className="text-[10px] opacity-70">#{previewUser.account_id ?? previewUser.id.slice(0, 8)}</span>
+                <span className="ml-auto font-bold">
+                  {previewUser.is_banned || previewUser.is_active === false ? '→ Will UNBAN' : '→ Will BAN'}
+                </span>
+              </div>
+            )}
           </div>
           <div>
             <p className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">Reason</p>
@@ -370,13 +415,20 @@ export default function BanSectionTab() {
               value={banReason}
               onChange={(e) => setBanReason(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') void handleBanById(); }}
-              placeholder="Ban reason…"
+              placeholder="Ban / unban reason…"
               className="input"
             />
           </div>
         </div>
-        <button onClick={() => void handleBanById()} className="btn-coral px-5 py-2 text-sm">
-          Ban User
+        <button
+          onClick={() => void handleBanById()}
+          className={`px-5 py-2 text-sm rounded-xl font-semibold transition-colors ${
+            previewUser && (previewUser.is_banned || previewUser.is_active === false)
+              ? 'bg-emeraldwin-500/20 border border-emeraldwin-500/40 text-emeraldwin-300 hover:bg-emeraldwin-500/30'
+              : 'btn-coral'
+          }`}
+        >
+          {previewUser && (previewUser.is_banned || previewUser.is_active === false) ? 'Unban User' : 'Ban User'}
         </button>
       </div>
 
