@@ -1,3 +1,85 @@
+/**
+ * SunVsMoonView — server-side outcome version.
+ */
+
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { ArrowLeft } from 'lucide-react';
+import { store } from '../lib/store';
+import { useGameLogos } from '../lib/hooks';
+import { bus, Topics } from '../lib/bus';
+import type { SunMoonRoundRecord } from '../lib/store';
+import { useBalance } from '../lib/hooks';
+import { cms } from '../lib/cms';
+import { auth } from '../lib/auth';
+import { sunMoonLoop, EngineTopics, type SunMoonState } from '../lib/persistentGameEngine';
+import { GameService } from '../lib/game-service';
+import { supabase } from '@/integrations/supabase/client';
+
+type BetChoice = 'sun' | 'moon' | 'tie';
+type Phase = 'betting' | 'processing' | 'revealed';
+
+const BETTING_DURATION = 15;
+const YEAR_PREFIX      = 2026;
+const PAYOUTS: Record<BetChoice, number> = { sun: 1, moon: 1, tie: 8 };
+const QUICK_STAKES = [100, 200, 500, 1000];
+const CHOICE_IMAGES: Record<BetChoice, string> = { sun: '/sun.png', moon: '/moon.png', tie: '/eclipse.png' };
+const CHOICE_LABELS: Record<BetChoice, string> = { sun: 'SUN', moon: 'MOON', tie: 'ECLIPSE' };
+
+const SM_BET_KEY = 'b4bet_sunmoon_active_bet';
+
+interface SunMoonSavedBet {
+  roundNumber: number;
+  selectedChoice: BetChoice;
+  betAmount: number;
+  betPlaced: boolean;
+  savedAt: number;
+}
+
+function saveSunMoonBet(data: SunMoonSavedBet | null) {
+  try {
+    if (data && data.betPlaced) localStorage.setItem(SM_BET_KEY, JSON.stringify(data));
+    else localStorage.removeItem(SM_BET_KEY);
+  } catch { /* ignore */ }
+}
+
+function loadSunMoonBet(): SunMoonSavedBet | null {
+  try {
+    const raw = localStorage.getItem(SM_BET_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SunMoonSavedBet;
+    if (Date.now() - parsed.savedAt > 25000) { localStorage.removeItem(SM_BET_KEY); return null; }
+    return parsed;
+  } catch { return null; }
+}
+
+interface RpcBetRow {
+  id: string;
+  bet_amount: number;
+  win_amount: number;
+  status: string;
+  placed_at: string;
+  bet_details: {
+    game?: string;
+    round_number?: number | string;
+    result?: string;
+    bet?: string;
+    bet_choice?: string;
+  } | null;
+}
+
+type MyBetEntry = {
+  id: string;
+  round: number | null;
+  bet: BetChoice;
+  result: BetChoice;
+  stake: number;
+  win: number;
+};
+
+function isBetChoice(v: unknown): v is BetChoice {
+  return v === 'sun' || v === 'moon' || v === 'tie';
+}
+
 function rowToMyBet(row: RpcBetRow): MyBetEntry | null {
   const d = row.bet_details;
   if (!d) return null;
@@ -13,4 +95,503 @@ function rowToMyBet(row: RpcBetRow): MyBetEntry | null {
     stake: Number(row.bet_amount),
     win: Number(row.win_amount),
   };
+}
+
+async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
+  const { data, error } = await supabase.rpc('get_sunvsmoon_my_bets', {
+    p_user_id: userId,
+    p_limit: 40,
+  });
+  if (error) {
+    console.error('[SunVsMoon] fetchMyBets RPC error:', error.message);
+    const { data: fbData, error: fbError } = await supabase
+      .from('bets')
+      .select('id, round_id, bet_amount, win_amount, status, placed_at, bet_details')
+      .eq('user_id', userId)
+      .order('placed_at', { ascending: false })
+      .limit(40);
+    if (fbError || !fbData) return [];
+    return (fbData as RpcBetRow[])
+      .map(rowToMyBet)
+      .filter((r): r is MyBetEntry => r !== null)
+      .slice(0, 20);
+  }
+  if (!data) return [];
+  return (data as RpcBetRow[])
+    .map(rowToMyBet)
+    .filter((r): r is MyBetEntry => r !== null)
+    .slice(0, 20);
+}
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
+function TimerCircle({ secondsLeft, total }: { secondsLeft: number; total: number }) {
+  const radius = 38;
+  const circ   = 2 * Math.PI * radius;
+  const frac   = secondsLeft / total;
+  const offset = circ * (1 - frac);
+  const color  = frac > 0.5 ? '#22c55e' : frac > 0.25 ? '#f59e0b' : '#ef4444';
+  return (
+    <div className="relative w-24 h-24 flex items-center justify-center">
+      <svg viewBox="0 0 96 96" className="absolute inset-0 w-full h-full -rotate-90">
+        <circle cx="48" cy="48" r={radius} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="6" />
+        <circle cx="48" cy="48" r={radius} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"
+          strokeDasharray={circ} strokeDashoffset={offset}
+          style={{ transition: 'stroke-dashoffset 1s linear, stroke 0.4s' }} />
+      </svg>
+      <div className="flex flex-col items-center z-10">
+        <span className="text-2xl font-black text-white tabular-nums leading-none">{secondsLeft}</span>
+        <span className="text-[9px] text-slate-400 uppercase tracking-widest mt-0.5">secs</span>
+      </div>
+    </div>
+  );
+}
+
+function BetButton({ choice, payout, glowColor, selected, disabled, onSelect }: {
+  choice: BetChoice; payout: string; glowColor: string;
+  selected: boolean; disabled: boolean; onSelect: (c: BetChoice) => void;
+}) {
+  return (
+    <button type="button" onClick={() => { if (!disabled) onSelect(choice); }}
+      className={[
+        'flex flex-col items-center justify-center gap-1 rounded-2xl border-2 transition-all duration-200 py-3 px-2 flex-1 select-none active:scale-95',
+        disabled ? 'opacity-40 cursor-not-allowed pointer-events-none' : 'cursor-pointer',
+        selected ? 'scale-[1.04]' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.07]',
+      ].join(' ')}
+      style={{
+        borderColor:     selected ? glowColor : undefined,
+        backgroundColor: selected ? `${glowColor}22` : undefined,
+        boxShadow:       selected ? `0 0 18px 4px ${glowColor}55` : undefined,
+        touchAction: 'manipulation',
+      }}
+    >
+      <img src={CHOICE_IMAGES[choice]} alt={CHOICE_LABELS[choice]} className="w-14 h-14 object-contain drop-shadow-lg pointer-events-none" />
+      <span className="text-[10px] text-slate-400 font-semibold pointer-events-none">{payout}</span>
+    </button>
+  );
+}
+
+function ResultOverlay({ visible, result, won, payout, choice }: {
+  visible: boolean; result: BetChoice | null; won: boolean; payout: number; choice: BetChoice | null;
+}) {
+  if (!visible || !result) return null;
+  return (
+    <div className="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-3xl overflow-hidden bg-black/80 backdrop-blur-sm">
+      <div className="flex flex-col items-center gap-6 px-6 py-10 w-full">
+        <img src={CHOICE_IMAGES[result]} alt={CHOICE_LABELS[result]} className="w-28 h-28 object-contain drop-shadow-2xl" />
+        <div className="text-center">
+          <p className="text-slate-400 text-xs uppercase tracking-widest mb-2">Result</p>
+          <p className="text-4xl font-black text-white">{CHOICE_LABELS[result]}</p>
+        </div>
+        {choice ? (
+          won ? (
+            <div className="w-full max-w-[220px] bg-emeraldwin-500/20 border border-emeraldwin-500/40 rounded-2xl px-6 py-5 text-center">
+              <p className="text-emeraldwin-400 font-black text-3xl">+₹{payout.toLocaleString()}</p>
+              <p className="text-sm text-emeraldwin-300/80 mt-2">YOU WIN!</p>
+            </div>
+          ) : (
+            <div className="w-full max-w-[220px] bg-coral-500/20 border border-coral-500/40 rounded-2xl px-6 py-5 text-center">
+              <p className="text-coral-400 font-black text-3xl">LOST</p>
+              <p className="text-sm text-coral-300/80 mt-2">Better luck next round</p>
+            </div>
+          )
+        ) : (
+          <div className="w-full max-w-[220px] bg-slate-800/60 rounded-2xl px-6 py-5 text-center">
+            <p className="text-slate-400 text-sm">No bet placed</p>
+          </div>
+        )}
+        <p className="text-[11px] text-slate-500 animate-pulse mt-2">Next round starting soon…</p>
+      </div>
+    </div>
+  );
+}
+
+function HistoryStrip({ history }: { history: Array<{ round: number; result: BetChoice }> }) {
+  const colors: Record<BetChoice, string> = { sun: '#FFB627', moon: '#818CF8', tie: '#F59E0B' };
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Round History</span>
+        <span className="text-[10px] text-slate-500">{history.length} rounds</span>
+      </div>
+      {history.length === 0 ? (
+        <p className="text-xs text-slate-500 text-center py-4">No rounds yet — play to see history</p>
+      ) : (
+        <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
+          {history.map((h) => (
+            <div key={h.round} className="flex-shrink-0 flex flex-col items-center gap-1 rounded-xl py-2 px-2 w-16"
+              style={{ background: `${colors[h.result]}18`, border: `1px solid ${colors[h.result]}33` }}>
+              <span className="text-[9px] font-bold text-white/60">#{h.round}</span>
+              <img src={CHOICE_IMAGES[h.result]} alt={CHOICE_LABELS[h.result]} className="w-8 h-8 object-contain" />
+              <span className="text-[8px] font-bold uppercase" style={{ color: colors[h.result] }}>{CHOICE_LABELS[h.result]}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
+  const gameLogos = useGameLogos();
+  const balance   = useBalance();
+  const limits    = store.getGameLimits('sunvsmoon');
+
+  const [betAmount,      setBetAmount]      = useState(() => {
+    const def = store.getGameDefaultBet('sunvsmoon');
+    return def > 0 ? def : (limits.min > 0 ? limits.min : 100);
+  });
+  const [lastQuickStake, setLastQuickStake] = useState<number | null>(null);
+
+  const initEng = sunMoonLoop.getState();
+  const [selectedChoice, setSelectedChoice] = useState<BetChoice | null>(null);
+  const [betPlaced,      setBetPlaced]      = useState(false);
+  const [phase,          setPhase]          = useState<Phase>(initEng.phase);
+  const [secondsLeft,    setSecondsLeft]    = useState(initEng.secondsLeft);
+  const [roundNumber,    setRoundNumber]    = useState(YEAR_PREFIX * 10 + initEng.roundId);
+  const [result,         setResult]         = useState<BetChoice | null>(initEng.result);
+  const [overlayResult,  setOverlayResult]  = useState<BetChoice | null>(null);
+  const [lastWon,        setLastWon]        = useState(false);
+  const [lastPayout,     setLastPayout]     = useState(0);
+  const [history, setHistory] = useState<Array<{ round: number; result: BetChoice }>>(() => {
+    const h = sunMoonLoop.getHistory();
+    return h.map((r, i) => ({ round: YEAR_PREFIX * 10 + initEng.roundId - (i + 1), result: r }));
+  });
+  const [myBets,        setMyBets]        = useState<MyBetEntry[]>([]);
+  const [myBetsLoading, setMyBetsLoading] = useState(false);
+  const [historyTab,    setHistoryTab]    = useState<'rounds' | 'my'>('rounds');
+  const [settling,      setSettling]      = useState(false);
+
+  const settledRoundRef       = useRef<number>(-1);
+  const resetForRoundRef      = useRef<number>(-1);
+  const resultFetchedRoundRef = useRef<number>(-1);
+  const selectedChoiceRef     = useRef<BetChoice | null>(null);
+  const betAmountRef          = useRef<number>(betAmount);
+  const betPlacedRef          = useRef(false);
+  useEffect(() => { selectedChoiceRef.current = selectedChoice; }, [selectedChoice]);
+  useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
+  useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
+
+  useEffect(() => {
+    const session = auth.getSession();
+    if (!session?.userId) return;
+    setMyBetsLoading(true);
+    void fetchMyBetsFromSupabase(session.userId)
+      .then(setMyBets)
+      .finally(() => setMyBetsLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const saved = loadSunMoonBet();
+    if (!saved) return;
+    const currentRound = YEAR_PREFIX * 10 + sunMoonLoop.getState().roundId;
+    if (saved.roundNumber === currentRound && saved.betPlaced) {
+      setSelectedChoice(saved.selectedChoice);
+      setBetPlaced(true);
+      setBetAmount(saved.betAmount);
+    } else {
+      saveSunMoonBet(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (betPlaced && selectedChoice) {
+      saveSunMoonBet({ roundNumber, selectedChoice, betAmount, betPlaced: true, savedAt: Date.now() });
+    }
+  }, [betPlaced, selectedChoice, betAmount, roundNumber]);
+
+  useEffect(() => {
+    const off = bus.on(EngineTopics.SunMoonState, (payload) => {
+      const p = payload as { state: SunMoonState; history: BetChoice[] };
+      const s = p.state;
+      const rn = YEAR_PREFIX * 10 + s.roundId;
+      setRoundNumber(rn);
+      setPhase(s.phase);
+      setSecondsLeft(s.secondsLeft);
+      setResult(s.result);
+
+      if (s.phase === 'betting' && resetForRoundRef.current !== rn) {
+        resetForRoundRef.current = rn;
+        setSelectedChoice(null);
+        setBetPlaced(false);
+        setLastQuickStake(null);
+        setOverlayResult(null);
+        saveSunMoonBet(null);
+      }
+
+      if (s.phase === 'processing' && resultFetchedRoundRef.current !== rn) {
+        resultFetchedRoundRef.current = rn;
+        void GameService.sunMoonGetResult(rn).catch(() => {});
+      }
+
+      if (s.phase === 'revealed' && s.result && settledRoundRef.current !== rn) {
+        settledRoundRef.current = rn;
+        const sb     = selectedChoiceRef.current;
+        const placed = betPlacedRef.current;
+        const localOutcome = s.result;
+
+        setHistory((prev) => [{ round: rn, result: localOutcome }, ...prev].slice(0, 20));
+        saveSunMoonBet(null);
+
+        if (sb !== null && placed) {
+          const stake = betAmountRef.current;
+          const session = auth.getSession();
+          if (!session) return;
+
+          setSettling(true);
+          void GameService.sunMoonSettle(session.userId, rn, sb, stake)
+            .then(async (res) => {
+              store.setBalance(res.balance_after);
+              const serverOutcome = res.result as BetChoice;
+
+              setHistory((prev) => prev.map((h) => h.round === rn ? { ...h, result: serverOutcome } : h));
+              setResult(serverOutcome);
+              setOverlayResult(serverOutcome);
+              setLastWon(res.won);
+              setLastPayout(res.profit);
+
+              const record: Omit<SunMoonRoundRecord, 'id' | 'ts'> = {
+                roundNumber: rn, stake, bet: sb, result: serverOutcome,
+                payout: PAYOUTS[sb], win: res.won ? res.profit : 0,
+              };
+              store.recordSunMoonRound(record);
+
+              // Refresh my bets after settle
+              const updated = await fetchMyBetsFromSupabase(session.userId);
+              if (updated.length > 0) setMyBets(updated);
+            })
+            .catch((err: unknown) => {
+              const msg = err instanceof Error ? err.message : 'Server error';
+              cms.toast({ title: 'Settle failed', body: msg, kind: 'alert' });
+              setOverlayResult(localOutcome);
+            })
+            .finally(() => setSettling(false));
+        } else {
+          setOverlayResult(localOutcome);
+        }
+      }
+    });
+    return off;
+  }, []);
+
+  const handleSelectChoice = useCallback((choice: BetChoice) => {
+    if (betPlaced) return;
+    setSelectedChoice(choice);
+  }, [betPlaced]);
+
+  const handlePlaceBet = useCallback(() => {
+    if (phase !== 'betting' || betPlaced || selectedChoice === null) return;
+    const session = auth.getSession();
+    if (!session) {
+      bus.emit('auth:open_modal' as Parameters<typeof bus.emit>[0], 'login');
+      return;
+    }
+    const stake = betAmountRef.current;
+    if (stake < limits.min || stake > limits.max) {
+      cms.toast({ title: 'Bet out of range', body: `Bets must be between ${store.currency}${limits.min} and ${store.currency}${limits.max}`, kind: 'alert' });
+      return;
+    }
+    if (stake > balance) {
+      bus.emit(Topics.InsufficientBalance);
+      return;
+    }
+    store.debitLocalOnly(stake);
+    setBetPlaced(true);
+  }, [phase, betPlaced, selectedChoice, balance, limits]);
+
+  const handleQuickStake = (amount: number) => {
+    if (betPlaced) return;
+    if (lastQuickStake === amount) setBetAmount((prev) => Math.min(prev + amount, balance));
+    else { setBetAmount(Math.min(amount, balance)); setLastQuickStake(amount); }
+  };
+
+  const handleAmountInput = (val: string) => {
+    const n = parseFloat(val);
+    if (!isNaN(n) && n >= 0) setBetAmount(n);
+    else if (val === '') setBetAmount(0);
+    setLastQuickStake(null);
+  };
+
+  const decreaseAmount = () => { setBetAmount((prev) => Math.max(limits.min, Math.round(prev - 50))); setLastQuickStake(null); };
+  const increaseAmount = () => { setBetAmount((prev) => Math.min(balance, Math.round(prev + 50))); setLastQuickStake(null); };
+
+  const canPlaceBet      = phase === 'betting' && !betPlaced && !settling && selectedChoice !== null && betAmount >= limits.min;
+  const canSelectChoice  = phase === 'betting' && !betPlaced;
+  const isAwaitingServer = phase === 'revealed' && overlayResult === null && betPlaced;
+
+  return (
+    <div className="flex flex-col min-h-screen animate-fade-in">
+      <div className="sticky top-0 z-10 bg-midnight-950 px-3 pt-3 pb-2">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {onBack && (
+              <button onClick={onBack} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/40 transition-colors">
+                <ArrowLeft className="w-4 h-4 text-slate-300" />
+              </button>
+            )}
+            {gameLogos["sunvsmoon"] ? (
+              <img src={gameLogos["sunvsmoon"]} alt="Sun vs Moon" className="w-10 h-10 rounded-full object-cover flex-shrink-0 ring-2 ring-yellow-500/30" />
+            ) : (
+              <img src="/eclipse.png" alt="Sun vs Moon" className="w-10 h-10 rounded-full object-contain flex-shrink-0"
+                onError={(e) => { (e.target as HTMLImageElement).src = '/sun.png'; }} />
+            )}
+            <div>
+              <p className="text-sm font-black text-white leading-none">Sun vs Moon</p>
+              <p className="text-[9px] text-slate-400 mt-0.5">Round #{roundNumber}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 h-8 px-3 rounded-lg bg-slatepanel-800 border border-borderline-900">
+            <span className="text-white text-xs font-bold tabular-nums whitespace-nowrap">
+              {store.currency}{balance.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 space-y-4 px-3 pb-4">
+        <div className="relative rounded-3xl bg-slatepanel-900 border border-borderline-900 overflow-hidden min-h-[420px]">
+          <ResultOverlay
+            visible={phase === 'revealed' && overlayResult !== null}
+            result={overlayResult}
+            won={lastWon}
+            payout={lastPayout}
+            choice={betPlaced ? selectedChoice : null}
+          />
+
+          <div className="p-4 space-y-4">
+            <div className="flex flex-col items-center gap-2">
+              {phase === 'betting' ? (
+                <TimerCircle secondsLeft={secondsLeft} total={BETTING_DURATION} />
+              ) : (phase === 'processing' || isAwaitingServer) ? (
+                <div className="py-6 flex flex-col items-center gap-3">
+                  <div className="w-12 h-12 border-4 border-amber-400/30 border-t-amber-400 rounded-full animate-spin" />
+                  <p className="text-sm font-bold text-amber-300">
+                    {settling || isAwaitingServer ? 'Settling…' : 'Processing result…'}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+
+            {phase !== 'processing' && !isAwaitingServer && (
+              <div className="flex items-stretch gap-2">
+                <BetButton choice="sun"  payout="1:1" glowColor="#FFB627" selected={selectedChoice === 'sun'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
+                <BetButton choice="tie"  payout="8:1" glowColor="#F59E0B" selected={selectedChoice === 'tie'}  disabled={!canSelectChoice} onSelect={handleSelectChoice} />
+                <BetButton choice="moon" payout="1:1" glowColor="#818CF8" selected={selectedChoice === 'moon'} disabled={!canSelectChoice} onSelect={handleSelectChoice} />
+              </div>
+            )}
+
+            {phase === 'betting' && !betPlaced && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] text-slate-400 uppercase tracking-widest">Bet Amount</p>
+                  <div className="flex gap-2">
+                    <span className="text-[9px] text-slate-500">Min: <span className="text-slate-400 font-semibold">₹{limits.min}</span></span>
+                    <span className="text-[9px] text-slate-500">Max: <span className="text-slate-400 font-semibold">₹{limits.max.toLocaleString()}</span></span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={decreaseAmount} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">−</button>
+                  <input type="text" inputMode="decimal" value={String(betAmount)}
+                    onChange={(e) => handleAmountInput(e.target.value)}
+                    className="flex-1 bg-slatepanel-800 border border-borderline-900 rounded-xl px-3 py-2 text-center text-white font-bold text-sm focus:outline-none focus:border-neon-400/60" />
+                  <button onClick={increaseAmount} className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 text-slate-300 hover:border-neon-400/40 transition-colors text-lg font-bold">+</button>
+                </div>
+                <div className="flex gap-2">
+                  {QUICK_STAKES.map((s) => {
+                    const isActive = lastQuickStake === s;
+                    const label = s >= 1000 ? `${s / 1000}K` : String(s);
+                    return (
+                      <button key={s} onClick={() => handleQuickStake(s)}
+                        className={[
+                          'flex-1 py-1.5 rounded-lg text-xs font-bold border transition-colors active:scale-95',
+                          isActive ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                            : 'bg-slatepanel-800 border-borderline-900 text-slate-300 hover:border-neon-400/50 hover:text-neon-300',
+                        ].join(' ')}>
+                        {isActive ? `+${label}` : label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {phase === 'betting' && !betPlaced && (
+              <button onClick={handlePlaceBet} disabled={!canPlaceBet}
+                className={[
+                  'w-full py-3.5 rounded-2xl font-black text-sm tracking-wide transition-all active:scale-[0.97]',
+                  canPlaceBet
+                    ? 'bg-gradient-to-r from-amber-500 to-yellow-400 text-black shadow-lg shadow-amber-500/30 hover:brightness-110 cursor-pointer'
+                    : 'bg-slatepanel-800 border border-borderline-900 text-slate-500 cursor-not-allowed opacity-60',
+                ].join(' ')}>
+                {selectedChoice === null
+                  ? 'Select SUN / ECLIPSE / MOON first'
+                  : betAmount < limits.min
+                    ? `Min bet is ₹${limits.min}`
+                    : `PLACE BET — ₹${betAmount.toLocaleString()}`}
+              </button>
+            )}
+
+            {phase === 'betting' && betPlaced && (
+              <div className="flex items-center gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
+                <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse flex-shrink-0" />
+                <p className="text-xs font-bold text-amber-300">
+                  ₹{betAmount.toLocaleString()} on {selectedChoice ? CHOICE_LABELS[selectedChoice] : ''} — waiting for result
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-2xl bg-slatepanel-900 border border-borderline-900 p-4 space-y-4">
+          <div className="flex gap-1 bg-slatepanel-800/60 rounded-xl p-1">
+            {(['rounds', 'my'] as const).map((tab) => (
+              <button key={tab} onClick={() => setHistoryTab(tab)}
+                className={[
+                  'flex-1 py-1.5 rounded-lg text-[11px] font-bold uppercase tracking-wide transition-colors',
+                  historyTab === tab ? 'bg-slatepanel-700 text-white' : 'text-slate-500 hover:text-slate-300',
+                ].join(' ')}>
+                {tab === 'rounds' ? 'Round History' : 'My Bets'}
+              </button>
+            ))}
+          </div>
+
+          {historyTab === 'rounds' && <HistoryStrip history={history} />}
+
+          {historyTab === 'my' && (
+            <div>
+              {myBetsLoading ? (
+                <div className="flex flex-col gap-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-14 rounded-xl bg-slatepanel-800/60 border border-borderline-900 animate-pulse" />
+                  ))}
+                </div>
+              ) : myBets.length === 0 ? (
+                <p className="text-xs text-slate-500 text-center py-4">Place a bet to see your history here</p>
+              ) : (
+                <div className="overflow-y-auto space-y-2 scrollbar-none" style={{ maxHeight: '240px' }}>
+                  {myBets.map((b) => (
+                    <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
+                      <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-bold text-white">
+                          {b.round !== null ? `#${b.round}` : 'Old Bet'}
+                        </p>
+                        <p className="text-[10px] text-slate-400">Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}</p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className={`text-sm font-black ${b.win > 0 ? 'text-emeraldwin-400' : 'text-coral-400'}`}>
+                          {b.win > 0 ? `+₹${b.win.toLocaleString()}` : `-₹${b.stake.toLocaleString()}`}
+                        </p>
+                        <p className="text-[9px] text-slate-500">Stake ₹{b.stake.toLocaleString()}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
