@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, Wallet, X, Info, Copy, Coins, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Wallet, X, Info, Copy, Coins, AlertTriangle, Loader2 } from 'lucide-react';
 import { useAuth, useBalance } from '../lib/hooks';
 import { cms } from '../lib/cms';
 import { useManualMethods } from '../lib/cmsHooks';
@@ -27,6 +27,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const [utr, setUtr] = useState('');
   const [destination, setDestination] = useState('');
   const [details, setDetails] = useState('');
+  const [submitting, setSubmitting] = useState(false);
   const [alertPopup, setAlertPopup] = useState<{ title: string; body: string } | null>(null);
   const [alertVisible, setAlertVisible] = useState(false);
   const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,6 +60,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       setUtr('');
       setDestination('');
       setDetails('');
+      setSubmitting(false);
     }
   }, [open]);
 
@@ -116,7 +118,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
   const handleSubmit = (e?: React.FormEvent | React.MouseEvent) => {
     if (e && 'preventDefault' in e) e.preventDefault();
-    if (!selected) return;
+    if (!selected || submitting) return;
 
     const amt = Number(amount);
     const limits = getEffectiveLimits();
@@ -142,30 +144,40 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       destDetails = { ...destDetails, currency: selectedCrypto.name, network: selectedCrypto.network, walletAddress: destination.trim(), gasFee: String(selectedCrypto.gasFee || 0) };
     }
 
-    // Suppress the internal admin-facing toast that cms.submitDeposit/submitWithdrawal fires.
-    // We show our own user-friendly success toast right after.
-    const originalToast = cms.toast.bind(cms);
-    cms.toast = () => { /* suppress internal admin toast */ };
-
-    if (flow === 'deposit') {
-      if (!utr.trim()) {
-        cms.toast = originalToast; // restore before returning
-        showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID.');
-        return;
-      }
-      cms.submitDeposit(user, amt, destLabel, utr.trim(), JSON.stringify(destDetails), session?.userId);
-    } else {
-      cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails), session?.userId);
+    // For deposit: UTR/transaction ref is required
+    if (flow === 'deposit' && !utr.trim()) {
+      showAlert('UTR / Ref Required', 'Enter your UTR / Transaction Reference ID or Transaction Hash.');
+      return;
     }
 
-    // Restore toast and show our success notification
-    cms.toast = originalToast;
-    cms.toast({
-      title: flow === 'deposit' ? 'Deposit Request Submitted' : 'Withdrawal Request Submitted',
-      body: 'Please wait 5 minutes, your payment is processing...',
-      kind: 'success',
-    });
-    handleClose();
+    setSubmitting(true);
+
+    try {
+      // Suppress the internal admin-facing toast that cms.submitDeposit/submitWithdrawal fires.
+      // We show our own user-friendly success toast right after.
+      const originalToast = cms.toast.bind(cms);
+      cms.toast = () => { /* suppress internal admin toast */ };
+
+      if (flow === 'deposit') {
+        cms.submitDeposit(user, amt, destLabel, utr.trim(), JSON.stringify(destDetails), session?.userId);
+      } else {
+        cms.submitWithdrawal(user, amt, destLabel, JSON.stringify(destDetails), session?.userId);
+      }
+
+      // Restore toast and show our success notification
+      cms.toast = originalToast;
+      cms.toast({
+        title: flow === 'deposit' ? 'Deposit Request Submitted' : 'Withdrawal Request Submitted',
+        body: 'Please wait 5 minutes, your payment is processing...',
+        kind: 'success',
+      });
+
+      handleClose();
+    } catch (err) {
+      console.error('[PaymentMethodFlow] submit error:', err);
+      setSubmitting(false);
+      showAlert('Submission Failed', 'Something went wrong. Please try again.');
+    }
   };
 
   const copyToClipboard = (text: string) => {
@@ -327,7 +339,9 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
               )}
               {flow === 'deposit' && (
                 <div>
-                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">UTR / Transaction Ref</label>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">
+                    UTR / Transaction Ref <span className="text-coral-400">*</span>
+                  </label>
                   <input value={utr} onChange={(e) => setUtr(e.target.value)} placeholder="e.g. UTR123456789" className="input w-full py-3" />
                 </div>
               )}
@@ -364,7 +378,9 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
               )}
               {flow === 'deposit' && (
                 <div>
-                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">UTR / Transaction Ref</label>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">
+                    UTR / Transaction Ref <span className="text-coral-400">*</span>
+                  </label>
                   <input value={utr} onChange={(e) => setUtr(e.target.value)} placeholder="UTR or Transaction Reference ID" className="input w-full py-3" />
                 </div>
               )}
@@ -417,7 +433,9 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
               )}
               {flow === 'deposit' && (
                 <div>
-                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Transaction Hash / Ref</label>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">
+                    Transaction Hash / Ref <span className="text-coral-400">*</span>
+                  </label>
                   <input value={utr} onChange={(e) => setUtr(e.target.value)} placeholder="Enter transaction hash (TXID)" className="input w-full py-3 font-mono text-xs" />
                 </div>
               )}
@@ -426,10 +444,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
           <button
             type="button"
+            disabled={submitting}
             onClick={(e) => handleSubmit(e)}
-            className="w-full py-4 flex items-center justify-center gap-2 text-base font-semibold rounded-xl transition-all bg-green-500 hover:bg-green-600 text-white shadow-lg shadow-green-500/30"
+            className="w-full py-4 flex items-center justify-center gap-2 text-base font-semibold rounded-xl transition-all bg-green-500 hover:bg-green-600 disabled:opacity-60 disabled:cursor-not-allowed text-white shadow-lg shadow-green-500/30"
           >
-            {flow === 'deposit' ? 'Submit Deposit Request' : 'Request Withdrawal'}
+            {submitting
+              ? <><Loader2 className="w-5 h-5 animate-spin" /> Submitting…</>
+              : (flow === 'deposit' ? 'Submit Deposit Request' : 'Request Withdrawal')}
           </button>
         </form>
       </div>
