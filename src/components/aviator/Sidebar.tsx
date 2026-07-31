@@ -7,9 +7,7 @@ import {
   randomName,
   initials,
 } from './game/format';
-import { supabase } from '@/integrations/supabase/client';
 import { auth } from '../../lib/auth';
-import { store } from '../../lib/store';
 
 export interface BetRecord {
   id: string;
@@ -29,6 +27,14 @@ export interface ChatMessage {
   system?: boolean;
 }
 
+interface TopWinRecord {
+  username: string;
+  bet_amount: number;
+  win_amount: number;
+  multiplier: number;
+  placed_at: string;
+}
+
 interface SidebarProps {
   phase: Phase;
   multiplier: number;
@@ -42,60 +48,50 @@ interface SidebarProps {
 
 type Tab = 'all' | 'mine' | 'top';
 
-interface MyHistoryBet {
-  id: string;
-  bet_amount: number;
-  win_amount: number;
-  multiplier: number;
-  status: string;
-  placed_at: string;
-  cash_out_at: number | null;
-}
-
-function fmtTime(ts: string) {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-/** Fetch user's aviator bets — tries RPC first, falls back to direct table query */
-async function fetchMyAviatorBets(userId: string): Promise<MyHistoryBet[]> {
-  // Try RPC first
-  const { data: rpcData, error: rpcError } = await supabase
-    .rpc('get_aviator_my_bets', { p_user_id: userId, p_limit: 50 });
-
-  if (!rpcError && rpcData && Array.isArray(rpcData) && rpcData.length >= 0) {
-    return (rpcData as MyHistoryBet[]).map((r) => ({
-      ...r,
-      bet_amount: Number(r.bet_amount),
-      win_amount: Number(r.win_amount),
-      multiplier: Number(r.multiplier),
-      cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
+async function fetchMyBetsHistory(): Promise<BetRecord[]> {
+  const session = auth.getSession();
+  if (!session) return [];
+  try {
+    const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
+    const res = await fetch(`${EDGE_FN}?action=aviator_my_bets&user_id=${session.userId}`, {
+      headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
+    });
+    const data = await res.json() as {
+      bets?: {
+        id: string;
+        bet_amount: number;
+        win_amount: number;
+        multiplier: number;
+        status: string;
+        placed_at: string;
+        cash_out_at: number | null;
+      }[];
+    };
+    return (data.bets ?? []).map((b) => ({
+      id: b.id,
+      name: 'You',
+      color: '#22c55e',
+      amount: b.bet_amount,
+      cashedOutAt: b.status === 'won' ? (b.cash_out_at ?? b.multiplier) : null,
+      win: b.status === 'won' ? b.win_amount : null,
+      isPlayer: true,
     }));
-  }
-
-  // Fallback: query bets table directly
-  console.warn('[AviatorSidebar] RPC unavailable, using direct query fallback:', rpcError?.message);
-  const { data: fallbackData, error: fallbackError } = await supabase
-    .from('bets')
-    .select('id, bet_amount, win_amount, multiplier, status, placed_at, bet_details')
-    .eq('user_id', userId)
-    .or('bet_details->>game.eq.aviator,game_id.eq.dfec9812-9596-43db-8b70-791200770f2b')
-    .order('placed_at', { ascending: false })
-    .limit(50);
-
-  if (fallbackError || !fallbackData) {
-    console.error('[AviatorSidebar] Fallback query failed:', fallbackError?.message);
+  } catch {
     return [];
   }
+}
 
-  return (fallbackData as { id: string; bet_amount: unknown; win_amount: unknown; multiplier: unknown; status: string; placed_at: string; bet_details: Record<string, unknown> | null }[]).map((r) => ({
-    id: r.id,
-    bet_amount: Number(r.bet_amount),
-    win_amount: Number(r.win_amount ?? 0),
-    multiplier: Number(r.multiplier ?? 0),
-    status: r.status,
-    placed_at: r.placed_at,
-    cash_out_at: r.bet_details?.cashOutAt != null ? Number(r.bet_details.cashOutAt) : null,
-  }));
+async function fetchTopWins(): Promise<TopWinRecord[]> {
+  try {
+    const EDGE_FN = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/process-bet`;
+    const res = await fetch(`${EDGE_FN}?action=aviator_top_wins`, {
+      headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY },
+    });
+    const data = await res.json() as { wins?: TopWinRecord[] };
+    return data.wins ?? [];
+  } catch {
+    return [];
+  }
 }
 
 export function Sidebar({
@@ -112,10 +108,13 @@ export function Sidebar({
   const [input, setInput] = useState('');
   const chatScrollRef = useRef<HTMLDivElement>(null);
 
-  // My Bets historical data
-  const [myHistory, setMyHistory] = useState<MyHistoryBet[]>([]);
-  const [myHistoryLoading, setMyHistoryLoading] = useState(false);
-  const session = auth.getSession();
+  // Historical my bets from server (loaded when Mine tab is opened)
+  const [historyMyBets, setHistoryMyBets] = useState<BetRecord[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
+  // All-time top wins from server
+  const [topWins, setTopWins] = useState<TopWinRecord[]>([]);
+  const [topWinsLoaded, setTopWinsLoaded] = useState(false);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -123,15 +122,29 @@ export function Sidebar({
     }
   }, [chat]);
 
+  // Load history when Mine tab selected
   useEffect(() => {
-    if (tab !== 'mine') return;
-    if (!session?.userId) return;
-    setMyHistoryLoading(true);
-    void fetchMyAviatorBets(session.userId).then((bets) => {
-      setMyHistory(bets);
-      setMyHistoryLoading(false);
-    });
-  }, [tab, phase, session?.userId]);
+    if (tab === 'mine' && !historyLoaded) {
+      setHistoryLoaded(true);
+      void fetchMyBetsHistory().then(setHistoryMyBets);
+    }
+  }, [tab, historyLoaded]);
+
+  // Reload history when phase changes to waiting (new round settled)
+  useEffect(() => {
+    if (phase === 'waiting' && historyLoaded) {
+      void fetchMyBetsHistory().then(setHistoryMyBets);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
+  // Load top wins when Top tab selected
+  useEffect(() => {
+    if (tab === 'top' && !topWinsLoaded) {
+      setTopWinsLoaded(true);
+      void fetchTopWins().then(setTopWins);
+    }
+  }, [tab, topWinsLoaded]);
 
   function send() {
     const text = input.trim();
@@ -140,98 +153,45 @@ export function Sidebar({
     setInput('');
   }
 
-  const topBets = [...allBets]
-    .filter((b) => b.win !== null)
-    .sort((a, b) => (b.win ?? 0) - (a.win ?? 0))
-    .slice(0, 50);
+  // Merge current-round myBets with history (deduplicate by id)
+  const combinedMyBets: BetRecord[] = [...myBets];
+  const existingIds = new Set(myBets.map((b) => b.id));
+  for (const h of historyMyBets) {
+    if (!existingIds.has(h.id)) combinedMyBets.push(h);
+  }
 
-  const list = tab === 'all' ? allBets : topBets;
+  const list = tab === 'all' ? allBets : tab === 'mine' ? combinedMyBets : [];
 
   return (
-    <aside className="flex h-full flex-col rounded-xl bg-ink-700 border border-ink-500/60 overflow-hidden">
+    <div className="flex flex-col bg-[#151a27] rounded-xl mx-2 mb-2 overflow-hidden border border-white/5">
       {/* Tabs */}
-      <div className="flex border-b border-ink-600">
-        <SideTab active={tab === 'all'} onClick={() => setTab('all')} icon={<Users className="h-4 w-4" />}>
+      <div className="flex border-b border-white/10">
+        <SideTab active={tab === 'all'} onClick={() => setTab('all')} icon={<Users className="w-3.5 h-3.5" />}>
           All Bets
         </SideTab>
-        <SideTab active={tab === 'mine'} onClick={() => setTab('mine')} icon={<User className="h-4 w-4" />}>
+        <SideTab active={tab === 'mine'} onClick={() => setTab('mine')} icon={<User className="w-3.5 h-3.5" />}>
           My Bets
         </SideTab>
-        <SideTab active={tab === 'top'} onClick={() => setTab('top')} icon={<Trophy className="h-4 w-4" />}>
+        <SideTab active={tab === 'top'} onClick={() => setTab('top')} icon={<Trophy className="w-3.5 h-3.5" />}>
           Top
         </SideTab>
       </div>
 
-      {/* My Bets tab — historical table */}
-      {tab === 'mine' ? (
-        <div className="flex-1 overflow-y-auto min-h-0 scroll-thin">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-ink-600/60 text-[10px] font-bold uppercase tracking-wider text-gray-500">
-                <th className="px-2 py-2 text-left">Time</th>
-                <th className="px-2 py-2 text-right">Stake</th>
-                <th className="px-2 py-2 text-right">×</th>
-                <th className="px-2 py-2 text-right">Win</th>
-                <th className="px-2 py-2 text-right">P/L</th>
-              </tr>
-            </thead>
-            <tbody>
-              {myHistoryLoading && (
-                <tr>
-                  <td colSpan={5} className="py-6 text-center text-gray-500">Loading…</td>
-                </tr>
-              )}
-              {!myHistoryLoading && !session?.userId && (
-                <tr>
-                  <td colSpan={5} className="py-6 text-center text-gray-500">Login to see your bets.</td>
-                </tr>
-              )}
-              {!myHistoryLoading && session?.userId && myHistory.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="py-6 text-center text-gray-500">No bets yet.</td>
-                </tr>
-              )}
-              {myHistory.map((b) => {
-                const netpl = b.win_amount - b.bet_amount;
-                return (
-                  <tr key={b.id} className="border-b border-ink-600/20 hover:bg-ink-650/40">
-                    <td className="px-2 py-1.5 text-gray-400">{fmtTime(b.placed_at)}</td>
-                    <td className="px-2 py-1.5 text-right font-mono text-gray-300">{store.currency}{b.bet_amount}</td>
-                    <td className="px-2 py-1.5 text-right font-mono">
-                      {b.cash_out_at != null
-                        ? <span className="text-aviator-green font-bold">{b.cash_out_at.toFixed(2)}×</span>
-                        : <span className="text-gray-600">—</span>}
-                    </td>
-                    <td className="px-2 py-1.5 text-right font-mono">
-                      {b.status === 'won'
-                        ? <span className="text-aviator-green">{store.currency}{b.win_amount}</span>
-                        : <span className="text-gray-600">—</span>}
-                    </td>
-                    <td className={`px-2 py-1.5 text-right font-mono font-bold ${netpl >= 0 ? 'text-aviator-green' : 'text-red-400'}`}>
-                      {netpl >= 0 ? '+' : ''}{store.currency}{netpl}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      ) : (
+      {tab !== 'top' && (
         <>
-          {/* Column headers for All / Top tabs */}
-          <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr] gap-1 px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b border-ink-600/60">
-            <span>Player</span>
+          {/* Column headers */}
+          <div className="grid grid-cols-4 gap-1 px-3 py-1.5 text-[10px] font-semibold text-white/30 uppercase tracking-wider">
+            <span className="col-span-2">Player</span>
             <span className="text-right">Bet</span>
-            <span className="text-right">X</span>
             <span className="text-right">Win</span>
           </div>
 
           {/* Bet list */}
-          <div className="scroll-thin flex-1 overflow-y-auto min-h-0">
+          <div className="max-h-48 overflow-y-auto">
             {list.length === 0 ? (
-              <div className="flex h-full items-center justify-center p-4 text-center text-xs text-gray-600">
-                {tab === 'top'
-                  ? 'No cashed-out wins yet this round.'
+              <div className="text-center text-white/30 text-xs py-6">
+                {tab === 'mine'
+                  ? auth.getSession() ? 'No bets yet this session.' : 'Sign in to see your bets.'
                   : 'Waiting for players to join…'}
               </div>
             ) : (
@@ -241,35 +201,83 @@ export function Sidebar({
         </>
       )}
 
-      {/* Chat */}
-      <div className="border-t border-ink-600 bg-ink-750">
-        <div className="px-3 pt-2 text-[10px] font-bold uppercase tracking-wider text-gray-500">
-          Live Chat
+      {/* Top wins tab — all-time highest wins */}
+      {tab === 'top' && (
+        <div className="max-h-64 overflow-y-auto">
+          {topWins.length === 0 ? (
+            <div className="text-center text-white/30 text-xs py-6">
+              {topWinsLoaded ? 'No big wins recorded yet.' : 'Loading…'}
+            </div>
+          ) : (
+            <div>
+              <div className="grid grid-cols-4 gap-1 px-3 py-1.5 text-[10px] font-semibold text-white/30 uppercase tracking-wider">
+                <span className="col-span-2">Player</span>
+                <span className="text-right">Bet</span>
+                <span className="text-right">Win</span>
+              </div>
+              {topWins.map((w, i) => (
+                <div key={i} className="grid grid-cols-4 gap-1 px-3 py-1.5 text-xs border-b border-white/5 last:border-0">
+                  <div className="col-span-2 flex items-center gap-2 min-w-0">
+                    <span className="text-yellow-400 font-bold text-[10px] w-4 flex-shrink-0">#{i + 1}</span>
+                    <div
+                      className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white flex-shrink-0"
+                      style={{ background: randomAvatarColor() }}
+                    >
+                      {(w.username || 'P').slice(0, 2).toUpperCase()}
+                    </div>
+                    <span className="text-white/80 truncate">{w.username}</span>
+                  </div>
+                  <span className="text-right text-white/60">{formatMoney(w.bet_amount)}</span>
+                  <span className="text-right text-green-400 font-bold">
+                    {formatMoney(w.win_amount)}
+                    <span className="text-[10px] text-green-400/60 ml-1">{Number(w.multiplier).toFixed(2)}x</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        <div ref={chatScrollRef} className="scroll-thin h-28 overflow-y-auto px-3 py-2 space-y-1.5">
+      )}
+
+      {/* Share bet button (visible when cashed out) */}
+      {canShareBet && (
+        <div className="px-3 py-1.5 border-t border-white/5">
+          <button
+            onClick={onShareBet}
+            className="flex items-center gap-1.5 text-xs text-aviator-red/80 hover:text-aviator-red transition-colors cursor-pointer"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+            Share your win to chat
+          </button>
+        </div>
+      )}
+
+      {/* Chat */}
+      <div className="border-t border-white/10">
+        <div className="flex items-center justify-between px-3 pt-2 pb-1">
+          <span className="text-xs font-semibold text-white/50 uppercase tracking-wider">Live Chat</span>
+        </div>
+        <div
+          ref={chatScrollRef}
+          className="h-20 overflow-y-auto px-3 py-1 space-y-1"
+        >
           {chat.length === 0 && (
-            <p className="text-xs text-gray-600 italic">Be the first to say something…</p>
+            <div className="text-white/20 text-xs">Be the first to say something…</div>
           )}
           {chat.map((m) =>
             m.system ? (
-              <div
-                key={m.id}
-                className="rounded-md bg-aviator-red/10 border border-aviator-red/20 px-2 py-1 text-xs text-aviator-red-bright animate-fade-in"
-              >
-                {m.text}
-              </div>
+              <div key={m.id} className="text-xs text-aviator-red/80 italic">{m.text}</div>
             ) : (
-              <div key={m.id} className="text-xs leading-snug animate-fade-in">
-                <span className="font-bold" style={{ color: m.color }}>
-                  {m.name}:
-                </span>{' '}
-                <span className="text-gray-300">{m.text}</span>
+              <div key={m.id} className="text-xs text-white/70">
+                <span className="font-semibold" style={{ color: m.color }}>{m.name}:</span>
+                {' '}
+                {m.text}
               </div>
             ),
           )}
         </div>
 
-        <div className="flex items-center gap-1.5 p-2 border-t border-ink-600/60">
+        <div className="flex items-center gap-2 px-3 py-2 border-t border-white/5">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -279,23 +287,14 @@ export function Sidebar({
             className="h-9 flex-1 rounded-lg bg-ink-850 border border-ink-500/70 px-3 text-sm text-white outline-none focus:border-aviator-red/60"
           />
           <button
-            onClick={onShareBet}
-            disabled={!canShareBet}
-            title="Share your cash-out in chat"
-            className="grid h-9 w-9 place-items-center rounded-lg bg-ink-850 border border-ink-500/70 text-aviator-red hover:bg-ink-650 disabled:opacity-40 transition-colors"
-          >
-            <Share2 className="h-4 w-4" />
-          </button>
-          <button
             onClick={send}
-            className="grid h-9 w-9 place-items-center rounded-lg bg-aviator-red text-white hover:bg-aviator-red-bright transition-colors"
-            aria-label="Send"
+            className="w-9 h-9 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
           >
-            <Send className="h-4 w-4" />
+            <Send className="w-4 h-4 text-white/70" />
           </button>
         </div>
       </div>
-    </aside>
+    </div>
   );
 }
 
@@ -313,10 +312,10 @@ function SideTab({
   return (
     <button
       onClick={onClick}
-      className={`flex flex-1 items-center justify-center gap-1.5 py-2.5 text-xs font-bold transition-colors ${
+      className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-xs font-semibold transition-colors cursor-pointer border-b-2 ${
         active
-          ? 'bg-ink-650 text-white border-b-2 border-aviator-red'
-          : 'text-gray-500 hover:text-gray-300 border-b-2 border-transparent'
+          ? 'text-white border-aviator-red'
+          : 'text-white/40 border-transparent hover:text-white/70'
       }`}
     >
       {icon}
@@ -329,38 +328,30 @@ function BetRow({ bet, phase, multiplier }: { bet: BetRecord; phase: Phase; mult
   const liveWin = bet.amount * multiplier;
   const inFlight = bet.cashedOutAt === null && bet.win === null;
   return (
-    <div className="grid grid-cols-[1.4fr_1fr_1fr_1fr] gap-1 px-3 py-1.5 text-xs items-center border-b border-ink-600/30 hover:bg-ink-650/50">
-      <div className="flex items-center gap-1.5 min-w-0">
-        <span
-          className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-[9px] font-bold text-white"
-          style={{ backgroundColor: bet.color }}
+    <div className="grid grid-cols-4 gap-1 px-3 py-1.5 text-xs border-b border-white/5 last:border-0">
+      <div className="col-span-2 flex items-center gap-2 min-w-0">
+        <div
+          className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
+          style={{ background: bet.color }}
         >
           {initials(bet.name)}
-        </span>
-        <span className="truncate text-gray-300">
-          {bet.name}
-          {bet.isPlayer && <span className="ml-1 text-aviator-green">(you)</span>}
-        </span>
+        </div>
+        <div className="min-w-0">
+          <div className="text-white/80 truncate">{bet.name}</div>
+          {bet.isPlayer && <div className="text-[9px] text-green-400/70">(you)</div>}
+        </div>
       </div>
-      <span className="text-right font-mono text-gray-400 tabular-nums">{formatMoney(bet.amount)}</span>
+      <span className="text-right text-white/60 self-center">{formatMoney(bet.amount)}</span>
       {bet.cashedOutAt !== null ? (
-        <span className="text-right font-mono font-bold text-aviator-green tabular-nums">
-          {bet.cashedOutAt.toFixed(2)}x
+        <span className="text-right text-green-400 font-bold self-center">
+          {formatMoney(bet.amount * bet.cashedOutAt)}
+          <span className="text-[10px] text-green-400/60 block">{bet.cashedOutAt.toFixed(2)}x</span>
         </span>
+      ) : phase === 'flying' && inFlight ? (
+        <span className="text-right text-yellow-400 self-center">{formatMoney(liveWin)}</span>
       ) : (
-        <span className="text-right font-mono text-gray-600 tabular-nums">
-          {phase === 'flying' && inFlight ? `${multiplier.toFixed(2)}x` : '—'}
-        </span>
+        <span className="text-right text-white/30 self-center">—</span>
       )}
-      <span className="text-right font-mono font-bold tabular-nums">
-        {bet.cashedOutAt !== null ? (
-          <span className="text-aviator-green">{formatMoney(bet.amount * bet.cashedOutAt)}</span>
-        ) : phase === 'flying' && inFlight ? (
-          <span className="text-aviator-orange">{formatMoney(liveWin)}</span>
-        ) : (
-          <span className="text-gray-600">—</span>
-        )}
-      </span>
     </div>
   );
 }
