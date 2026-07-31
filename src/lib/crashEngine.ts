@@ -131,7 +131,7 @@ async function insertPendingBet(
         win_amount: 0,
         multiplier: 0,
         status: 'pending',
-        bet_details: { bustPoint: 0, cashOutAt: null, roundId },
+        bet_details: { game: 'crash', bustPoint: 0, cashOutAt: null, roundId },
         placed_at: new Date().toISOString(),
       })
       .select('id')
@@ -163,7 +163,7 @@ async function settlePendingBet(
         multiplier,
         status,
         resolved_at: new Date().toISOString(),
-        bet_details: { bustPoint, cashOutAt },
+        bet_details: { game: 'crash', bustPoint, cashOutAt },
       })
       .eq('id', dbId);
   } catch (e) {
@@ -262,7 +262,6 @@ class CrashEngine {
         const remaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
         this.state.phase = 'countdown';
         this.state.countdown = remaining;
-        // Track when this was set for smooth animation
         this.state.countdownAtSet = remaining;
         this.state.countdownSetAt = Date.now();
         this.state.multiplier = 1.0;
@@ -306,7 +305,6 @@ class CrashEngine {
           const serverBust = r.crash_point != null ? Number(r.crash_point) : null;
           this.state.phase = 'busted';
           this.state.bustPoint = serverBust ?? this.state.multiplier;
-          // Always snap multiplier to exact bust point — prevents overshoot display
           this.state.multiplier = this.state.bustPoint;
           this.state.serverCrashPoint = null;
           this.state.lastServerElapsedMs = 0;
@@ -336,7 +334,6 @@ class CrashEngine {
     if (this.state.phase === 'flying') {
       const elapsed = Date.now() - this.state.startedAt;
 
-      // Cap local animation to server elapsed + one poll interval
       const maxElapsed = this.state.lastServerElapsedMs > 0
         ? this.state.lastServerElapsedMs + MAX_AHEAD_MS
         : elapsed;
@@ -344,7 +341,6 @@ class CrashEngine {
 
       let m = multiplierFromElapsed(cappedElapsed);
 
-      // Cap at known server crash point
       if (this.state.serverCrashPoint != null && m >= this.state.serverCrashPoint) {
         m = this.state.serverCrashPoint;
       }
@@ -354,7 +350,6 @@ class CrashEngine {
       this.checkAutoCashouts();
       this.publish();
     } else if (this.state.phase === 'countdown') {
-      // Smooth countdown: subtract real elapsed since last poll set it
       const elapsed = (Date.now() - this.state.countdownSetAt) / 1000;
       this.state.countdown = Math.max(0, this.state.countdownAtSet - elapsed);
       this.publish();
@@ -415,11 +410,8 @@ class CrashEngine {
       win: slot.win ?? 0,
     });
     if (slot.dbId) {
-      // dbId exists: update the existing pending record — do NOT call settleSlotOnServer
-      // which would insert a duplicate record via process_bet_atomic RPC.
       void settlePendingBet(slot.dbId, slot.win ?? 0, cashOutAt, cashOutAt, this.state.bustPoint, 'won');
     } else {
-      // No pending record in DB (e.g. insert was skipped) — fall back to server settle
       void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
     }
   }
@@ -439,11 +431,8 @@ class CrashEngine {
         win: 0,
       });
       if (slot.dbId) {
-        // dbId exists: update the existing pending record — do NOT call settleSlotOnServer
-        // which would insert a duplicate record via process_bet_atomic RPC.
         void settlePendingBet(slot.dbId, 0, bustPoint, null, bustPoint, 'lost');
       } else {
-        // No pending record in DB — fall back to server settle
         void settleSlotOnServer(slot, roundId, bustPoint);
       }
     }
@@ -518,8 +507,6 @@ class CrashEngine {
     if (this.state.phase !== 'flying') return { ok: false, reason: 'Not in flight' };
     if (!slot.placed) return { ok: false, reason: 'No bet placed' };
     if (slot.cashedOut) return { ok: false, reason: 'Already cashed out' };
-    // CRITICAL FIX: If the multiplier has reached the known server crash point,
-    // the round has already ended — block cashout to prevent overshoot win.
     if (this.state.serverCrashPoint != null && this.state.multiplier >= this.state.serverCrashPoint) {
       return { ok: false, reason: 'Round has ended' };
     }
