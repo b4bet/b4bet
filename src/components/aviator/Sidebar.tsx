@@ -97,6 +97,15 @@ async function fetchTopWins(): Promise<TopWinRecord[]> {
   }
 }
 
+// Stable avatar colors for top wins — computed once per username so they don't flicker
+const topWinColorCache = new Map<string, string>();
+function stableColor(username: string): string {
+  if (!topWinColorCache.has(username)) {
+    topWinColorCache.set(username, randomAvatarColor());
+  }
+  return topWinColorCache.get(username)!;
+}
+
 export function Sidebar({
   phase,
   multiplier,
@@ -117,7 +126,7 @@ export function Sidebar({
 
   // All-time top wins from server
   const [topWins, setTopWins] = useState<TopWinRecord[]>([]);
-  const [topWinsLoaded, setTopWinsLoaded] = useState(false);
+  const [topWinsLoading, setTopWinsLoading] = useState(false);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -141,13 +150,18 @@ export function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  // Load top wins when Top tab selected
+  // FIX: Load top wins EVERY time Top tab is opened (not just once).
+  // Previously topWinsLoaded flag prevented reload, causing empty list on first open
+  // if the fetch failed or the tab was opened before data arrived.
   useEffect(() => {
-    if (tab === 'top' && !topWinsLoaded) {
-      setTopWinsLoaded(true);
-      void fetchTopWins().then(setTopWins);
+    if (tab === 'top') {
+      setTopWinsLoading(true);
+      void fetchTopWins().then((wins) => {
+        setTopWins(wins);
+        setTopWinsLoading(false);
+      }).catch(() => setTopWinsLoading(false));
     }
-  }, [tab, topWinsLoaded]);
+  }, [tab]);
 
   function send() {
     const text = input.trim();
@@ -207,10 +221,10 @@ export function Sidebar({
       {/* Top wins tab — all-time highest wins */}
       {tab === 'top' && (
         <div className="max-h-64 overflow-y-auto">
-          {topWins.length === 0 ? (
-            <div className="text-center text-white/30 text-xs py-6">
-              {topWinsLoaded ? 'No big wins recorded yet.' : 'Loading…'}
-            </div>
+          {topWinsLoading ? (
+            <div className="text-center text-white/30 text-xs py-6">Loading…</div>
+          ) : topWins.length === 0 ? (
+            <div className="text-center text-white/30 text-xs py-6">No big wins recorded yet.</div>
           ) : (
             <div>
               <div className="grid grid-cols-4 gap-1 px-3 py-1.5 text-[10px] font-semibold text-white/30 uppercase tracking-wider">
@@ -224,7 +238,7 @@ export function Sidebar({
                     <span className="text-yellow-400 font-bold text-[10px] w-4 flex-shrink-0">#{i + 1}</span>
                     <div
                       className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white flex-shrink-0"
-                      style={{ background: randomAvatarColor() }}
+                      style={{ background: stableColor(w.username) }}
                     >
                       {(w.username || 'P').slice(0, 2).toUpperCase()}
                     </div>
