@@ -83,7 +83,7 @@ function isBetChoice(v: unknown): v is BetChoice {
 function rowToMyBet(row: RpcBetRow): MyBetEntry | null {
   const d = row.bet_details;
   if (!d) return null;
-  // Accept all sun vs moon bets — with or without game field
+  // Accept ALL sun vs moon bets — with or without game field
   const betChoice = d.bet_choice ?? d.bet;
   if (!isBetChoice(betChoice) || !isBetChoice(d.result)) return null;
   const rn = d.round_number != null ? Number(d.round_number) : NaN;
@@ -103,7 +103,6 @@ async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
     p_limit: 40,
   });
   if (error) {
-    console.error('[SunVsMoon] fetchMyBets RPC error:', error.message);
     const { data: fbData, error: fbError } = await supabase
       .from('bets')
       .select('id, round_id, bet_amount, win_amount, status, placed_at, bet_details')
@@ -111,16 +110,18 @@ async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
       .order('placed_at', { ascending: false })
       .limit(40);
     if (fbError || !fbData) return [];
-    return (fbData as RpcBetRow[])
-      .map(rowToMyBet)
-      .filter((r): r is MyBetEntry => r !== null)
-      .slice(0, 20);
+    return (fbData as RpcBetRow[]).map(rowToMyBet).filter((r): r is MyBetEntry => r !== null).slice(0, 20);
   }
   if (!data) return [];
-  return (data as RpcBetRow[])
-    .map(rowToMyBet)
-    .filter((r): r is MyBetEntry => r !== null)
-    .slice(0, 20);
+  return (data as RpcBetRow[]).map(rowToMyBet).filter((r): r is MyBetEntry => r !== null).slice(0, 20);
+}
+
+// Merge fresh DB results with any pending optimistic entries that DB hasn't returned yet
+function mergeWithOptimistic(fresh: MyBetEntry[], prev: MyBetEntry[]): MyBetEntry[] {
+  const freshIds = new Set(fresh.map((b) => b.id));
+  // Keep only optimistic entries not yet in DB
+  const stillPending = prev.filter((b) => b.id.startsWith('optimistic-') && !freshIds.has(b.id));
+  return [...stillPending, ...fresh].slice(0, 20);
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -339,15 +340,15 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
           const session = auth.getSession();
           if (!session) return;
 
-          // ── OPTIMISTIC UPDATE: turant My Bets mein dikhao ──
-          // Server se response aane ka wait mat karo
+          // ── INSTANT optimistic entry — dikhao turant, server ka wait nahi ──
+          const optimisticId = `optimistic-${rn}`;
           const optimisticBet: MyBetEntry = {
-            id: `optimistic-${rn}`,
+            id: optimisticId,
             round: rn,
             bet: sb,
             result: localOutcome,
             stake,
-            win: 0, // server confirm karega actual win amount
+            win: 0,
           };
           setMyBets((prev) => [optimisticBet, ...prev].slice(0, 20));
           setOverlayResult(localOutcome);
@@ -366,16 +367,12 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               setLastWon(won);
               setLastPayout(profit);
 
-              // Optimistic entry ko real data se replace karo
-              const realBet: MyBetEntry = {
-                id: `optimistic-${rn}`,
-                round: rn,
-                bet: sb,
-                result: serverOutcome,
-                stake,
-                win: won ? profit : 0,
-              };
-              setMyBets((prev) => prev.map((b) => b.id === `optimistic-${rn}` ? realBet : b));
+              // Optimistic entry update karo real win amount se
+              setMyBets((prev) => prev.map((b) =>
+                b.id === optimisticId
+                  ? { ...b, result: serverOutcome, win: won ? profit : 0 }
+                  : b
+              ));
 
               const record: Omit<SunMoonRoundRecord, 'id' | 'ts'> = {
                 roundNumber: rn, stake, bet: sb, result: serverOutcome,
@@ -383,18 +380,16 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               };
               store.recordSunMoonRound(record);
 
-              // Background mein DB se fresh bets bhi fetch karo
+              // Background mein DB se sync karo — optimistic entries preserve karo
               void fetchMyBetsFromSupabase(session.userId).then((fresh) => {
-                if (fresh.length > 0) {
-                  setMyBets(fresh);
-                }
+                setMyBets((prev) => mergeWithOptimistic(fresh, prev));
               });
             })
             .catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : 'Server error';
               cms.toast({ title: 'Settle failed', body: msg, kind: 'alert' });
-              // Optimistic entry hatao error pe
-              setMyBets((prev) => prev.filter((b) => b.id !== `optimistic-${rn}`));
+              // Error pe optimistic entry hatao
+              setMyBets((prev) => prev.filter((b) => b.id !== optimisticId));
             })
             .finally(() => setSettling(false));
         } else {
@@ -604,9 +599,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
                     <div key={b.id} className="flex items-center gap-3 rounded-xl bg-slatepanel-800/60 border border-borderline-900 px-3 py-2.5">
                       <img src={CHOICE_IMAGES[b.result]} alt={CHOICE_LABELS[b.result]} className="w-8 h-8 object-contain flex-shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold text-white">
-                          {b.round !== null ? `#${b.round}` : 'Old Bet'}
-                        </p>
+                        <p className="text-xs font-bold text-white">#{b.round ?? rn}</p>
                         <p className="text-[10px] text-slate-400">Bet {CHOICE_LABELS[b.bet]} · Result {CHOICE_LABELS[b.result]}</p>
                       </div>
                       <div className="text-right flex-shrink-0">
