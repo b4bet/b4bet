@@ -17,6 +17,8 @@ export interface BetRecord {
   cashedOutAt: number | null;
   win: number | null;
   isPlayer: boolean;
+  /** 'pending' = in-flight this round, 'won' = cashed out, 'lost' = crashed out */
+  status?: 'pending' | 'won' | 'lost';
 }
 
 export interface ChatMessage {
@@ -75,6 +77,7 @@ async function fetchMyBetsHistory(): Promise<BetRecord[]> {
       cashedOutAt: b.status === 'won' ? (b.cash_out_at ?? b.multiplier) : null,
       win: b.status === 'won' ? b.win_amount : null,
       isPlayer: true,
+      status: b.status === 'won' ? 'won' : 'lost',
     }));
   } catch {
     return [];
@@ -326,7 +329,12 @@ function SideTab({
 
 function BetRow({ bet, phase, multiplier }: { bet: BetRecord; phase: Phase; multiplier: number }) {
   const liveWin = bet.amount * multiplier;
-  const inFlight = bet.cashedOutAt === null && bet.win === null;
+
+  // A bet is "in-flight" only when it's explicitly pending (current round, not yet settled).
+  // Lost/won bets from previous rounds must NOT show the live multiplier.
+  const isPending = bet.status === 'pending' || (bet.status === undefined && bet.cashedOutAt === null && bet.win === null);
+  const inFlight = isPending && bet.cashedOutAt === null && bet.win === null;
+
   return (
     <div className="grid grid-cols-4 gap-1 px-3 py-1.5 text-xs border-b border-white/5 last:border-0">
       <div className="col-span-2 flex items-center gap-2 min-w-0">
@@ -377,5 +385,6 @@ export function makeSimBet(roundId: number, phase: Phase, multiplier: number): B
     cashedOutAt,
     win,
     isPlayer: false,
+    status: cashedOutAt !== null ? 'won' : 'pending',
   };
 }
