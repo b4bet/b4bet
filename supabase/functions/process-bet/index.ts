@@ -293,7 +293,7 @@ serve(async (req) => {
       );
     }
 
-    // ── aviator_bets ─────────────────────────────────────────────────────────
+    // ── aviator_bets — current round bets for the All Bets sidebar tab ───────
     if (action === "aviator_bets") {
       const round_uuid = payload.round_uuid as string | undefined;
       if (!round_uuid) {
@@ -303,21 +303,51 @@ serve(async (req) => {
         );
       }
 
-      const { data: rows } = await supabase
+      // Search bets with game_id = aviator game id
+      const { data: rows1 } = await supabase
         .from("bets")
         .select("user_id, bet_amount, win_amount, multiplier, status, placed_at, bet_details")
-        .contains("bet_details", { game: "aviator", round_uuid })
+        .eq("game_id", "dfec9812-9596-43db-8b70-791200770f2b")
+        .contains("bet_details", { round_uuid })
         .order("placed_at", { ascending: true })
         .limit(200);
 
-      const bets = (rows ?? []).map((b: {
+      // Also search null game_id bets that have this round_uuid in bet_details
+      const { data: rows2 } = await supabase
+        .from("bets")
+        .select("user_id, bet_amount, win_amount, multiplier, status, placed_at, bet_details")
+        .is("game_id", null)
+        .contains("bet_details", { round_uuid })
+        .order("placed_at", { ascending: true })
+        .limit(200);
+
+      // Also search by round_uuid key at top level of bet_details
+      const { data: rows3 } = await supabase
+        .from("bets")
+        .select("user_id, bet_amount, win_amount, multiplier, status, placed_at, bet_details")
+        .contains("bet_details", { round_uuid, game: "aviator" })
+        .order("placed_at", { ascending: true })
+        .limit(200);
+
+      // Merge and deduplicate by user_id+placed_at
+      const seen = new Set<string>();
+      const allRows: {
         user_id: unknown;
         bet_amount: unknown;
         win_amount: unknown;
         multiplier: unknown;
         status: unknown;
         placed_at: unknown;
-      }) => ({
+      }[] = [];
+      for (const r of [...(rows1 ?? []), ...(rows2 ?? []), ...(rows3 ?? [])]) {
+        const key = `${r.user_id as string}-${r.placed_at as string}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          allRows.push(r);
+        }
+      }
+
+      const bets = allRows.map((b) => ({
         user_id: b.user_id,
         bet_amount: Number(b.bet_amount),
         win_amount: b.win_amount != null ? Number(b.win_amount) : null,
@@ -328,6 +358,33 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({ bets }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── aviator_my_bets — user's historical settled aviator bets ─────────────
+    if (action === "aviator_my_bets") {
+      const user_id = payload.user_id as string | undefined;
+      if (!user_id) {
+        return new Response(
+          JSON.stringify({ bets: [] }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const { data, error } = await supabase
+        .rpc("get_aviator_my_bets", { p_user_id: user_id, p_limit: 50 });
+
+      if (error) {
+        console.error("[process-bet] aviator_my_bets RPC error:", error.message);
+        return new Response(
+          JSON.stringify({ bets: [], error: error.message }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ bets: data ?? [] }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -710,6 +767,7 @@ serve(async (req) => {
         .from("bets")
         .insert({
           user_id,
+          game_id: "dfec9812-9596-43db-8b70-791200770f2b",
           round_id: null,
           bet_amount: betNum,
           win_amount: 0,
@@ -750,7 +808,7 @@ serve(async (req) => {
           }
         }
         await safeInsert(
-          supabase.from("bets").insert({ user_id, round_id: null, bet_amount: Number(bet_amount), win_amount: 0, multiplier: 0, status: "lost", bet_details: { game: "aviator", bustPoint: bustPt, cashOutAt: null }, placed_at: now, resolved_at: now })
+          supabase.from("bets").insert({ user_id, game_id: "dfec9812-9596-43db-8b70-791200770f2b", round_id: null, bet_amount: Number(bet_amount), win_amount: 0, multiplier: 0, status: "lost", bet_details: { game: "aviator", bustPoint: bustPt, cashOutAt: null }, placed_at: now, resolved_at: now })
         );
       }
       return new Response(JSON.stringify({ success: true }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
