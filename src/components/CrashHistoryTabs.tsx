@@ -123,17 +123,45 @@ export default function CrashHistoryTabs() {
     if (tab !== 'mine') return;
     if (!session?.userId) { setMyLoading(false); return; }
     setMyLoading(true);
+
+    // Try RPC first, fallback to direct bets table query
     void supabase
       .rpc('get_crash_my_bets', { p_user_id: session.userId, p_limit: 50 })
       .then(({ data, error }) => {
-        if (error) console.error('[CrashHistoryTabs] my bets error:', error);
-        if (!error && data) {
+        if (!error && data && Array.isArray(data)) {
           setMyBets(
             (data as MyBetRow[]).map((r) => ({
               ...r,
               bet_amount: Number(r.bet_amount),
               win_amount: Number(r.win_amount),
               cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
+            }))
+          );
+          setMyLoading(false);
+          return;
+        }
+        // Fallback: direct query from bets table
+        console.warn('[CrashHistoryTabs] RPC unavailable, using direct query:', error?.message);
+        return supabase
+          .from('bets')
+          .select('id, bet_amount, win_amount, multiplier, status, placed_at, bet_details')
+          .eq('user_id', session.userId)
+          .or('bet_details->>game.eq.crash,game_id.eq.crash')
+          .order('placed_at', { ascending: false })
+          .limit(50);
+      })
+      .then((result) => {
+        if (!result) return; // already handled above
+        const { data: fbData, error: fbError } = result as { data: unknown[] | null; error: { message: string } | null };
+        if (!fbError && fbData) {
+          setMyBets(
+            (fbData as { id: string; bet_amount: unknown; win_amount: unknown; multiplier: unknown; status: string; placed_at: string; bet_details: Record<string, unknown> | null }[]).map((r) => ({
+              id: r.id,
+              bet_amount: Number(r.bet_amount),
+              win_amount: Number(r.win_amount ?? 0),
+              status: r.status,
+              placed_at: r.placed_at,
+              cash_out_at: r.bet_details?.cashOutAt != null ? Number(r.bet_details.cashOutAt) : null,
             }))
           );
         }
@@ -201,10 +229,10 @@ export default function CrashHistoryTabs() {
         </div>
       )}
 
-      {/* Table container — fixed height with scroll */}
+      {/* Table container — auto height, no fixed clipping */}
       <div
         className="rounded-xl border border-borderline-900 bg-slatepanel-900"
-        style={{ height: 224, overflowY: 'auto', overflowX: 'hidden' }}
+        style={{ maxHeight: 300, overflowY: 'auto', overflowX: 'hidden' }}
       >
 
         {/* ── ALL BETS ── */}

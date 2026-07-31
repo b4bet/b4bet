@@ -135,7 +135,8 @@ export default function CrashView({ onBack }: Props) {
         <div className="px-3 pt-2">
           <DualBetPanel />
         </div>
-        <div className="px-3 py-2">
+        {/* History tabs — remove fixed height so content is fully visible when scrolled */}
+        <div className="px-3 py-2 pb-6">
           <CrashHistoryTabs />
         </div>
       </div>

@@ -70,7 +70,7 @@ async function fetchRoundBets(roundUuid: string): Promise<BetRecord[]> {
     const data = await res.json() as {
       bets?: {
         user_id: string;
-        username: string | null;
+        username?: string | null;
         bet_amount: number;
         win_amount: number | null;
         multiplier: number | null;
@@ -131,17 +131,19 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
   const [timeoutNotices, setTimeoutNotices] = useState<TimeoutNotice[]>([]);
 
   const lastFetchedRoundUuid = useRef<string | null>(null);
+  const crashedFetchDone = useRef(false);
+
   useEffect(() => {
     const roundUuid = aviatorLoop.getRoundUuid();
     if (!roundUuid) return;
 
+    // New round started — reset bets display
     if (roundUuid !== lastFetchedRoundUuid.current) {
       lastFetchedRoundUuid.current = roundUuid;
+      crashedFetchDone.current = false;
       setAllBets([]);
       setMyBets([]);
     }
-
-    if (phase === 'crashed') return;
 
     const poll = async () => {
       const bets = await fetchRoundBets(roundUuid);
@@ -150,6 +152,15 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
         setMyBets(bets.filter((b) => b.isPlayer));
       }
     };
+
+    // During crashed phase: do one final fetch to show settled bets, then stop
+    if (phase === 'crashed') {
+      if (!crashedFetchDone.current) {
+        crashedFetchDone.current = true;
+        void poll();
+      }
+      return;
+    }
 
     void poll();
     const interval = setInterval(() => { void poll(); }, 2000);

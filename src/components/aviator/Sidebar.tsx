@@ -56,6 +56,48 @@ function fmtTime(ts: string) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+/** Fetch user's aviator bets — tries RPC first, falls back to direct table query */
+async function fetchMyAviatorBets(userId: string): Promise<MyHistoryBet[]> {
+  // Try RPC first
+  const { data: rpcData, error: rpcError } = await supabase
+    .rpc('get_aviator_my_bets', { p_user_id: userId, p_limit: 50 });
+
+  if (!rpcError && rpcData && Array.isArray(rpcData) && rpcData.length >= 0) {
+    return (rpcData as MyHistoryBet[]).map((r) => ({
+      ...r,
+      bet_amount: Number(r.bet_amount),
+      win_amount: Number(r.win_amount),
+      multiplier: Number(r.multiplier),
+      cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
+    }));
+  }
+
+  // Fallback: query bets table directly
+  console.warn('[AviatorSidebar] RPC unavailable, using direct query fallback:', rpcError?.message);
+  const { data: fallbackData, error: fallbackError } = await supabase
+    .from('bets')
+    .select('id, bet_amount, win_amount, multiplier, status, placed_at, bet_details')
+    .eq('user_id', userId)
+    .or('bet_details->>game.eq.aviator,game_id.eq.dfec9812-9596-43db-8b70-791200770f2b')
+    .order('placed_at', { ascending: false })
+    .limit(50);
+
+  if (fallbackError || !fallbackData) {
+    console.error('[AviatorSidebar] Fallback query failed:', fallbackError?.message);
+    return [];
+  }
+
+  return (fallbackData as { id: string; bet_amount: unknown; win_amount: unknown; multiplier: unknown; status: string; placed_at: string; bet_details: Record<string, unknown> | null }[]).map((r) => ({
+    id: r.id,
+    bet_amount: Number(r.bet_amount),
+    win_amount: Number(r.win_amount ?? 0),
+    multiplier: Number(r.multiplier ?? 0),
+    status: r.status,
+    placed_at: r.placed_at,
+    cash_out_at: r.bet_details?.cashOutAt != null ? Number(r.bet_details.cashOutAt) : null,
+  }));
+}
+
 export function Sidebar({
   phase,
   multiplier,
@@ -85,23 +127,10 @@ export function Sidebar({
     if (tab !== 'mine') return;
     if (!session?.userId) return;
     setMyHistoryLoading(true);
-    void supabase
-      .rpc('get_aviator_my_bets', { p_user_id: session.userId, p_limit: 50 })
-      .then(({ data, error }) => {
-        if (error) console.error('[AviatorSidebar] my bets error:', error);
-        if (!error && data) {
-          setMyHistory(
-            (data as MyHistoryBet[]).map((r) => ({
-              ...r,
-              bet_amount: Number(r.bet_amount),
-              win_amount: Number(r.win_amount),
-              multiplier: Number(r.multiplier),
-              cash_out_at: r.cash_out_at != null ? Number(r.cash_out_at) : null,
-            }))
-          );
-        }
-        setMyHistoryLoading(false);
-      });
+    void fetchMyAviatorBets(session.userId).then((bets) => {
+      setMyHistory(bets);
+      setMyHistoryLoading(false);
+    });
   }, [tab, phase, session?.userId]);
 
   function send() {
