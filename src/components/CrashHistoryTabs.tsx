@@ -190,50 +190,50 @@ export default function CrashHistoryTabs() {
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col gap-2">
-      {/* Tabs */}
-      <div className="grid grid-cols-3 gap-1.5 px-1">
-        {(['all', 'mine', 'top'] as Tab[]).map((k) => (
-          <button
-            key={k}
-            onClick={() => setTab(k)}
-            className={[
-              'py-1.5 rounded-lg text-xs font-bold transition-all border',
-              tab === k
-                ? 'bg-slatepanel-700 border-slate-500 text-white'
-                : 'bg-slatepanel-800 border-borderline-900 text-slate-400',
-            ].join(' ')}
-          >
-            {k === 'all' ? 'All Bets' : k === 'mine' ? 'My Bets' : 'Top'}
-          </button>
-        ))}
-      </div>
+    <div className="rounded-xl border border-borderline-900 bg-slatepanel-900 flex flex-col" style={{ maxHeight: 340 }}>
 
-      {/* Range chips — Top only */}
-      {tab === 'top' && (
-        <div className="flex gap-1.5 px-1 flex-wrap">
-          {(['day', 'week', 'month', 'year'] as Range[]).map((r) => (
+      {/* Tab bar — sticky inside this container so it never scrolls away */}
+      <div className="flex-shrink-0 bg-slatepanel-900 rounded-t-xl px-2 pt-2 pb-1.5 border-b border-borderline-900">
+        <div className="grid grid-cols-3 gap-1.5">
+          {(['all', 'mine', 'top'] as Tab[]).map((k) => (
             <button
-              key={r}
-              onClick={() => setRange(r)}
+              key={k}
+              onClick={() => setTab(k)}
               className={[
-                'px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide transition-all',
-                range === r
-                  ? 'bg-neon-500/20 border border-neon-400/50 text-neon-300'
-                  : 'bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white',
+                'py-1.5 rounded-lg text-xs font-bold transition-all border',
+                tab === k
+                  ? 'bg-slatepanel-700 border-slate-500 text-white'
+                  : 'bg-slatepanel-800 border-borderline-900 text-slate-400',
               ].join(' ')}
             >
-              {r}
+              {k === 'all' ? 'All Bets' : k === 'mine' ? 'My Bets' : 'Top'}
             </button>
           ))}
         </div>
-      )}
 
-      {/* Table container — auto height, no fixed clipping */}
-      <div
-        className="rounded-xl border border-borderline-900 bg-slatepanel-900"
-        style={{ maxHeight: 300, overflowY: 'auto', overflowX: 'hidden' }}
-      >
+        {/* Range chips — Top only */}
+        {tab === 'top' && (
+          <div className="flex gap-1.5 mt-1.5 flex-wrap">
+            {(['day', 'week', 'month', 'year'] as Range[]).map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={[
+                  'px-3 py-1 rounded-md text-[11px] font-bold uppercase tracking-wide transition-all',
+                  range === r
+                    ? 'bg-neon-500/20 border border-neon-400/50 text-neon-300'
+                    : 'bg-slatepanel-800 border border-borderline-900 text-slate-400 hover:text-white',
+                ].join(' ')}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Scrollable table area */}
+      <div className="overflow-y-auto overflow-x-hidden flex-1" style={{ minHeight: 0 }}>
 
         {/* ── ALL BETS ── */}
         {tab === 'all' && (
