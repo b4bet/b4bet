@@ -31,7 +31,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const [destination, setDestination] = useState('');
   const [details, setDetails] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
   const [popup, setPopup] = useState<PopupState | null>(null);
   const [popupVisible, setPopupVisible] = useState(false);
   const popupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -65,7 +64,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       setDestination('');
       setDetails('');
       setSubmitting(false);
-      setSubmitted(false);
     }
   }, [open]);
 
@@ -109,9 +107,20 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const handleClose = () => onClose();
   const handleBackToMethodList = () => { setSelected(null); setSelectedCrypto(null); };
 
+  const resetForm = () => {
+    setAmount('');
+    setUtr('');
+    setDestination('');
+    setDetails('');
+    setSelectedCrypto(null);
+    setSubmitting(false);
+    // Go back to method list
+    setSelected(null);
+  };
+
   const handleSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
     if (e && 'preventDefault' in e) e.preventDefault();
-    if (!selected || submitting || submitted) return;
+    if (!selected || submitting) return;
 
     const amt = Number(amount);
     const limits = getEffectiveLimits();
@@ -182,14 +191,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
         return;
       }
 
-      // Show success popup, then close after 2.5s
-      setSubmitted(true);
+      // Show success popup and go back to method list
       showPopup(
         flow === 'deposit' ? 'Deposit Submitted!' : 'Withdrawal Requested!',
         flow === 'deposit' ? 'Request received. Processing soon.' : 'Your request has been submitted.',
         'success',
       );
-      setTimeout(() => handleClose(), 2600);
+      resetForm();
 
     } catch (err) {
       console.error('[PaymentMethodFlow] submit error:', err);
@@ -478,7 +486,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
           <button
             type="button"
-            disabled={submitting || submitted}
+            disabled={submitting}
             onClick={(e) => { void handleSubmit(e); }}
             className="w-full py-4 flex items-center justify-center gap-2 text-base font-semibold rounded-xl transition-all bg-green-500 hover:bg-green-600 disabled:opacity-60 disabled:cursor-not-allowed text-white shadow-lg shadow-green-500/30"
           >
