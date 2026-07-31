@@ -640,11 +640,9 @@ class Store {
     const meta = this.currentUserHistoryMeta();
     this.pushAdminHistory({ userId: meta.userId, username: meta.username, game: 'crash', amount: rec.amount, win: rec.win,
       result: rec.cashOutAt ? `${rec.cashOutAt.toFixed(2)}x cashout` : `${rec.bustPoint.toFixed(2)}x bust` });
-    supabase.from('bets').insert({
-      user_id: meta.userId, bet_amount: rec.amount, win_amount: rec.win,
-      multiplier: rec.cashOutAt || rec.bustPoint, status: rec.win > 0 ? 'won' : 'lost',
-      bet_details: { cashOutAt: rec.cashOutAt, bustPoint: rec.bustPoint },
-    }).then(() => {}).catch(() => {});
+    // NOTE: Do NOT insert into bets table here.
+    // crashEngine.ts already handles the bets DB write via insertPendingBet + settlePendingBet.
+    // Inserting here would create duplicate rows in the bets table.
   }
 
   recordMinesRound(rec: Omit<MinesRoundRecord, 'id' | 'ts'>) {
