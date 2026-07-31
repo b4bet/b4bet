@@ -1,5 +1,8 @@
 /**
  * SunVsMoonView — server-side outcome version.
+ * FIX: use get_sunvsmoon_my_bets RPC (SECURITY DEFINER) instead of direct
+ *      table query — the direct query was failing with RLS when JWT was not
+ *      yet loaded in the Supabase client, returning 0 rows silently.
  * FIX: filter My Bets by game:'sunvsmoon' to exclude duplicate legacy rows.
  * FIX: call sunMoonGetResult at round start (processing phase) to lock in
  *      the admin MANUAL override BEFORE settle, so it cannot be bypassed.
@@ -55,9 +58,8 @@ function loadSunMoonBet(): SunMoonSavedBet | null {
   } catch { return null; }
 }
 
-interface SupabaseBetRow {
+interface RpcBetRow {
   id: string;
-  round_id: string | null;
   bet_amount: number;
   win_amount: number;
   status: string;
@@ -84,7 +86,7 @@ function isBetChoice(v: unknown): v is BetChoice {
   return v === 'sun' || v === 'moon' || v === 'tie';
 }
 
-function rowToMyBet(row: SupabaseBetRow): MyBetEntry | null {
+function rowToMyBet(row: RpcBetRow): MyBetEntry | null {
   const d = row.bet_details;
   if (!d) return null;
   // Only process rows explicitly tagged as sunvsmoon (excludes legacy duplicates)
@@ -102,15 +104,32 @@ function rowToMyBet(row: SupabaseBetRow): MyBetEntry | null {
   };
 }
 
+// FIX: Use SECURITY DEFINER RPC instead of direct table query.
+// Direct `.from('bets').select(...)` was blocked by RLS when the Supabase
+// client's JWT had not yet been loaded, returning 0 rows silently.
+// The RPC bypasses RLS and uses p_user_id for the filter instead.
 async function fetchMyBetsFromSupabase(userId: string): Promise<MyBetEntry[]> {
-  const { data, error } = await supabase
-    .from('bets')
-    .select('id, round_id, bet_amount, win_amount, status, placed_at, bet_details')
-    .eq('user_id', userId)
-    .order('placed_at', { ascending: false })
-    .limit(40);  // fetch more since we filter duplicates client-side
-  if (error || !data) return [];
-  return (data as SupabaseBetRow[])
+  const { data, error } = await supabase.rpc('get_sunvsmoon_my_bets', {
+    p_user_id: userId,
+    p_limit: 40,
+  });
+  if (error) {
+    console.error('[SunVsMoon] fetchMyBets RPC error:', error.message);
+    // Fallback to direct query if RPC fails for some reason
+    const { data: fbData, error: fbError } = await supabase
+      .from('bets')
+      .select('id, round_id, bet_amount, win_amount, status, placed_at, bet_details')
+      .eq('user_id', userId)
+      .order('placed_at', { ascending: false })
+      .limit(40);
+    if (fbError || !fbData) return [];
+    return (fbData as RpcBetRow[])
+      .map(rowToMyBet)
+      .filter((r): r is MyBetEntry => r !== null)
+      .slice(0, 20);
+  }
+  if (!data) return [];
+  return (data as RpcBetRow[])
     .map(rowToMyBet)
     .filter((r): r is MyBetEntry => r !== null)
     .slice(0, 20);
@@ -266,6 +285,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
   useEffect(() => { betAmountRef.current = betAmount; }, [betAmount]);
   useEffect(() => { betPlacedRef.current = betPlaced; }, [betPlaced]);
 
+  // FIX: Use RPC with SECURITY DEFINER — bypasses RLS JWT timing issues
   useEffect(() => {
     const session = auth.getSession();
     if (!session?.userId) return;
@@ -356,6 +376,7 @@ export default function SunVsMoonView({ onBack }: { onBack?: () => void }) {
               };
               store.recordSunMoonRound(record);
 
+              // Refresh my bets after settle completes
               const updated = await fetchMyBetsFromSupabase(session.userId);
               if (updated.length > 0) setMyBets(updated);
             })
