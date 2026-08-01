@@ -1,5 +1,5 @@
 // crashEngine.ts — SERVER-SYNCED shared crash round.
-// Client polls crash_current_round every 300ms.
+// Client polls crash_current_round every 150ms.
 // On startup, loads last 20 rounds from server for history bar.
 // IMPORTANT: getState() and getBets() MUST exist — hooks.ts calls them as initial values.
 
@@ -67,7 +67,7 @@ interface EngineState {
   win: number | null;
   serverElapsedAtConnect: number;
   connectTime: number;
-  /** Server-known crash point used to cap animation overshoot */
+  /** Server-known crash point used to trigger immediate local crash */
   serverCrashPoint: number | null;
   /** Last server-reported elapsed_ms during flying — used to prevent overshoot */
   lastServerElapsedMs: number;
@@ -75,11 +75,18 @@ interface EngineState {
   countdownSetAt: number;
   /** Countdown value at the time it was last set by poll */
   countdownAtSet: number;
+  /** When the local engine pre-transitioned to flying (countdown hit 0) */
+  localFlyingStart: number | null;
 }
 
-const POLL_MS = 300;
-/** Maximum ms the local animation is allowed to run ahead of the last server-reported elapsed */
-const MAX_AHEAD_MS = 400;
+// Faster polling for snappier crash/phase detection
+const POLL_MS = 150;
+/**
+ * Maximum ms the local animation is allowed to run ahead of the last
+ * server-reported elapsed. Increased to 1200ms to absorb high-latency
+ * poll responses without freezing the animation.
+ */
+const MAX_AHEAD_MS = 1200;
 const SESSION_ROUND_KEY = 'b4bet.crash.lastRoundId';
 const SESSION_PHASE_KEY = 'b4bet.crash.lastPhase';
 
@@ -203,6 +210,7 @@ class CrashEngine {
     lastServerElapsedMs: 0,
     countdownSetAt: Date.now(),
     countdownAtSet: 6,
+    localFlyingStart: null,
   };
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -254,6 +262,7 @@ class CrashEngine {
         this.state.roundId = r.round_uuid ?? '';
         this.state.roundSeq += 1;
         this.state.lastServerElapsedMs = 0;
+        this.state.localFlyingStart = null;
         this.didPlayStart = false;
         this.didPlayCrash = false;
         this.broadcastBets();
@@ -264,6 +273,21 @@ class CrashEngine {
       try { sessionStorage.setItem(SESSION_PHASE_KEY, r.phase); } catch { /* ignore */ }
 
       if (r.phase === 'waiting') {
+        // If the local engine already pre-transitioned to flying (countdown hit 0),
+        // ignore stale waiting responses to avoid bouncing backwards.
+        if (this.state.phase === 'flying' || this.state.phase === 'busted') {
+          // Only revert to countdown if server insists we're still well within the wait window
+          const remaining = Math.max(0, (6000 - r.elapsed_ms) / 1000);
+          if (remaining > 0.3) {
+            // Enough countdown left — revert the pre-transition
+            this.state.phase = 'countdown';
+            this.state.localFlyingStart = null;
+          } else {
+            // Under 300ms left — keep flying, server is about to confirm anyway
+            return;
+          }
+        }
+
         const waitTotal = 6000;
         const remaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
         this.state.phase = 'countdown';
@@ -273,6 +297,7 @@ class CrashEngine {
         this.state.multiplier = 1.0;
         this.state.serverCrashPoint = null;
         this.state.lastServerElapsedMs = 0;
+        this.state.localFlyingStart = null;
         if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
           if (this.state.history[0] !== bp) {
@@ -290,11 +315,13 @@ class CrashEngine {
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.bustPoint = 0;
           this.state.lastServerElapsedMs = r.elapsed_ms;
-          if (!this.didPlayStart && !this.lastKnownRoundId) {
+          this.state.localFlyingStart = null;
+          if (!this.didPlayStart) {
             playStartSound();
             this.didPlayStart = true;
           }
         } else {
+          // Sync startedAt from server clock — keeps local multiplier aligned
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.lastServerElapsedMs = r.elapsed_ms;
         }
@@ -314,6 +341,7 @@ class CrashEngine {
           this.state.multiplier = this.state.bustPoint;
           this.state.serverCrashPoint = null;
           this.state.lastServerElapsedMs = 0;
+          this.state.localFlyingStart = null;
           if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
           const bp = this.state.bustPoint;
           if (this.state.history[0] !== bp) {
@@ -347,8 +375,23 @@ class CrashEngine {
 
       let m = multiplierFromElapsed(cappedElapsed);
 
+      // If server has revealed the crash point and we've reached it,
+      // immediately transition to busted without waiting for the next poll.
       if (this.state.serverCrashPoint != null && m >= this.state.serverCrashPoint) {
-        m = this.state.serverCrashPoint;
+        if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
+        this.state.phase = 'busted';
+        this.state.bustPoint = this.state.serverCrashPoint;
+        this.state.multiplier = this.state.serverCrashPoint;
+        const bp = this.state.bustPoint;
+        if (this.state.history[0] !== bp) {
+          this.state.history = [bp, ...this.state.history].slice(0, 20);
+          this.publishHistory();
+        }
+        this.settleBustedBets();
+        this.state.serverCrashPoint = null;
+        this.publish();
+        this.rafId = requestAnimationFrame(() => this.animate());
+        return;
       }
 
       playTickSound(m);
@@ -357,7 +400,26 @@ class CrashEngine {
       this.publish();
     } else if (this.state.phase === 'countdown') {
       const elapsed = (Date.now() - this.state.countdownSetAt) / 1000;
-      this.state.countdown = Math.max(0, this.state.countdownAtSet - elapsed);
+      const remaining = Math.max(0, this.state.countdownAtSet - elapsed);
+      this.state.countdown = remaining;
+
+      // When the local countdown hits exactly 0, pre-transition to flying
+      // immediately rather than freezing for up to POLL_MS while waiting for
+      // the server to confirm the flying phase. The next poll will correct
+      // startedAt precisely.
+      if (remaining === 0 && this.state.localFlyingStart === null) {
+        const now = Date.now();
+        this.state.localFlyingStart = now;
+        this.state.phase = 'flying';
+        this.state.startedAt = now;
+        this.state.lastServerElapsedMs = 0;
+        this.state.multiplier = 1.0;
+        if (!this.didPlayStart) {
+          playStartSound();
+          this.didPlayStart = true;
+        }
+      }
+
       this.publish();
     }
     this.rafId = requestAnimationFrame(() => this.animate());
