@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { LogIn, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '../integrations/supabase/client';
 import { cms } from '../lib/cms';
-import { loginStaff } from '../lib/cms_staff_patch';
 import type { StaffRole, PermissionKey } from '../lib/cms';
 
 async function sha256Hex(plain: string): Promise<string> {
@@ -114,9 +113,8 @@ export default function AdminLoginPage() {
         cms.staff = cms.staff.map((s) => s.id === staffRow!.id ? { ...s, ...staffAccount } : s);
       }
 
-      // Use patch helper — sets session, persists to localStorage, emits bus event
-      loginStaff(staffRow.id);
-
+      // loginStaff emits bus event so React updates instantly (no page refresh needed)
+      cms.loginStaff(staffRow.id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Login error: ${msg}`);
@@ -126,16 +124,16 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <div className="min-h-screen bg-midnight-900 flex items-center justify-center p-4">
+    <div className="min-h-screen flex items-center justify-center bg-[#020617] px-4">
       <div className="w-full max-w-sm space-y-6">
-        <div className="text-center space-y-1">
-          <h1 className="text-2xl font-display font-extrabold text-white">Admin Panel</h1>
-          <p className="text-slate-400 text-sm">Sign in to manage your platform</p>
+        <div className="text-center">
+          <h1 className="text-3xl font-bold text-white">Admin Panel</h1>
+          <p className="mt-1 text-slate-400 text-sm">Sign in to manage your platform</p>
         </div>
 
         <form onSubmit={(e) => { void handleLogin(e); }} className="panel p-6 space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Email</label>
+          <div>
+            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1">Email</label>
             <input
               type="email"
               value={email}
@@ -146,14 +144,14 @@ export default function AdminLoginPage() {
             />
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Password</label>
+          <div>
+            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-widest mb-1">Password</label>
             <div className="relative">
               <input
                 type={showPwd ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7"
+                placeholder="Enter password"
                 className="input w-full pr-10"
                 disabled={loading}
               />
@@ -162,15 +160,13 @@ export default function AdminLoginPage() {
                 onClick={() => setShowPwd((o) => !o)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
               >
-                {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
           </div>
 
           {error && (
-            <div className="bg-coral-500/10 border border-coral-500/30 rounded-lg px-3 py-2 text-coral-400 text-sm">
-              {error}
-            </div>
+            <p className="text-red-400 text-sm">{error}</p>
           )}
 
           <button
@@ -179,14 +175,14 @@ export default function AdminLoginPage() {
             className="btn-primary w-full flex items-center justify-center gap-2"
           >
             {loading ? (
-              <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Signing in...</>
+              <>Signing in...</>
             ) : (
-              <><LogIn className="w-4 h-4" /> Sign In</>
+              <><LogIn size={16} /> Sign In</>
             )}
           </button>
         </form>
 
-        <p className="text-center text-xs text-slate-600">B4Bet &copy; {new Date().getFullYear()}</p>
+        <p className="text-center text-slate-600 text-xs">B4Bet &copy; {new Date().getFullYear()}</p>
       </div>
     </div>
   );
