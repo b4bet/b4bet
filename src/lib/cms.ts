@@ -98,56 +98,8 @@ const defaultUpiQr = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns
 
 const defaultEmails: EmailTemplates = {
   welcome: '<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:24px;border-radius:12px"><h1 style="margin:0 0 16px;color:#00ff88;font-size:28px">Welcome to B4BeT, {{username}}!</h1><p style="margin:0 0 12px;font-size:16px">Your account is now live and ready to play.</p><p style="margin:0 0 12px;font-size:14px">Enjoy our exclusive games, live betting, and amazing rewards.</p><p style="margin:0;font-size:14px;color:#a0aec0">Start playing now and claim your welcome bonus on your first deposit!</p></div>',
-  depositSuccess: `<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:0;border-radius:12px;overflow:hidden;max-width:520px">
-  <div style="background:linear-gradient(135deg,#00c97a,#00ff88);padding:28px 24px;text-align:center">
-    <div style="font-size:48px;margin-bottom:8px">✅</div>
-    <h1 style="margin:0;font-size:26px;font-weight:800;color:#0a0f1c;letter-spacing:-0.5px">Deposit Successful!</h1>
-    <p style="margin:6px 0 0;font-size:14px;color:#065f46">Your payment has been received and credited.</p>
-  </div>
-  <div style="padding:24px">
-    <p style="margin:0 0 16px;font-size:15px">Hi <strong>{{username}}</strong>,</p>
-    <p style="margin:0 0 16px;font-size:15px">Your deposit of <strong style="color:#00ff88;font-size:18px">{{amount}}</strong> has been <strong>successfully</strong> added to your B4BeT wallet.</p>
-    <div style="background:#151d35;border-radius:10px;padding:16px;margin:0 0 16px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-        <span style="color:#a0aec0;font-size:13px">Amount Deposited</span>
-        <span style="color:#00ff88;font-weight:700">{{amount}}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-        <span style="color:#a0aec0;font-size:13px">New Balance</span>
-        <span style="color:#fff;font-weight:700">{{balance}}</span>
-      </div>
-      <div style="border-top:1px solid #2d3748;padding-top:8px;margin-top:4px">
-        <span style="color:#718096;font-size:12px">Transaction ID: {{txn_id}}</span>
-      </div>
-    </div>
-    <p style="margin:0;font-size:13px;color:#718096;text-align:center">Thank you for choosing B4BeT. Good luck! 🎰</p>
-  </div>
-</div>`,
-  withdrawalStatus: `<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:0;border-radius:12px;overflow:hidden;max-width:520px">
-  <div style="background:linear-gradient(135deg,#00c97a,#00ff88);padding:28px 24px;text-align:center">
-    <div style="font-size:48px;margin-bottom:8px">💸</div>
-    <h1 style="margin:0;font-size:26px;font-weight:800;color:#0a0f1c;letter-spacing:-0.5px">Withdrawal Successful!</h1>
-    <p style="margin:6px 0 0;font-size:14px;color:#065f46">Your payout has been processed successfully.</p>
-  </div>
-  <div style="padding:24px">
-    <p style="margin:0 0 16px;font-size:15px">Hi <strong>{{username}}</strong>,</p>
-    <p style="margin:0 0 16px;font-size:15px">Your withdrawal of <strong style="color:#00ff88;font-size:18px">{{amount}}</strong> has been <strong>successfully</strong> processed and sent to your account.</p>
-    <div style="background:#151d35;border-radius:10px;padding:16px;margin:0 0 16px">
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-        <span style="color:#a0aec0;font-size:13px">Amount Withdrawn</span>
-        <span style="color:#00ff88;font-weight:700">{{amount}}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-        <span style="color:#a0aec0;font-size:13px">Status</span>
-        <span style="color:#00ff88;font-weight:700">✓ Successful</span>
-      </div>
-      <div style="border-top:1px solid #2d3748;padding-top:8px;margin-top:4px">
-        <span style="color:#718096;font-size:12px">Transaction ID: {{txn_id}}</span>
-      </div>
-    </div>
-    <p style="margin:0;font-size:13px;color:#718096;text-align:center">Funds typically arrive within 1–24 hours depending on your bank.</p>
-  </div>
-</div>`,
+  depositSuccess: '<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:24px;border-radius:12px"><h1 style="color:#00ff88">Deposit Successful!</h1><p>Hi {{username}}, your deposit of {{amount}} has been credited.</p><p>New balance: {{balance}}</p><p style="color:#718096;font-size:12px">Transaction ID: {{txn_id}}</p></div>',
+  withdrawalStatus: '<div style="font-family:Inter,sans-serif;background:#0a0f1c;color:#fff;padding:24px;border-radius:12px"><h1 style="color:#00ff88">Withdrawal {{status}}</h1><p>Hi {{username}}, your withdrawal of {{amount}} is now {{status}}.</p></div>',
   forgotPassword: '<div style="font-family:Inter,sans-serif;padding:24px;background:#0a0f1c;color:#fff;border-radius:12px"><h2 style="color:#00ff88">Password Reset Request</h2><p>Hi {{username}},</p><p>Aapne password reset request ki hai. Neeche diye link par click karein:</p><p><a href="{{reset_link}}" style="background:#00ff88;color:#000;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;margin:8px 0">Reset Password</a></p><p style="color:#a0aec0;font-size:12px">Yeh link {{expiry}} me expire ho jayega.</p><p style="color:#a0aec0;font-size:12px">Agar aapne yeh request nahi ki toh ignore karein. Request IP: {{ip_address}}</p></div>',
 };
 
@@ -253,7 +205,6 @@ function rpc<T>(call: PromiseLike<T>): Promise<T> {
 }
 
 // Statuses from which a withdrawal balance was already deducted (on submit).
-// Refund must be issued when moving FROM one of these TO rejected/cancelled.
 const DEDUCTED_STATUSES = new Set<WithdrawalRequest['status']>(['pending', 'processing']);
 
 const ADMIN_SESSION_KEY = 'b4bet.admin.session';
@@ -329,7 +280,6 @@ class Cms {
     supabase.channel('cms_payment_methods').on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, () => { void this.syncPaymentMethodsFromSupabase(); }).subscribe();
     supabase.channel('cms_banners').on('postgres_changes', { event: '*', schema: 'public', table: 'banners' }, () => { void this.syncBannersFromSupabase(); }).subscribe();
     supabase.channel('cms_settings').on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => { void this.syncSettingsFromSupabase(); }).subscribe();
-    supabase.channel('cms_referrals').on('postgres_changes', { event: '*', schema: 'public', table: 'referrals' }, () => { void this.syncTransactionsFromSupabase(); }).subscribe();
   }
 
   async syncAllFromSupabase() {
@@ -582,22 +532,16 @@ class Cms {
   }
 
   submitWithdrawal(user: string, amount: number, destination: string, details?: string, userId?: string) {
-    // FIX: Deduct balance instantly from client state so user sees updated balance immediately.
-    // Uses debitLocalOnly() to avoid a redundant Supabase write — the balance is already written
-    // below via direct profiles update, and Realtime will sync it back to the client.
     const debited = store.debitLocalOnly(amount);
     if (!debited) {
       this.toast({ title: 'Insufficient balance', body: `Available: ${store.currency}${store.balance.toFixed(2)}`, kind: 'alert' });
       return;
     }
-
-    // Persist the deducted balance to Supabase so it survives a page reload.
     const newBalance = store.balance;
     const session = auth.getSession();
     if (session?.userId) {
       supabase.from('profiles').update({ balance: newBalance }).eq('id', session.userId).then(() => {}).catch(() => {});
     }
-
     const meta = { username: user, destination, ...(details ? { details } : {}) };
     supabase.from('transactions').insert({
       user_id: userId || null, type: 'withdrawal', amount,
@@ -623,10 +567,7 @@ class Cms {
       const { error: creditErr } = await supabase.rpc('admin_approve_deposit_credit', { p_txn_id: id });
       if (creditErr) { this.toast({ title: 'Balance credit failed', body: creditErr.message, kind: 'alert' }); }
 
-      // Process referral reward via Supabase SECURITY DEFINER function.
-      // This checks if the depositing user was referred, validates minDeposit,
-      // and credits the referrer: flat rewardAmount for first tierThreshold referrals,
-      // then tierPercent% of deposit amount after that. All config from admin settings.
+      // Process referral reward — SECURITY DEFINER function reads config from admin settings
       if (before?.userId) {
         const { data: rewardResult, error: rewardErr } = await supabase.rpc(
           'process_referral_reward',
@@ -659,22 +600,14 @@ class Cms {
       && DEDUCTED_STATUSES.has(before.status);
 
     if (isRefundable && before) {
-      // REFUND: credit the withdrawal amount back to the user's wallet in Supabase.
-      // We fetch the user's current balance from the DB and add the refund amount,
-      // ensuring the correct user gets the refund (not the admin's local session).
       if (before.userId) {
         try {
           const { data: userProfile } = await supabase
-            .from('profiles')
-            .select('balance')
-            .eq('id', before.userId)
-            .single();
+            .from('profiles').select('balance').eq('id', before.userId).single();
           if (userProfile) {
             const currentBalance = Number((userProfile as { balance: number }).balance) || 0;
             const refundedBalance = Math.round((currentBalance + before.amount) * 100) / 100;
-            await supabase.from('profiles')
-              .update({ balance: refundedBalance })
-              .eq('id', before.userId);
+            await supabase.from('profiles').update({ balance: refundedBalance }).eq('id', before.userId);
           } else {
             if (before.user && before.user !== 'Unknown') {
               await supabase.rpc('admin_credit_balance', { p_username: before.user, p_amount: before.amount }).catch(() => {});
@@ -690,7 +623,6 @@ class Cms {
         await supabase.rpc('admin_credit_balance', { p_username: before.user, p_amount: before.amount }).catch(() => {});
       }
 
-      // Also update local state if the cancelled user is the currently logged-in user
       const currentSession = auth.getSession();
       if (currentSession?.userId && currentSession.userId === before.userId) {
         store.creditLocalOnly(before.amount);
