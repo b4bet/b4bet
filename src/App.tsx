@@ -221,9 +221,9 @@ export default function App() {
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
-        {route === 'deposit' && <DepositView />}
+        {route === 'deposit' && <DepositView onNavigate={navigate} />}
         {route === 'wallet' && <WalletView onNavigate={navigate} />}
-        {route === 'withdraw' && <WithdrawView />}
+        {route === 'withdraw' && <WithdrawView onNavigate={navigate} />}
         {route === 'profile' && (
           <ProfileView
             onNavigate={navigate}
