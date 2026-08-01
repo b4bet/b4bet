@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Gift, History } from 'lucide-react';
+import { Gift, History, RefreshCw } from 'lucide-react';
 import { cms } from '../../lib/cms';
 import { useReferralConfig, useReferrals } from '../../lib/cmsHooks';
 import { supabase } from '../../integrations/supabase/client';
@@ -51,7 +51,7 @@ function ReferConfig() {
           <input
             type="number"
             value={cfg.rewardAmount}
-            onChange={(e) => cms.setReferralConfig({ rewardAmount: Number(e.target.value) || 0 })}
+            onChange={(e) => cms.updateReferralConfig({ rewardAmount: Number(e.target.value) || 0 })}
             className="input tabular w-full mt-1"
           />
         </div>
@@ -60,7 +60,7 @@ function ReferConfig() {
           <input
             type="number"
             value={cfg.minDeposit}
-            onChange={(e) => cms.setReferralConfig({ minDeposit: Number(e.target.value) || 0 })}
+            onChange={(e) => cms.updateReferralConfig({ minDeposit: Number(e.target.value) || 0 })}
             className="input tabular w-full mt-1"
           />
         </div>
@@ -69,7 +69,7 @@ function ReferConfig() {
           <input
             type="number"
             value={cfg.tierThreshold}
-            onChange={(e) => cms.setReferralConfig({ tierThreshold: Number(e.target.value) || 0 })}
+            onChange={(e) => cms.updateReferralConfig({ tierThreshold: Number(e.target.value) || 0 })}
             className="input tabular w-full mt-1"
           />
         </div>
@@ -78,7 +78,7 @@ function ReferConfig() {
           <input
             type="number"
             value={cfg.tierPercent}
-            onChange={(e) => cms.setReferralConfig({ tierPercent: Number(e.target.value) || 0 })}
+            onChange={(e) => cms.updateReferralConfig({ tierPercent: Number(e.target.value) || 0 })}
             className="input tabular w-full mt-1"
           />
         </div>
@@ -98,6 +98,8 @@ interface AdminReferral {
   created_at: string;
   referrer_username?: string;
   referred_username?: string;
+  referrer_account_id?: string; // 6-digit
+  referred_account_id?: string; // 6-digit
 }
 
 function ReferralHistoryAdmin() {
@@ -106,7 +108,7 @@ function ReferralHistoryAdmin() {
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
 
-  useEffect(() => {
+  const fetchReferrals = () => {
     setLoading(true);
     // Use SECURITY DEFINER RPC — bypasses RLS so admin can see all referrals
     supabase
@@ -119,19 +121,23 @@ function ReferralHistoryAdmin() {
           setLiveRefs(
             (data as AdminReferral[]).map((r) => ({
               id: r.id,
-              referrer_id: r.referrer_id,
-              referred_id: r.referred_id,
+              referrer_id: String(r.referrer_id),
+              referred_id: String(r.referred_id),
               bonus_amount: Number(r.bonus_amount),
               status: r.status,
               created_at: r.created_at,
               referrer_username: r.referrer_username ?? undefined,
               referred_username: r.referred_username ?? undefined,
+              referrer_account_id: r.referrer_account_id ?? undefined,
+              referred_account_id: r.referred_account_id ?? undefined,
             })),
           );
         }
         setLoading(false);
       });
-  }, []);
+  };
+
+  useEffect(() => { fetchReferrals(); }, []);
 
   // Merge in-memory and live, deduplicate by id
   const combined = [
@@ -145,6 +151,8 @@ function ReferralHistoryAdmin() {
       created_at: new Date(r.createdAt).toISOString(),
       referrer_username: undefined as string | undefined,
       referred_username: r.referredUsername,
+      referrer_account_id: undefined as string | undefined,
+      referred_account_id: undefined as string | undefined,
     })),
   ].filter((v, i, arr) => arr.findIndex((x) => x.id === v.id) === i);
 
@@ -152,6 +160,8 @@ function ReferralHistoryAdmin() {
     ? combined.filter(
         (r) =>
           r.referrer_id.includes(search) ||
+          (r.referrer_account_id || '').includes(search) ||
+          (r.referred_account_id || '').includes(search) ||
           (r.referrer_username || '').toLowerCase().includes(search.toLowerCase()) ||
           (r.referred_username || '').toLowerCase().includes(search.toLowerCase()),
       )
@@ -159,18 +169,35 @@ function ReferralHistoryAdmin() {
 
   return (
     <div className="space-y-3">
-      <input
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Search by Referrer ID or Username..."
-        className="input text-sm"
-      />
-      <div className="panel overflow-hidden">
-        <table className="w-full text-xs">
+      <div className="flex items-center gap-2">
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by username or 6-digit ID..."
+          className="input text-sm flex-1"
+        />
+        <button
+          onClick={fetchReferrals}
+          disabled={loading}
+          className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/40 transition-colors flex-shrink-0 disabled:opacity-50"
+          title="Refresh"
+        >
+          <RefreshCw className={`w-4 h-4 text-slate-400 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+      </div>
+
+      <div className="text-xs text-slate-500 px-1">
+        {filtered.length} referral{filtered.length !== 1 ? 's' : ''} found
+      </div>
+
+      <div className="panel overflow-x-auto">
+        <table className="w-full text-xs min-w-[640px]">
           <thead>
             <tr className="border-b border-borderline-900 text-slate-500">
               <th className="text-left px-3 py-2.5">Referrer</th>
+              <th className="text-left px-3 py-2.5">Referrer ID</th>
               <th className="text-left px-3 py-2.5">Referred User</th>
+              <th className="text-left px-3 py-2.5">Referred ID</th>
               <th className="text-left px-3 py-2.5">Date</th>
               <th className="text-left px-3 py-2.5">Status</th>
               <th className="text-left px-3 py-2.5">Reward</th>
@@ -179,20 +206,40 @@ function ReferralHistoryAdmin() {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="text-center py-8 text-slate-500">Loading from Supabase…</td>
+                <td colSpan={7} className="text-center py-8 text-slate-500">Loading from Supabase…</td>
               </tr>
             ) : filtered.length === 0 ? (
               <tr>
-                <td colSpan={5} className="text-center py-8 text-slate-500">No referral history found</td>
+                <td colSpan={7} className="text-center py-8 text-slate-500">No referral history found</td>
               </tr>
             ) : (
               filtered.map((r) => (
                 <tr key={r.id} className="border-t border-borderline-900 hover:bg-slatepanel-800">
-                  <td className="px-3 py-2.5 text-slate-300">{r.referrer_username || r.referrer_id.slice(0, 8)}</td>
-                  <td className="px-3 py-2.5">{r.referred_username || r.referred_id.slice(0, 8)}</td>
-                  <td className="px-3 py-2.5 text-slate-500">
-                    {new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                  {/* Referrer username */}
+                  <td className="px-3 py-2.5 text-white font-medium">
+                    {r.referrer_username || <span className="text-slate-500 italic">Unknown</span>}
                   </td>
+                  {/* Referrer 6-digit account ID */}
+                  <td className="px-3 py-2.5">
+                    <span className="font-mono text-neon-300 text-[11px] bg-neon-400/10 px-1.5 py-0.5 rounded">
+                      {r.referrer_account_id || r.referrer_id.slice(0, 8)}
+                    </span>
+                  </td>
+                  {/* Referred username */}
+                  <td className="px-3 py-2.5 text-slate-300">
+                    {r.referred_username || <span className="text-slate-500 italic">Unknown</span>}
+                  </td>
+                  {/* Referred 6-digit account ID */}
+                  <td className="px-3 py-2.5">
+                    <span className="font-mono text-amberx-300 text-[11px] bg-amberx-400/10 px-1.5 py-0.5 rounded">
+                      {r.referred_account_id || r.referred_id.slice(0, 8)}
+                    </span>
+                  </td>
+                  {/* Date */}
+                  <td className="px-3 py-2.5 text-slate-500">
+                    {new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: '2-digit' })}
+                  </td>
+                  {/* Status */}
                   <td className="px-3 py-2.5">
                     <span
                       className={`chip ${
@@ -204,7 +251,10 @@ function ReferralHistoryAdmin() {
                       {r.status === 'credited' ? 'Rewarded' : 'Pending'}
                     </span>
                   </td>
-                  <td className="px-3 py-2.5">{r.bonus_amount > 0 ? `₹${r.bonus_amount}` : '—'}</td>
+                  {/* Reward */}
+                  <td className="px-3 py-2.5 text-emeraldwin-400 font-medium">
+                    {r.bonus_amount > 0 ? `₹${r.bonus_amount}` : '—'}
+                  </td>
                 </tr>
               ))
             )}
