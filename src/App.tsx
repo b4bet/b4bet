@@ -67,6 +67,10 @@ function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdm
   return true;
 }
 
+// Routes where the header should be hidden (games + special pages)
+const ROUTES_WITHOUT_HEADER: Route[] = ['admin', 'affiliate', 'landing', 'crash', 'mines', 'aviator', 'sunvsmoon', 'trading'];
+const ROUTES_WITHOUT_BOTTOM_NAV: Route[] = ['admin', 'affiliate', 'landing'];
+
 export default function App() {
   const staffSession = useStaffSession();
   const [route, setRoute] = useState<Route>(() => {
@@ -181,8 +185,8 @@ export default function App() {
     startAllPersistentGameEngines();
   }, []);
 
-  const showHeader = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
-  const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
+  const showHeader = !ROUTES_WITHOUT_HEADER.includes(route);
+  const showBottomNav = !ROUTES_WITHOUT_BOTTOM_NAV.includes(route);
 
   const isAdminRoute = route === 'admin';
   const isStaffLoggedIn = !!staffSession;
@@ -212,7 +216,7 @@ export default function App() {
         />
       )}
 
-      {/* pt-[62px] matches the fixed header height so content is never hidden behind it */}
+      {/* pt-[62px] only when fixed header is visible — games and special routes have no header */}
       <main className={showHeader ? 'pt-[62px]' : ''}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
