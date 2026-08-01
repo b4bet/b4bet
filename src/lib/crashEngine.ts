@@ -61,7 +61,7 @@ interface EngineState {
   roundId: string;
   roundSeq: number;
   bustPoint: number;
-  history: number[];
+  history: number[]
   bets: { A: BetSlot; B: BetSlot };
   startedAt: number;
   win: number | null;
@@ -266,6 +266,8 @@ class CrashEngine {
         this.locallyBusted = false;
         this.didPlayStart = false;
         this.didPlayCrash = false;
+        // Reset lastKnownPhase so flying transition fires fresh on new round
+        this.lastKnownPhase = '';
         this.broadcastBets();
       }
 
@@ -274,26 +276,36 @@ class CrashEngine {
       try { sessionStorage.setItem(SESSION_PHASE_KEY, r.phase); } catch { /* ignore */ }
 
       if (r.phase === 'waiting') {
-        const waitTotal = 6000;
-        const remaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
+        // ── FIX: Once we've locally pre-transitioned to flying, NEVER revert. ──
+        // Any 'waiting' poll after local phase is 'flying' is just server lag.
+        // Reverting would cause: countdown reset → double sound → double launch.
+        if (this.state.phase === 'flying') return;
 
-        // If the local engine has already pre-transitioned to flying (countdown
-        // hit 0 locally) but the server still reports 'waiting', only revert if
-        // there is meaningful countdown left. If remaining ≤ 0.5s the server is
-        // lagging slightly — keep flying to avoid a visible freeze/reset.
-        if (this.state.phase === 'flying' && remaining <= 0.5) {
-          // Server is just a little behind — keep our pre-transition, ignore.
-          return;
-        }
+        const waitTotal = 6000;
+        const serverRemaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
 
         this.state.phase = 'countdown';
-        this.state.countdown = remaining;
-        this.state.countdownAtSet = remaining;
-        this.state.countdownSetAt = Date.now();
         this.state.multiplier = 1.0;
         this.state.serverCrashPoint = null;
         this.state.lastServerElapsedMs = 0;
         this.locallyBusted = false;
+
+        // ── FIX: Never jump the countdown backwards. ──
+        // Compute where the local countdown currently is. Only advance the
+        // reference if the server shows LESS time remaining (server is ahead
+        // of local). If server is behind (higher remaining), keep local running
+        // smoothly to avoid visible backward jumps (6→0→2→3 bug).
+        const localRemaining = Math.max(
+          0,
+          this.state.countdownAtSet - (Date.now() - this.state.countdownSetAt) / 1000,
+        );
+        if (newRound || serverRemaining < localRemaining - 0.05) {
+          // Server is ahead or it's a new round — re-anchor the reference.
+          this.state.countdownAtSet = serverRemaining;
+          this.state.countdownSetAt = Date.now();
+        }
+        // else: server is behind local — keep the local clock running as-is.
+
         if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
           if (this.state.history[0] !== bp) {
@@ -305,10 +317,9 @@ class CrashEngine {
 
       if (r.phase === 'flying') {
         if (prevPhase !== 'flying') {
-          // Server confirmed flying for the first time.
-          // Correct startedAt using server's elapsed — this is the authoritative sync.
-          // If animate() already pre-transitioned (didPlayStart=true), we just fix
-          // the clock without replaying the sound or resetting the visual.
+          // Server confirmed flying for the first time (or after a new round).
+          // If animate() already pre-transitioned (didPlayStart=true), we just
+          // fix the clock without replaying the sound or resetting the visual.
           this.state.phase = 'flying';
           this.state.serverElapsedAtConnect = r.elapsed_ms;
           this.state.connectTime = Date.now();
@@ -320,7 +331,7 @@ class CrashEngine {
             this.didPlayStart = true;
           }
         } else {
-          // Already flying — re-sync startedAt to keep multiplier aligned with server
+          // Already flying — re-sync startedAt to keep multiplier aligned
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.lastServerElapsedMs = r.elapsed_ms;
         }
@@ -337,8 +348,7 @@ class CrashEngine {
           const serverBust = r.crash_point != null ? Number(r.crash_point) : null;
 
           if (this.locallyBusted) {
-            // animate() already fired the crash — just correct the bust point from server
-            // and do NOT re-trigger sounds or settleBustedBets.
+            // animate() already fired the crash — just correct the bust point
             if (serverBust !== null) {
               this.state.bustPoint = serverBust;
               this.state.multiplier = serverBust;
@@ -386,7 +396,6 @@ class CrashEngine {
 
       // If server has revealed the crash point and we've reached it,
       // immediately transition to busted without waiting for the next poll.
-      // Set locallyBusted so poll() knows not to double-fire.
       if (this.state.serverCrashPoint != null && m >= this.state.serverCrashPoint) {
         m = this.state.serverCrashPoint;
         if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
@@ -416,16 +425,14 @@ class CrashEngine {
       this.state.countdown = remaining;
 
       // When countdown locally hits 0, immediately pre-transition to flying.
-      // Also update lastKnownPhase so that the next poll() — even if it comes
-      // back as prevPhase='waiting' — won't fire the "first flying" path and
-      // reset startedAt or replay the sound. Poll will just re-sync startedAt.
-      if (remaining === 0) {
+      // Set lastKnownPhase = 'flying' so the next poll() treats the upcoming
+      // server 'flying' response as a re-sync (not a fresh start), preventing
+      // double sound and double launch.
+      if (remaining === 0 && this.state.phase === 'countdown') {
         this.state.phase = 'flying';
         this.state.startedAt = Date.now();
         this.state.lastServerElapsedMs = 0;
         this.state.multiplier = 1.0;
-        // Mark lastKnownPhase as flying so poll treats next server 'flying'
-        // response as a re-sync (prevPhase==='flying'), not a fresh start.
         this.lastKnownPhase = 'flying';
         if (!this.didPlayStart) {
           playStartSound();
