@@ -74,8 +74,52 @@ function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdm
 // Routes where header should be hidden (full-screen game/admin routes)
 const ROUTES_WITHOUT_HEADER: Route[] = ['admin', 'affiliate', 'landing', 'crash', 'mines', 'aviator', 'sunvsmoon', 'trading'];
 
+// ─── Splash Screen ────────────────────────────────────────────────────────────
+function SplashScreen() {
+  return (
+    <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-[#020617]">
+      {/* Logo */}
+      <div className="flex flex-col items-center gap-4">
+        <svg width="100" height="100" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg"
+          style={{ filter: 'drop-shadow(0 0 32px rgba(245,158,11,0.5))' }}>
+          <rect width="180" height="180" rx="36" fill="#0f172a"/>
+          <g style={{ transform: 'scale(95%)', transformOrigin: 'center' }}>
+            <path fill="#f59e0b"
+              d="M101.141 53H136.632C151.023 53 162.689 64.6662 162.689 79.0573V112.904H148.112V79.0573C148.112 78.7105 148.098 78.3662 148.072 78.0251L112.581 112.898C112.701 112.902 112.821 112.904 112.941 112.904H148.112V126.672H112.941C98.5504 126.672 86.5638 114.891 86.5638 100.5V66.7434H101.141V100.5C101.141 101.15 101.191 101.792 101.289 102.422L137.56 66.7816C137.255 66.7563 136.945 66.7434 136.632 66.7434H101.141V53Z" />
+            <path fill="#f59e0b"
+              d="M65.2926 124.136L14 66.7372H34.6355L64.7495 100.436V66.7372H80.1365V118.47C80.1365 126.278 70.4953 129.958 65.2926 124.136Z" />
+          </g>
+        </svg>
+        <span className="text-2xl font-extrabold text-white tracking-widest" style={{ fontFamily: 'Inter, sans-serif' }}>
+          B4<span style={{ color: '#f59e0b' }}>BeT</span>
+        </span>
+      </div>
+      {/* Loading dots */}
+      <div className="mt-10 flex gap-2">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className="w-2 h-2 rounded-full bg-amber-400"
+            style={{
+              animation: 'b4bet-dot 1s infinite',
+              animationDelay: `${i * 150}ms`,
+            }}
+          />
+        ))}
+      </div>
+      <style>{`
+        @keyframes b4bet-dot {
+          0%, 80%, 100% { transform: scale(0); opacity: 0.3; }
+          40% { transform: scale(1); opacity: 1; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 export default function App() {
   const staffSession = useStaffSession();
+  const [splashVisible, setSplashVisible] = useState(true);
   const [route, setRoute] = useState<Route>(() => {
     if (typeof window !== 'undefined') {
       const p = window.location.pathname;
@@ -94,6 +138,12 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Hide splash after 1.8s
+  useEffect(() => {
+    const t = setTimeout(() => setSplashVisible(false), 1800);
+    return () => clearTimeout(t);
+  }, []);
 
   // Auto-open signup modal when URL contains ?ref= (referral link)
   useEffect(() => {
@@ -234,6 +284,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {splashVisible && <SplashScreen />}
       <GeoBlockOverlay />
       <ToastHost />
 
