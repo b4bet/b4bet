@@ -61,8 +61,6 @@ function clearAviatorBets() {
 }
 
 // FIX: Use Supabase RPC directly to fetch round bets with real usernames.
-// The Edge Function's aviator_bets action did not join profiles so username
-// was missing. The new get_aviator_round_bets RPC joins profiles server-side.
 async function fetchRoundBets(roundUuid: string): Promise<BetRecord[]> {
   try {
     const { data, error } = await supabase.rpc('get_aviator_round_bets', { p_round_uuid: roundUuid });
@@ -286,7 +284,6 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
 
   const canShareBet = bet0.cashedOutAt !== null || bet1.cashedOutAt !== null;
 
-  // Use actual username for chat messages
   const playerName = auth.getSession()?.username ?? 'You';
 
   const handleSendChat = useCallback((text: string) => {
@@ -386,7 +383,8 @@ export default function AviatorGame({ onBack }: AviatorGameProps) {
           onShareBet={handleShareBet}
         />
 
-        <div className="text-center text-xs text-aviator-muted py-1 opacity-50">
+        {/* Footer line — fully visible, no opacity reduction */}
+        <div className="text-center text-xs text-aviator-muted py-2">
           🔒 Official Live Game&nbsp;·&nbsp;Secure &amp; Provably Fair&nbsp;·&nbsp;18+ Responsible Play
         </div>
       </div>
