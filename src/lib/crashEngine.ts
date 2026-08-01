@@ -276,6 +276,16 @@ class CrashEngine {
       if (r.phase === 'waiting') {
         const waitTotal = 6000;
         const remaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
+
+        // If the local engine has already pre-transitioned to flying (countdown
+        // hit 0 locally) but the server still reports 'waiting', only revert if
+        // there is meaningful countdown left. If remaining ≤ 0.5s the server is
+        // lagging slightly — keep flying to avoid a visible freeze/reset.
+        if (this.state.phase === 'flying' && remaining <= 0.5) {
+          // Server is just a little behind — keep our pre-transition, ignore.
+          return;
+        }
+
         this.state.phase = 'countdown';
         this.state.countdown = remaining;
         this.state.countdownAtSet = remaining;
@@ -295,7 +305,10 @@ class CrashEngine {
 
       if (r.phase === 'flying') {
         if (prevPhase !== 'flying') {
-          // Server just confirmed flying — set up startedAt from server elapsed
+          // Server confirmed flying for the first time.
+          // Correct startedAt using server's elapsed — this is the authoritative sync.
+          // If animate() already pre-transitioned (didPlayStart=true), we just fix
+          // the clock without replaying the sound or resetting the visual.
           this.state.phase = 'flying';
           this.state.serverElapsedAtConnect = r.elapsed_ms;
           this.state.connectTime = Date.now();
@@ -399,7 +412,27 @@ class CrashEngine {
       this.publish();
     } else if (this.state.phase === 'countdown') {
       const elapsed = (Date.now() - this.state.countdownSetAt) / 1000;
-      this.state.countdown = Math.max(0, this.state.countdownAtSet - elapsed);
+      const remaining = Math.max(0, this.state.countdownAtSet - elapsed);
+      this.state.countdown = remaining;
+
+      // When countdown locally hits 0, immediately pre-transition to flying.
+      // Also update lastKnownPhase so that the next poll() — even if it comes
+      // back as prevPhase='waiting' — won't fire the "first flying" path and
+      // reset startedAt or replay the sound. Poll will just re-sync startedAt.
+      if (remaining === 0) {
+        this.state.phase = 'flying';
+        this.state.startedAt = Date.now();
+        this.state.lastServerElapsedMs = 0;
+        this.state.multiplier = 1.0;
+        // Mark lastKnownPhase as flying so poll treats next server 'flying'
+        // response as a re-sync (prevPhase==='flying'), not a fresh start.
+        this.lastKnownPhase = 'flying';
+        if (!this.didPlayStart) {
+          playStartSound();
+          this.didPlayStart = true;
+        }
+      }
+
       this.publish();
     }
     this.rafId = requestAnimationFrame(() => this.animate());
