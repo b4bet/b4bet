@@ -329,6 +329,7 @@ class Cms {
     supabase.channel('cms_payment_methods').on('postgres_changes', { event: '*', schema: 'public', table: 'payment_methods' }, () => { void this.syncPaymentMethodsFromSupabase(); }).subscribe();
     supabase.channel('cms_banners').on('postgres_changes', { event: '*', schema: 'public', table: 'banners' }, () => { void this.syncBannersFromSupabase(); }).subscribe();
     supabase.channel('cms_settings').on('postgres_changes', { event: '*', schema: 'public', table: 'settings' }, () => { void this.syncSettingsFromSupabase(); }).subscribe();
+    supabase.channel('cms_referrals').on('postgres_changes', { event: '*', schema: 'public', table: 'referrals' }, () => { void this.syncTransactionsFromSupabase(); }).subscribe();
   }
 
   async syncAllFromSupabase() {
@@ -619,9 +620,30 @@ class Cms {
       }
     }
     if (status === 'approved') {
-      if (before) bus.emit(Topics.ReferralDepositApproved, { username: before.user, amount: before.amount });
       const { error: creditErr } = await supabase.rpc('admin_approve_deposit_credit', { p_txn_id: id });
       if (creditErr) { this.toast({ title: 'Balance credit failed', body: creditErr.message, kind: 'alert' }); }
+
+      // Process referral reward via Supabase SECURITY DEFINER function.
+      // This checks if the depositing user was referred, validates minDeposit,
+      // and credits the referrer: flat rewardAmount for first tierThreshold referrals,
+      // then tierPercent% of deposit amount after that. All config from admin settings.
+      if (before?.userId) {
+        const { data: rewardResult, error: rewardErr } = await supabase.rpc(
+          'process_referral_reward',
+          { p_referred_user_id: before.userId, p_deposit_amount: before.amount },
+        );
+        if (rewardErr) {
+          console.warn('[cms] process_referral_reward error:', rewardErr.message);
+        } else if (rewardResult && (rewardResult as { credited: boolean }).credited) {
+          const reward = (rewardResult as { reward: number }).reward;
+          this.pushFromTemplate(
+            'nt_referral_reward',
+            'Referral Reward Credited',
+            `A referral reward of ${store.currency}${reward} was credited to the referrer.`,
+            'success',
+          );
+        }
+      }
     }
     this.emitFinance();
     const { error: statusErr } = await supabase.rpc('admin_update_transaction', { p_id: id, p_status: status, p_utr: utr ?? null, p_reason: reason ?? null });
@@ -759,223 +781,152 @@ class Cms {
     if (role === 'agent' && agentId) {
       rpc(supabase.rpc('admin_reply_ticket', { p_ticket_id: ticketId, p_staff_id: agentId, p_message: body }))
         .then(() => { void this.syncTicketsFromSupabase(); })
-        .catch(() => { supabase.from('ticket_messages').insert({ ticket_id: ticketId, sender_type: 'staff', sender_id: agentId, message: body }).then(() => {}).catch(() => {}); });
-    } else {
-      const ticket = this.tickets.find(t => t.id === ticketId);
-      if (ticket) {
-        rpc(supabase.rpc('user_post_ticket_message', { p_account_id: ticket.accountId, p_body: body }))
-          .then(() => { void this.syncTicketsFromSupabase(); })
-          .catch(() => { supabase.from('ticket_messages').insert({ ticket_id: ticketId, sender_type: 'user', message: body }).then(() => {}).catch(() => {}); });
-      }
+        .catch(() => { supabase.from('ticket_messages').insert({ ticket_id: ticketId, sender_type: 'staff', sender_id: agentId, message: body }).then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {}); });
+    } else if (role === 'user') {
+      supabase.from('ticket_messages').insert({ ticket_id: ticketId, sender_type: 'user', message: body }).then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {});
     }
   }
 
-  ackTicket(id: string) { this.tickets = this.tickets.map(t => t.id === id ? { ...t, acknowledged: true } : t); this.emitTickets(); }
-
-  async addStaff(name: string, password: string, role: StaffRole, permissions: Partial<Record<PermissionKey, boolean>> = {}): Promise<StaffAccount | null> {
-    const email = name.toLowerCase().replace(/\s+/g, '.') + '@b4bet.local';
-    const hash = await this.hashPassword(password);
-    try {
-      const { data, error } = await supabase.rpc('admin_create_staff', { p_email: email, p_name: name, p_role: role === 'finance' ? 'admin' : 'staff', p_password_hash: hash, p_permissions: permissions });
-      if (error) { console.warn('[cms] addStaff error:', error.message); return null; }
-      if (data) { await this.syncStaffFromSupabase(); return this.staff.find(s => s.id === data) ?? null; }
-      return null;
-    } catch (e) { console.warn('[cms] addStaff failed:', e); return null; }
+  setReferralConfig(patch: Partial<ReferralConfig>) {
+    this.referralConfig = { ...this.referralConfig, ...patch };
+    bus.emit(Topics.ReferralConfig, this.referralConfig);
+    void rpc(supabase.rpc('admin_update_setting', { p_key: 'referral_config', p_value: this.referralConfig as unknown as string })).catch(() => {});
   }
 
-  async addStaffAccount(name: string, email: string, password: string, isOwner: boolean = false): Promise<StaffAccount | null> {
-    const supabaseRole = isOwner ? 'super_admin' : 'staff';
-    const perms: Partial<Record<PermissionKey, boolean>> = isOwner ? Object.fromEntries(ALL_PERMISSIONS.map(k => [k, true])) : {};
-    const hash = await this.hashPassword(password);
-    try {
-      const { data, error } = await supabase.rpc('admin_create_staff', { p_email: email.toLowerCase(), p_name: name, p_role: supabaseRole, p_password_hash: hash, p_permissions: perms });
-      if (error) { console.warn('[cms] addStaffAccount error:', error.message); return null; }
-      if (data) { await this.syncStaffFromSupabase(); return this.staff.find(s => s.id === data) ?? null; }
-      return null;
-    } catch (e) { console.warn('[cms] addStaffAccount failed:', e); return null; }
+  recordReferralSignup(user: AuthUser, referrerId: string) {
+    const referral: Referral = {
+      id: Math.random().toString(36).slice(2),
+      referrerId,
+      referredUserId: user.id,
+      referredUsername: user.username,
+      depositAmount: 0,
+      firstDepositApproved: false,
+      rewardPaid: false,
+      rewardCredited: false,
+      rewardAmount: 0,
+      createdAt: Date.now(),
+      ts: Date.now(),
+    };
+    this.referrals = [referral, ...this.referrals];
+    this.emitReferrals();
   }
 
-  async removeStaff(id: string) {
+  // ---- Staff management ----
+  async addStaff(name: string, email: string, password: string, role: StaffRole, permissions: Partial<Record<PermissionKey, boolean>>) {
+    const { data, error } = await supabase.rpc('admin_create_staff', { p_name: name, p_email: email, p_password: password, p_role: role, p_permissions: permissions as unknown as string });
+    if (error) throw error;
+    const id = data as string;
+    const newStaff: StaffAccount = { id, name, email, password: '', role, online: false, permissions };
+    this.staff = [...this.staff, newStaff]; this.emitStaff();
+    return newStaff;
+  }
+
+  async updateStaff(id: string, patch: Partial<StaffAccount>) {
+    this.staff = this.staff.map(s => s.id === id ? { ...s, ...patch } : s); this.emitStaff();
+    const s = this.staff.find(x => x.id === id);
+    if (s) {
+      await rpc(supabase.rpc('admin_update_staff', { p_id: id, p_name: s.name, p_email: s.email ?? '', p_role: s.role, p_permissions: s.permissions as unknown as string })).catch(() => {});
+    }
+  }
+
+  async deleteStaff(id: string) {
     this.staff = this.staff.filter(s => s.id !== id); this.emitStaff();
-    await rpc(supabase.rpc('admin_delete_staff', { p_staff_id: id })).catch(e => console.warn('[cms] removeStaff error:', e));
+    await rpc(supabase.rpc('admin_delete_staff', { p_id: id })).catch(() => {});
   }
 
-  async setStaffPermission(id: string, key: PermissionKey, value: boolean) {
-    const acc = this.staff.find(s => s.id === id);
-    if (!acc) return;
-    const newPerms = { ...acc.permissions, [key]: value };
-    this.staff = this.staff.map(s => s.id === id ? { ...s, permissions: newPerms } : s); this.emitStaff();
-    await rpc(supabase.rpc('admin_update_staff_permissions', { p_staff_id: id, p_permissions: newPerms })).catch(e => console.warn('[cms] setStaffPermission error:', e));
-  }
-
-  async updateStaffPassword(id: string, password: string) {
-    const hash = await this.hashPassword(password);
-    await rpc(supabase.rpc('admin_update_staff_password', { p_staff_id: id, p_password_hash: hash })).catch(e => console.warn('[cms] updateStaffPassword error:', e));
-  }
-
-  async hashPassword(plain: string): Promise<string> {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(plain));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  async verifyStaffCredentialsAsync(email: string, password: string): Promise<StaffAccount | null> {
+  async staffLogin(email: string, password: string): Promise<StaffAccount | null> {
     try {
-      const hash = await this.hashPassword(password);
-      const { data, error } = await supabase.rpc('admin_staff_login', { p_email: email.trim().toLowerCase(), p_password_hash: hash });
-      if (error) { console.warn('[cms] staff_login error:', error.message); return null; }
-      const rows = data as Array<Record<string, unknown>>;
-      if (!rows?.length) return null;
-      const acc = mapSupabaseStaff(rows[0]);
-      if (!this.staff.find(s => s.id === acc.id)) { this.staff = [...this.staff, acc]; this.emitStaff(); }
-      return acc;
-    } catch (e) { console.warn('[cms] verifyStaffCredentialsAsync failed:', e); return null; }
-  }
-  verifyStaffCredentials(_name: string, _password: string): StaffAccount | null { return null; }
-  verifyStaffCredentialsByEmail(_email: string, _password: string): StaffAccount | null { return null; }
-
-  async changeStaffPassword(id: string, oldPassword: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
-    const acc = this.staff.find(s => s.id === id);
-    if (!acc) return { ok: false, error: 'Account not found.' };
-    if (!newPassword || newPassword.length < 4) return { ok: false, error: 'New password must be at least 4 characters.' };
-    const verified = await this.verifyStaffCredentialsAsync(acc.email || '', oldPassword);
-    if (!verified) return { ok: false, error: 'Old password is incorrect.' };
-    await this.updateStaffPassword(id, newPassword);
-    return { ok: true };
+      const { data, error } = await supabase.rpc('staff_login', { p_email: email, p_password: password });
+      if (error || !data) return null;
+      const row = data as Record<string, unknown>;
+      const staffMember = mapSupabaseStaff(row);
+      this.staffSessionId = staffMember.id;
+      try { localStorage.setItem(ADMIN_SESSION_KEY, staffMember.id); } catch { /* ignore */ }
+      bus.emit(Topics.StaffSession, this.staffSessionId);
+      this.emitStaff();
+      return staffMember;
+    } catch { return null; }
   }
 
-  updateStaffEmail(id: string, email: string) {
-    this.staff = this.staff.map(s => s.id === id ? { ...s, email } : s); this.emitStaff();
-    supabase.from('staff').update({ email: email.toLowerCase(), updated_at: new Date().toISOString() }).eq('id', id).then(() => {}).catch(() => {});
-  }
-
-  requestStaffPasswordReset(email: string): { ok: boolean; error?: string; tempPassword?: string } {
-    const e = (email || '').trim().toLowerCase();
-    if (!e) return { ok: false, error: 'Please enter your recovery email address.' };
-    const acc = this.staff.find(s => (s.email || '').toLowerCase() === e);
-    if (!acc) return { ok: false, error: 'No admin account found with that email.' };
-    if (!this.smtpConfig.active || !this.smtpConfig.host || !this.smtpConfig.user) return { ok: false, error: 'SMTP is not configured. Please configure SMTP first.' };
-    const temp = 'tmp' + Math.random().toString(36).slice(2, 8);
-    this.updateStaffPassword(acc.id, temp).catch(() => {});
-    this.toast({ title: 'Password reset email sent', body: `A recovery email was dispatched to ${acc.email} via ${this.smtpConfig.host}.`, kind: 'success' });
-    return { ok: true, tempPassword: temp };
-  }
-
-  hasPermission(key: PermissionKey): boolean {
-    const me = this.currentStaff();
-    if (!me) return false;
-    if (me.isOwner) return true;
-    return !!me.permissions?.[key];
-  }
-
-  currentStaff(): StaffAccount | null {
-    if (!this.staffSessionId) return null;
-    return this.staff.find(s => s.id === this.staffSessionId) ?? null;
-  }
-
-  // Set staff session by ID (called from AdminLoginPage after successful login)
-  loginStaff(id: string) {
-    this.staffSessionId = id;
-    try { localStorage.setItem(ADMIN_SESSION_KEY, id); } catch { /* ignore */ }
-    bus.emit(Topics.StaffSession, id);
-  }
-
-  logoutStaff() {
+  staffLogout() {
     this.staffSessionId = null;
     try { localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* ignore */ }
     bus.emit(Topics.StaffSession, null);
   }
 
-  addManualMethod(method: Omit<ManualMethod, 'id'>) {
-    const m: ManualMethod = { ...method, id: 'mm_' + Math.random().toString(36).slice(2) };
-    this.manualMethods = [...this.manualMethods, m]; this.emitManual();
-    supabase.from('payment_methods').insert({
-      method_type: m.kind, is_active: m.active,
-      account_details: { kind: m.kind, flow: m.flow, label: m.label, active: m.active, minAmount: m.minAmount, maxAmount: m.maxAmount, accountNumber: m.accountNumber, bankName: m.bankName, ifsc: m.ifsc, holderName: m.holderName, upiId: m.upiId, upiDisplayName: m.upiDisplayName, qrDataUrl: m.qrDataUrl, cryptoCurrencies: m.cryptoCurrencies, html: m.html, customData: m.customData, countries: m.countries },
-    }).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+  getCurrentStaff(): StaffAccount | null {
+    if (!this.staffSessionId) return null;
+    return this.staff.find(s => s.id === this.staffSessionId) ?? null;
   }
 
-  updateManualMethod(id: string, patch: Partial<ManualMethod>) {
+  hasPermission(key: PermissionKey): boolean {
+    const s = this.getCurrentStaff();
+    if (!s) return false;
+    if (s.isOwner) return true;
+    return s.permissions[key] === true;
+  }
+
+  // ---- Manual payment method management ----
+  async addManualMethod(method: Omit<ManualMethod, 'id'>) {
+    const id = Math.random().toString(36).slice(2);
+    const rec: ManualMethod = { ...method, id };
+    this.manualMethods = [...this.manualMethods, rec]; this.emitManual();
+    const details = { kind: method.kind, flow: method.flow, label: method.label, active: method.active, minAmount: method.minAmount, maxAmount: method.maxAmount, accountNumber: method.accountNumber, bankName: method.bankName, ifsc: method.ifsc, holderName: method.holderName, upiId: method.upiId, upiDisplayName: method.upiDisplayName, qrDataUrl: method.qrDataUrl, cryptoCurrencies: method.cryptoCurrencies, html: method.html, customData: method.customData, countries: method.countries };
+    await rpc(supabase.rpc('admin_upsert_payment_method', { p_id: id, p_method_type: method.kind, p_account_details: details as unknown as string, p_is_active: method.active })).catch(() => {});
+    return rec;
+  }
+
+  async updateManualMethod(id: string, patch: Partial<ManualMethod>) {
     this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
     const m = this.manualMethods.find(x => x.id === id);
     if (m) {
-      supabase.from('payment_methods').update({
-        is_active: m.active,
-        account_details: { kind: m.kind, flow: m.flow, label: m.label, active: m.active, minAmount: m.minAmount, maxAmount: m.maxAmount, accountNumber: m.accountNumber, bankName: m.bankName, ifsc: m.ifsc, holderName: m.holderName, upiId: m.upiId, upiDisplayName: m.upiDisplayName, qrDataUrl: m.qrDataUrl, cryptoCurrencies: m.cryptoCurrencies, html: m.html, customData: m.customData, countries: m.countries },
-      }).eq('id', id).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+      const details = { kind: m.kind, flow: m.flow, label: m.label, active: m.active, minAmount: m.minAmount, maxAmount: m.maxAmount, accountNumber: m.accountNumber, bankName: m.bankName, ifsc: m.ifsc, holderName: m.holderName, upiId: m.upiId, upiDisplayName: m.upiDisplayName, qrDataUrl: m.qrDataUrl, cryptoCurrencies: m.cryptoCurrencies, html: m.html, customData: m.customData, countries: m.countries };
+      await rpc(supabase.rpc('admin_upsert_payment_method', { p_id: id, p_method_type: m.kind, p_account_details: details as unknown as string, p_is_active: m.active })).catch(() => {});
     }
   }
 
-  removeManualMethod(id: string) {
+  async deleteManualMethod(id: string) {
     this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
-    supabase.from('payment_methods').update({ is_active: false }).eq('id', id).then(() => {}).catch(() => {});
+    await rpc(supabase.rpc('admin_delete_payment_method', { p_id: id })).catch(() => {});
   }
 
-  addReferral(r: Omit<Referral, 'id' | 'ts'>) {
-    const ref: Referral = { ...r, id: Math.random().toString(36).slice(2), ts: Date.now() };
-    this.referrals = [...this.referrals, ref]; this.emitReferrals();
+  // ---- Affiliate management ----
+  loadAffiliates() {
+    void rpc(supabase.rpc('admin_get_affiliates')).then(({ data }) => {
+      if (data && Array.isArray(data)) {
+        this.affiliates = (data as Array<Record<string, unknown>>).map(r => ({
+          id: r.id as string, userId: r.user_id as string, username: (r.username as string) || '',
+          email: (r.email as string) || '', telegram: (r.telegram as string) || '',
+          trafficSource: (r.traffic_source as string) || '', estimatedTraffic: (r.estimated_traffic as string) || '',
+          status: (r.status as AffiliateApplication['status']) || 'pending', revSharePct: Number(r.rev_share_pct) || 0,
+          stats: { clicks: 0, registered: 0, deposits: 0, revenueShare: 0 }, ts: new Date(r.created_at as string).getTime(),
+        }));
+        bus.emit(Topics.Affiliates, this.affiliates);
+      }
+    }).catch(() => {});
   }
 
-  markReferralPaid(id: string) {
-    this.referrals = this.referrals.map(r => r.id === id ? { ...r, rewardPaid: true, rewardCredited: true, paidAt: Date.now() } : r);
-    this.emitReferrals();
-  }
-
-  getReferrals(opts: { referrerId?: string } = {}): Referral[] {
-    let rows = [...this.referrals];
-    if (opts.referrerId) rows = rows.filter(r => r.referrerId === opts.referrerId);
-    return rows;
-  }
-
-  addAffiliate(app: Omit<AffiliateApplication, 'id' | 'ts'>) {
-    const a: AffiliateApplication = { ...app, id: Math.random().toString(36).slice(2), ts: Date.now() };
-    this.affiliates = [...this.affiliates, a];
+  async updateAffiliateStatus(id: string, status: AffiliateApplication['status'], revSharePct?: number) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status, revSharePct: revSharePct ?? a.revSharePct } : a);
     bus.emit(Topics.Affiliates, this.affiliates);
+    await rpc(supabase.rpc('admin_update_affiliate', { p_id: id, p_status: status, p_rev_share_pct: revSharePct ?? 0 })).catch(() => {});
   }
 
-  updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
-    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
-    bus.emit(Topics.Affiliates, this.affiliates);
+  // ---- Auto gateway management ----
+  addAutoGateway(gw: Omit<AutoGateway, 'id'>) {
+    const rec: AutoGateway = { ...gw, id: Math.random().toString(36).slice(2) };
+    this.autoGateways = [...this.autoGateways, rec]; this.emitGateways();
+  }
+  updateAutoGateway(id: string, patch: Partial<AutoGateway>) {
+    this.autoGateways = this.autoGateways.map(g => g.id === id ? { ...g, ...patch } : g); this.emitGateways();
+  }
+  removeAutoGateway(id: string) {
+    this.autoGateways = this.autoGateways.filter(g => g.id !== id); this.emitGateways();
   }
 
-  addAffiliateApplication(app: Omit<AffiliateApplication, 'id' | 'ts'>): AffiliateApplication {
-    const item: AffiliateApplication = { ...app, id: 'aff_' + Math.random().toString(36).slice(2), ts: Date.now() };
-    this.affiliates = [item, ...this.affiliates];
-    rpc(supabase.rpc('admin_update_setting', { p_key: 'affiliates', p_value: this.affiliates as unknown as string })).catch(() => {});
-    return item;
-  }
-
-  updateAffiliateStatus(id: string, status: 'approved' | 'rejected', revSharePct?: number) {
-    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status, ...(revSharePct !== undefined ? { revSharePct } : {}) } : a);
-    rpc(supabase.rpc('admin_update_setting', { p_key: 'affiliates', p_value: this.affiliates as unknown as string })).catch(() => {});
-  }
-
-  setOnlineStatus(staffId: string, online: boolean) {
-    this.staff = this.staff.map(s => s.id === staffId ? { ...s, online } : s); this.emitStaff();
-  }
-
-  sendDM(fromId: string, toId: string, body: string) {
-    const dm: StaffDM = { id: Math.random().toString(36).slice(2), fromId, toId, body, ts: Date.now(), read: false };
-    this.staffDMs = [...this.staffDMs, dm]; this.emitDMs();
-  }
-
-  markDMRead(id: string) {
-    this.staffDMs = this.staffDMs.map(d => d.id === id ? { ...d, read: true } : d); this.emitDMs();
-  }
-
-  unreadDMs(forId: string) { return this.staffDMs.filter(d => d.toId === forId && !d.read).length; }
-
-  isGeoBlocked(): boolean {
-    const c = this.countries.find(x => x.id === this.detectedCountryId);
-    return c ? !c.isActive : false;
-  }
-
-  detectedCountry(): Country | undefined {
-    return this.countries.find(x => x.id === this.detectedCountryId);
+  push(notification: { title: string; body: string; kind: 'info' | 'success' | 'warn' | 'alert' }) {
+    store.pushNotification(notification);
   }
 }
 
 export const cms = new Cms();
-
-// expose for auth module
-(globalThis as Record<string, unknown>)._cms = cms;
-export type { AuthUser };
