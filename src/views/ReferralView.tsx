@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, Copy, Check, Users, UserPlus } from 'lucide-react';
 import { useReferralConfig } from '../lib/cmsHooks';
 import { useAuth } from '../lib/hooks';
@@ -14,7 +14,7 @@ interface SupabaseReferral {
   status: string;
   created_at: string;
   referred_username?: string;
-  referred_account_id?: string; // 6-digit short ID
+  referred_account_id?: string;
   deposit_amount?: number;
 }
 
@@ -23,7 +23,6 @@ export default function ReferralView({ onOpenWallet }: { onOpenWallet?: () => vo
   const session = useAuth();
   const cfg = useReferralConfig();
 
-  // Mobile back button — open wallet drawer (menu)
   useEffect(() => {
     window.history.pushState({ referralView: true }, '');
     const handlePopstate = () => { onOpenWallet?.(); };
@@ -72,9 +71,6 @@ function ReferAndEarn({
   const link = accountId ? `${window.location.origin}/register?ref=${accountId}` : '';
   const [copied, setCopied] = useState(false);
 
-  // suppress unused
-  void useMemo;
-
   const copy = async () => {
     if (!link) return;
     try { await navigator.clipboard.writeText(link); } catch { /* noop */ }
@@ -82,9 +78,9 @@ function ReferAndEarn({
     setTimeout(() => setCopied(false), 1500);
   };
 
-  const fetchReferrals = useCallback(async (uid: string) => {
-    const { data, error } = await supabase
-      .rpc('get_my_referrals', { p_user_id: uid, p_limit: 100 });
+  // No-arg RPC — Supabase uses auth.uid() server-side, no user_id needed
+  const fetchReferrals = useCallback(async () => {
+    const { data, error } = await supabase.rpc('get_my_referrals');
     if (error) {
       console.error('[ReferralView] get_my_referrals error:', error);
       return;
@@ -109,11 +105,10 @@ function ReferAndEarn({
   useEffect(() => {
     if (!userId) return;
 
-    // Initial fetch
     setLoading(true);
-    fetchReferrals(userId).finally(() => setLoading(false));
+    fetchReferrals().finally(() => setLoading(false));
 
-    // Realtime subscription — auto-refresh when referrals table changes for this user
+    // Realtime: re-fetch when referrals table changes for this user
     const channel = supabase
       .channel(`referrals_user_${userId}`)
       .on(
@@ -124,19 +119,15 @@ function ReferAndEarn({
           table: 'referrals',
           filter: `referrer_id=eq.${userId}`,
         },
-        () => {
-          // Re-fetch on any insert/update so list stays fresh
-          void fetchReferrals(userId);
-        },
+        () => { void fetchReferrals(); },
       )
       .subscribe();
 
-    return () => {
-      void supabase.removeChannel(channel);
-    };
+    return () => { void supabase.removeChannel(channel); };
   }, [userId, fetchReferrals]);
 
-  const totalEarned = referrals.filter((r) => r.status === 'credited').reduce((s, r) => s + r.bonus_amount, 0);
+  const creditedReferrals = referrals.filter((r) => r.status === 'credited');
+  const totalEarned = creditedReferrals.reduce((s, r) => s + r.bonus_amount, 0);
 
   if (!userId) {
     return (
@@ -170,7 +161,7 @@ function ReferAndEarn({
       <div className="grid grid-cols-2 gap-2">
         <Metric label="Reward / Referral" value={`${store.currency}${cfg.rewardAmount}`} accent="text-emeraldwin-400" />
         <Metric label="Min. Deposit" value={`${store.currency}${cfg.minDeposit}`} accent="text-neon-300" />
-        <Metric label="Tier Threshold" value={`${cfg.tierThreshold}`} accent="text-amberx-400" />
+        <Metric label="Tier Threshold" value={`${cfg.tierThreshold} referrals`} accent="text-amberx-400" />
         <Metric label="Tier Commission" value={`${cfg.tierPercent}%`} accent="text-coral-400" />
       </div>
 
@@ -198,7 +189,7 @@ function ReferAndEarn({
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto">
             {referrals.map((r) => (
-              <ReferralRow key={r.id} refData={r} />
+              <ReferralRow key={r.id} refData={r} cfg={cfg} />
             ))}
           </div>
         )}
@@ -216,15 +207,24 @@ function Metric({ label, value, accent }: { label: string; value: string; accent
   );
 }
 
-function ReferralRow({ refData }: { refData: SupabaseReferral }) {
+function ReferralRow({
+  refData,
+  cfg,
+}: {
+  refData: SupabaseReferral;
+  cfg: { rewardAmount: number; minDeposit: number; tierPercent: number; tierThreshold: number };
+}) {
   const [open, setOpen] = useState(false);
   const isCredited = refData.status === 'credited';
+  const isPending = refData.status === 'pending';
   const statusColor = isCredited ? 'text-emeraldwin-400' : 'text-slate-400';
   const statusText = isCredited ? 'Rewarded' : 'Awaiting deposit';
 
-  // Display name: prefer username, fallback to short ID
   const displayName = refData.referred_username || refData.referred_id.slice(0, 8);
   const shortId = refData.referred_account_id || refData.referred_id.slice(0, 8);
+
+  // Calculate expected reward for pending referrals (informational)
+  const expectedReward = cfg.rewardAmount;
 
   return (
     <>
@@ -243,7 +243,15 @@ function ReferralRow({ refData }: { refData: SupabaseReferral }) {
         </div>
         <div className="text-right flex-shrink-0">
           <p className={`text-xs font-bold ${statusColor}`}>{statusText}</p>
-          {isCredited && <p className="text-[10px] text-emeraldwin-300">+{store.currency}{refData.bonus_amount}</p>}
+          {isCredited && (
+            <p className="text-[10px] text-emeraldwin-300">+{store.currency}{refData.bonus_amount}</p>
+          )}
+          {isPending && refData.deposit_amount && refData.deposit_amount > 0 && (
+            <p className="text-[10px] text-amberx-300">Dep: {store.currency}{refData.deposit_amount}</p>
+          )}
+          {isPending && (!refData.deposit_amount || refData.deposit_amount === 0) && (
+            <p className="text-[10px] text-slate-500">Expected: {store.currency}{expectedReward}</p>
+          )}
         </div>
       </div>
 
@@ -252,15 +260,27 @@ function ReferralRow({ refData }: { refData: SupabaseReferral }) {
           <div className="bg-slatepanel-900 border border-borderline-900 rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-display font-bold text-white">Referral Details</h3>
-              <button onClick={() => setOpen(false)} className="p-1 rounded-lg hover:bg-slatepanel-800"><ArrowLeft className="w-5 h-5 text-slate-400" /></button>
+              <button onClick={() => setOpen(false)} className="p-1 rounded-lg hover:bg-slatepanel-800">
+                <ArrowLeft className="w-5 h-5 text-slate-400" />
+              </button>
             </div>
             <div className="space-y-3 text-sm">
               <DetailRow label="Referred User" value={displayName} />
               <DetailRow label="Account ID" value={shortId} />
               <DetailRow label="Date" value={new Date(refData.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} />
-              <DetailRow label="Deposit Amount" value={refData.deposit_amount ? `${store.currency}${refData.deposit_amount}` : 'No deposit yet'} />
+              <DetailRow
+                label="Deposit Amount"
+                value={
+                  refData.deposit_amount && refData.deposit_amount > 0
+                    ? `${store.currency}${refData.deposit_amount}`
+                    : 'No deposit yet'
+                }
+              />
               <DetailRow label="Status" value={statusText} />
-              <DetailRow label="Reward Amount" value={isCredited ? `${store.currency}${refData.bonus_amount}` : 'Pending'} />
+              <DetailRow
+                label="Commission Earned"
+                value={isCredited ? `${store.currency}${refData.bonus_amount}` : `Pending (${store.currency}${expectedReward} on deposit)`}
+              />
             </div>
             <button onClick={() => setOpen(false)} className="btn-primary w-full py-2 mt-4">Close</button>
           </div>
