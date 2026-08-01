@@ -65,6 +65,42 @@ async function logIpWithFallback(userId: string, accessToken: string | undefined
   return '';
 }
 
+// Look up a referrer by any of: account_id (6-digit), referral_code (8-char hex), or username.
+// Returns the referrer's profile id (UUID) or null if not found.
+async function lookupReferrerId(code: string): Promise<string | null> {
+  if (!code) return null;
+  try {
+    // 1. Try account_id match (6-digit number — used in referral links)
+    const { data: byAccountId } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('account_id', code)
+      .maybeSingle();
+    if (byAccountId) return byAccountId.id as string;
+
+    // 2. Try referral_code match (8-char uppercase hex like C7E1FF7C)
+    const { data: byReferralCode } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('referral_code', code.toUpperCase())
+      .maybeSingle();
+    if (byReferralCode) return byReferralCode.id as string;
+
+    // 3. Fallback: username match (legacy links shared by username)
+    const { data: byUsername } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('username', code)
+      .maybeSingle();
+    if (byUsername) return byUsername.id as string;
+
+    return null;
+  } catch (e) {
+    console.warn('[auth] lookupReferrerId failed:', e);
+    return null;
+  }
+}
+
 class AuthManager {
   private session: AuthSession | null = null;
   private usersCache: AuthUser[] = [];
@@ -124,27 +160,12 @@ class AuthManager {
     if (!/^\d{7,15}$/.test(umobile)) return { ok: false, error: 'Please enter a valid mobile number (digits only).' };
     if (password.length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
 
-    // If referral code provided, validate it BEFORE signup to show clear error
+    // If referral code provided, validate it BEFORE signup to show clear error.
+    // Checks: account_id (6-digit), referral_code (8-char hex), username (legacy).
     let referrerId: string | null = null;
     if (uref) {
       try {
-        // Try account_id match first (6-digit short code used in referral links)
-        const { data: byAccountId } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('account_id', uref)
-          .maybeSingle();
-        if (byAccountId) {
-          referrerId = byAccountId.id as string;
-        } else {
-          // Fallback: try username match (legacy links)
-          const { data: byUsername } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('username', uref)
-            .maybeSingle();
-          if (byUsername) referrerId = byUsername.id as string;
-        }
+        referrerId = await lookupReferrerId(uref);
         if (!referrerId) {
           return { ok: false, error: 'Invalid referral code. Please check and try again.' };
         }
