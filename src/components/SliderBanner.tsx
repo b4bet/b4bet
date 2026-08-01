@@ -68,20 +68,15 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
 
   return (
     <div
-      className="relative w-full rounded-2xl bg-slatepanel-900"
-      style={{ overflow: 'hidden' }}
+      className="relative w-full overflow-hidden rounded-xl select-none"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
     >
-      {/* Slides track — 2:1 aspect ratio container so banners fill perfectly */}
+      {/* Slides track */}
       <div
         className="flex transition-transform duration-500 ease-in-out"
-        style={{
-          transform: `translateX(-${idx * 100}%)`,
-          width: '100%',
-          aspectRatio: '2 / 1',
-        }}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
+        style={{ transform: `translateX(-${idx * 100}%)` }}
       >
         {useAdmin
           ? banners.map((b) => (
@@ -90,13 +85,14 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
                 href={b.linkUrl || '#'}
                 onClick={(e) => { if (!b.linkUrl) e.preventDefault(); }}
                 style={{ minWidth: '100%', maxWidth: '100%' }}
-                className="relative block bg-slatepanel-900 flex-shrink-0"
+                className="relative block bg-black flex-shrink-0"
               >
-                {/* object-cover fills the 2:1 box perfectly — upload 2:1 images for zero cut */}
+                {/* object-contain keeps the full image visible — no top/bottom crop */}
                 <img
                   src={b.imageUrl}
                   alt={b.title || 'Banner'}
-                  className="w-full h-full object-cover"
+                  className="w-full h-full object-contain"
+                  style={{ display: 'block', maxHeight: '220px', width: '100%' }}
                 />
               </a>
             ))
@@ -106,20 +102,18 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
                 <div
                   key={i}
                   style={{ minWidth: '100%', maxWidth: '100%' }}
-                  className="relative overflow-hidden flex-shrink-0"
+                  className="relative flex-shrink-0 aspect-[2/1] bg-gradient-to-r from-slatepanel-800 to-slatepanel-900 overflow-hidden"
                 >
                   <div className={`absolute inset-0 bg-gradient-to-r ${s.gradient}`} />
-                  <div className="absolute -right-8 -top-8 w-40 h-40 rounded-full bg-white/5" />
-                  <div className="absolute -right-4 -bottom-4 w-24 h-24 rounded-full bg-white/3" />
-                  <div className="relative h-full flex flex-col justify-center px-5 py-4">
-                    <div className={`flex items-center gap-1.5 mb-2 ${s.accent}`}>
-                      <Icon className="w-4 h-4" />
-                      <span className="text-[11px] font-bold uppercase tracking-widest">Promo</span>
+                  <div className="relative z-10 flex flex-col justify-center h-full px-5 py-4">
+                    <div className={`flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider mb-1 ${s.accent}`}>
+                      <Icon className="w-3.5 h-3.5" />
+                      <span>Promo</span>
                     </div>
-                    <h2 className="font-display font-extrabold text-white text-xl leading-tight mb-1">{s.title}</h2>
-                    <p className="text-slate-300 text-xs leading-snug max-w-[70%]">{s.subtitle}</p>
+                    <h3 className="text-white font-bold text-lg leading-tight">{s.title}</h3>
+                    <p className="text-slate-300 text-sm mt-0.5">{s.subtitle}</p>
                     <button onClick={() => onCta(i)} className="btn-primary mt-3 px-4 py-2 text-sm">
-                      {s.cta} <ArrowRight className="inline w-3.5 h-3.5 ml-1" />
+                      {s.cta} <ArrowRight className="w-3.5 h-3.5 inline ml-1" />
                     </button>
                   </div>
                 </div>
@@ -128,7 +122,7 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
       </div>
 
       {/* Dot indicators */}
-      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1.5 z-10">
+      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
         {Array.from({ length: count }).map((_, i) => (
           <button
             key={i}
