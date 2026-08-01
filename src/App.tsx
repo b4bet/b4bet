@@ -13,6 +13,7 @@ import ProfileView from './views/ProfileView';
 import ReferralView from './views/ReferralView';
 import AdminView from './views/AdminView';
 import HistoryView from './views/HistoryView';
+import LudoView from './views/LudoView';
 import SunVsMoonView from './views/SunVsMoonView';
 import TradingGameView from './views/TradingGameView';
 import AffiliatePortalView from './views/AffiliatePortalView';
@@ -67,9 +68,8 @@ function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdm
   return true;
 }
 
-// Routes where the header should be hidden (games + special pages)
+// Routes where header should be hidden (full-screen game/admin routes)
 const ROUTES_WITHOUT_HEADER: Route[] = ['admin', 'affiliate', 'landing', 'crash', 'mines', 'aviator', 'sunvsmoon', 'trading'];
-const ROUTES_WITHOUT_BOTTOM_NAV: Route[] = ['admin', 'affiliate', 'landing'];
 
 export default function App() {
   const staffSession = useStaffSession();
@@ -186,7 +186,7 @@ export default function App() {
   }, []);
 
   const showHeader = !ROUTES_WITHOUT_HEADER.includes(route);
-  const showBottomNav = !ROUTES_WITHOUT_BOTTOM_NAV.includes(route);
+  const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
 
   const isAdminRoute = route === 'admin';
   const isStaffLoggedIn = !!staffSession;
@@ -195,9 +195,9 @@ export default function App() {
   if (showMaintenance) {
     return (
       <MaintenancePage
-        title={maintenance!.title}
-        message={maintenance!.message}
-        estimatedTime={maintenance!.estimated_time}
+        title={maintenance?.title}
+        message={maintenance?.message}
+        estimatedTime={maintenance?.estimated_time}
       />
     );
   }
@@ -205,6 +205,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <GeoBlockOverlay />
+      <ToastHost />
 
       {showHeader && (
         <Header
@@ -216,13 +217,12 @@ export default function App() {
         />
       )}
 
-      {/* pt-[62px] only when fixed header is visible — games and special routes have no header */}
       <main className={showHeader ? 'pt-[62px]' : ''}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
         {route === 'deposit' && <DepositView />}
-        {route === 'wallet' && <WalletView />}
+        {route === 'wallet' && <WalletView onNavigate={navigate} />}
         {route === 'withdraw' && <WithdrawView />}
         {route === 'profile' && (
           <ProfileView
@@ -232,18 +232,19 @@ export default function App() {
             onOpenMenu={() => setWalletOpen(true)}
           />
         )}
-        {route === 'referral' && <ReferralView onOpenWallet={() => setWalletOpen(true)} />}
-        {route === 'admin' && <AdminView onOpenWallet={() => setWalletOpen(true)} />}
+        {route === 'referral' && <ReferralView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
+        {route === 'admin' && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
         {route === 'history' && <HistoryView />}
+        {route === 'ludo' && <LudoView onBack={() => navigate('home')} />}
         {route === 'crash' && <CrashView />}
-        {route === 'aviator' && <AviatorView onExit={() => navigate('home')} />}
+        {route === 'aviator' && <AviatorView onBack={() => navigate('home')} />}
         {route === 'sunvsmoon' && <SunVsMoonView />}
         {route === 'trading' && <TradingGameView />}
-        {route === 'affiliate' && <AffiliatePortalView onExit={() => navigate('home')} />}
+        {route === 'affiliate' && <AffiliatePortalView onBack={() => navigate('home')} />}
         {route === 'landing' && <LandingPage onNavigate={navigate} />}
       </main>
 
-      {showBottomNav && <BottomNav active={route} onNavigate={navigate} />}
+      {showBottomNav && <BottomNav current={route} onNavigate={navigate} />}
 
       <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
       <ProfileDrawer
@@ -255,10 +256,9 @@ export default function App() {
       />
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
       <AuthModal open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
-      {staffSession && <AdminSupportNotification staffSession={staffSession} />}
+      {staffSession && <AdminSupportNotification />}
 
       {isLoggedIn && <BanPopup />}
-      <ToastHost />
     </div>
   );
 }
