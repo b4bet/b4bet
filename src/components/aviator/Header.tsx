@@ -47,13 +47,13 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
           )}
         </div>
         <p className="text-sm font-black text-white leading-none tracking-wide">
-          AERO<span className="text-aviator-red-bright">NIX</span>
+          AERO<span style={{ color: '#f43f5e' }}>NIX</span>
         </p>
       </div>
 
       {/* Right controls */}
       <div className="flex items-center gap-1.5">
-        {/* How to Play — icon badge only, no text */}
+        {/* How to Play */}
         <button
           onClick={() => setHowToOpen(true)}
           className="w-8 h-8 flex items-center justify-center rounded-lg bg-ink-700 hover:bg-ink-650 border border-ink-500/70 transition-colors"
