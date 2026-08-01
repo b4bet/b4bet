@@ -41,6 +41,9 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const selectedRef = useRef<ManualMethod | null>(null);
   selectedRef.current = selected;
 
+  // Track how many history entries we have pushed so we can clean up on unmount
+  const historyDepth = useRef(0);
+
   const showPopup = (title: string, body: string, kind: PopupKind = 'error') => {
     if (popupTimer.current) clearTimeout(popupTimer.current);
     if (popupFadeTimer.current) clearTimeout(popupFadeTimer.current);
@@ -71,23 +74,42 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   }, [open]);
 
-  // Mobile hardware back button support
+  // ── History / back-button management ────────────────────────────────────
+  // Strategy:
+  //   • When flow opens   → push 1 entry  { pmf: 'list' }   (historyDepth = 1)
+  //   • When method picked → push 2nd entry { pmf: 'form' }  (historyDepth = 2)
+  //   • All navigation goes through history.back() so popstate handles everything,
+  //     including the Android/iOS hardware back button.
+  //   • On cleanup we silently pop any remaining entries we pushed.
   useEffect(() => {
     if (!open) return;
-    window.history.pushState({ pmf: true }, '');
+
+    window.history.pushState({ pmf: 'list' }, '');
+    historyDepth.current = 1;
+
     const onPop = () => {
       if (selectedRef.current) {
-        // Go back to method list
+        // Was on form page → go back to method list, push list entry back
         setSelected(null);
         setSelectedCrypto(null);
-        window.history.pushState({ pmf: true }, '');
+        window.history.pushState({ pmf: 'list' }, '');
+        historyDepth.current = 1;
       } else {
-        // Close the flow
+        // Was on list page → close the flow entirely
+        historyDepth.current = 0;
         onCloseRef.current();
       }
     };
+
     window.addEventListener('popstate', onPop);
-    return () => window.removeEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      // Clean up any remaining entries we pushed (e.g. external close)
+      if (historyDepth.current > 0) {
+        window.history.go(-historyDepth.current);
+        historyDepth.current = 0;
+      }
+    };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) return null;
@@ -95,6 +117,20 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const user = session?.username ?? 'guest';
   const userId = session?.userId ?? null;
   const title = flow === 'deposit' ? 'Deposit' : 'Withdrawal';
+
+  // Select a payment method and push a form-level history entry
+  const handleSelectMethod = (m: ManualMethod) => {
+    window.history.pushState({ pmf: 'form' }, '');
+    historyDepth.current = 2;
+    setSelected(m);
+    setSelectedCrypto(null);
+  };
+
+  // X button on method-list page → go back through history (popstate → onClose)
+  const doClose = () => window.history.back();
+
+  // ← button on form page → go back through history (popstate → setSelected(null))
+  const handleBackToMethodList = () => window.history.back();
 
   const getEffectiveLimits = (): { min: number; max: number; gasFee?: number } => {
     if (!selected) return { min: 0, max: Infinity };
@@ -109,9 +145,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     return { min: selected.minAmount || 0, max: selected.maxAmount || Infinity };
   };
 
-  const doClose = () => onCloseRef.current();
-  const handleBackToMethodList = () => { setSelected(null); setSelectedCrypto(null); };
-
   const resetForm = () => {
     setAmount('');
     setUtr('');
@@ -120,6 +153,11 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     setSelectedCrypto(null);
     setSubmitting(false);
     setSelected(null);
+    // After success, go back to list-level history (pop form entry)
+    if (historyDepth.current === 2) {
+      window.history.go(-1);
+      historyDepth.current = 1;
+    }
   };
 
   const handleSubmit = async (e?: React.FormEvent | React.MouseEvent) => {
@@ -297,7 +335,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => setSelected(m)}
+                  onClick={() => handleSelectMethod(m)}
                   style={{ width: '100%', textAlign: 'left', padding: '14px 16px', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontWeight: 600, fontSize: 15, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
