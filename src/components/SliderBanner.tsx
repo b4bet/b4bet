@@ -68,7 +68,7 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
 
   return (
     <div
-      className="relative w-full overflow-hidden rounded-xl select-none"
+      className="relative w-full overflow-hidden rounded-xl select-none bg-black"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -85,14 +85,13 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
                 href={b.linkUrl || '#'}
                 onClick={(e) => { if (!b.linkUrl) e.preventDefault(); }}
                 style={{ minWidth: '100%', maxWidth: '100%' }}
-                className="relative block bg-black flex-shrink-0"
+                className="flex-shrink-0 block bg-black"
               >
-                {/* object-contain keeps the full image visible — no top/bottom crop */}
+                {/* width:100% height:auto — image shows fully, no crop ever */}
                 <img
                   src={b.imageUrl}
                   alt={b.title || 'Banner'}
-                  className="w-full h-full object-contain"
-                  style={{ display: 'block', maxHeight: '220px', width: '100%' }}
+                  style={{ display: 'block', width: '100%', height: 'auto' }}
                 />
               </a>
             ))
