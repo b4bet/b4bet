@@ -95,6 +95,16 @@ export default function App() {
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Auto-open signup modal when URL contains ?ref= (referral link)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('ref');
+    if (ref) {
+      setAuthModalMode('signup');
+      setAuthModalOpen(true);
+    }
+  }, []);
+
   // Clear the reload flag when maintenance is turned OFF so future ON triggers reload again
   useEffect(() => {
     if (maintenance && !maintenance.enabled) {
