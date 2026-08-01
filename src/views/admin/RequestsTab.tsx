@@ -27,10 +27,10 @@ type Period = 'all' | 'day' | 'week' | 'month' | 'year' | 'custom';
 type ActMode = 'accept' | 'cancel';
 type ActState = { id: string; mode: ActMode } | null;
 
-// 'All' option removed — default is always 'all' (show everything)
 const PERIODS: { key: Period; label: string }[] = [
-  { key: 'day', label: 'Day' }, { key: 'week', label: 'Week' },
-  { key: 'month', label: 'Month' }, { key: 'year', label: 'Year' }, { key: 'custom', label: 'Custom' },
+  { key: 'day', label: 'Today' }, { key: 'week', label: 'Week' },
+  { key: 'month', label: 'Month' }, { key: 'year', label: 'Year' },
+  { key: 'all', label: 'All' }, { key: 'custom', label: 'Custom' },
 ];
 const MS: Record<string, number> = { day: 86400000, week: 604800000, month: 2592000000, year: 31536000000 };
 
@@ -40,7 +40,7 @@ export default function RequestsTab() {
   const [loading, setLoading]           = useState(true);
   const [view, setView]                 = useState<'deposit' | 'withdrawal'>('deposit');
   const [query, setQuery]               = useState('');
-  const [period, setPeriod]             = useState<Period>('all');
+  const [period, setPeriod]             = useState<Period>('day');
   const [fromDate, setFromDate]         = useState('');
   const [toDate, setToDate]             = useState('');
   const [acting, setActing]             = useState<ActState>(null);
@@ -207,7 +207,7 @@ export default function RequestsTab() {
             )}
           </div>
 
-          {/* Period filter — placed directly above History for day/week/month/year filtering */}
+          {/* Period filter — placed directly above History */}
           <div className="space-y-2">
             <div className="flex items-center gap-2 flex-wrap">
               {PERIODS.map((p) => (
@@ -291,7 +291,6 @@ export default function RequestsTab() {
               {t.status === 'processing' && (
                 <button onClick={() => { setActing({ id: t.id, mode: 'accept' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold hover:text-emerald-200">Approve (UTR)</button>
               )}
-              {/* Cancel button — replaces Reject; for withdrawals it refunds the amount to user wallet */}
               <button onClick={() => { setActing({ id: t.id, mode: 'cancel' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-orange-500/20 border border-orange-500/40 text-orange-300 text-[10px] font-semibold hover:text-orange-200">Cancel</button>
             </div>
           )}
