@@ -1,5 +1,5 @@
 // crashEngine.ts — SERVER-SYNCED shared crash round.
-// Client polls crash_current_round every 150ms.
+// Client polls crash_current_round every 200ms.
 // On startup, loads last 20 rounds from server for history bar.
 // IMPORTANT: getState() and getBets() MUST exist — hooks.ts calls them as initial values.
 
@@ -67,7 +67,7 @@ interface EngineState {
   win: number | null;
   serverElapsedAtConnect: number;
   connectTime: number;
-  /** Server-known crash point used to trigger immediate local crash */
+  /** Server-known crash point used to cap animation overshoot */
   serverCrashPoint: number | null;
   /** Last server-reported elapsed_ms during flying — used to prevent overshoot */
   lastServerElapsedMs: number;
@@ -75,18 +75,15 @@ interface EngineState {
   countdownSetAt: number;
   /** Countdown value at the time it was last set by poll */
   countdownAtSet: number;
-  /** When the local engine pre-transitioned to flying (countdown hit 0) */
-  localFlyingStart: number | null;
 }
 
-// Faster polling for snappier crash/phase detection
-const POLL_MS = 150;
+const POLL_MS = 200;
 /**
  * Maximum ms the local animation is allowed to run ahead of the last
- * server-reported elapsed. Increased to 1200ms to absorb high-latency
- * poll responses without freezing the animation.
+ * server-reported elapsed. 1000ms absorbs typical network latency without
+ * freezing the animation.
  */
-const MAX_AHEAD_MS = 1200;
+const MAX_AHEAD_MS = 1000;
 const SESSION_ROUND_KEY = 'b4bet.crash.lastRoundId';
 const SESSION_PHASE_KEY = 'b4bet.crash.lastPhase';
 
@@ -210,7 +207,6 @@ class CrashEngine {
     lastServerElapsedMs: 0,
     countdownSetAt: Date.now(),
     countdownAtSet: 6,
-    localFlyingStart: null,
   };
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -220,6 +216,11 @@ class CrashEngine {
     (sessionStorage.getItem(SESSION_PHASE_KEY) as 'waiting' | 'flying' | 'crashed' | '') ?? '';
   private didPlayStart = false;
   private didPlayCrash = false;
+  /**
+   * Set to true when animate() fires the crash via serverCrashPoint.
+   * Prevents the next poll() from double-triggering the busted transition.
+   */
+  private locallyBusted = false;
 
   start() {
     if (this.pollTimer) return;
@@ -262,7 +263,7 @@ class CrashEngine {
         this.state.roundId = r.round_uuid ?? '';
         this.state.roundSeq += 1;
         this.state.lastServerElapsedMs = 0;
-        this.state.localFlyingStart = null;
+        this.locallyBusted = false;
         this.didPlayStart = false;
         this.didPlayCrash = false;
         this.broadcastBets();
@@ -273,21 +274,6 @@ class CrashEngine {
       try { sessionStorage.setItem(SESSION_PHASE_KEY, r.phase); } catch { /* ignore */ }
 
       if (r.phase === 'waiting') {
-        // If the local engine already pre-transitioned to flying (countdown hit 0),
-        // ignore stale waiting responses to avoid bouncing backwards.
-        if (this.state.phase === 'flying' || this.state.phase === 'busted') {
-          // Only revert to countdown if server insists we're still well within the wait window
-          const remaining = Math.max(0, (6000 - r.elapsed_ms) / 1000);
-          if (remaining > 0.3) {
-            // Enough countdown left — revert the pre-transition
-            this.state.phase = 'countdown';
-            this.state.localFlyingStart = null;
-          } else {
-            // Under 300ms left — keep flying, server is about to confirm anyway
-            return;
-          }
-        }
-
         const waitTotal = 6000;
         const remaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
         this.state.phase = 'countdown';
@@ -297,7 +283,7 @@ class CrashEngine {
         this.state.multiplier = 1.0;
         this.state.serverCrashPoint = null;
         this.state.lastServerElapsedMs = 0;
-        this.state.localFlyingStart = null;
+        this.locallyBusted = false;
         if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
           if (this.state.history[0] !== bp) {
@@ -309,19 +295,19 @@ class CrashEngine {
 
       if (r.phase === 'flying') {
         if (prevPhase !== 'flying') {
+          // Server just confirmed flying — set up startedAt from server elapsed
           this.state.phase = 'flying';
           this.state.serverElapsedAtConnect = r.elapsed_ms;
           this.state.connectTime = Date.now();
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.bustPoint = 0;
           this.state.lastServerElapsedMs = r.elapsed_ms;
-          this.state.localFlyingStart = null;
           if (!this.didPlayStart) {
             playStartSound();
             this.didPlayStart = true;
           }
         } else {
-          // Sync startedAt from server clock — keeps local multiplier aligned
+          // Already flying — re-sync startedAt to keep multiplier aligned with server
           this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.lastServerElapsedMs = r.elapsed_ms;
         }
@@ -336,19 +322,29 @@ class CrashEngine {
       if (r.phase === 'crashed') {
         if (prevPhase !== 'crashed') {
           const serverBust = r.crash_point != null ? Number(r.crash_point) : null;
-          this.state.phase = 'busted';
-          this.state.bustPoint = serverBust ?? this.state.multiplier;
-          this.state.multiplier = this.state.bustPoint;
-          this.state.serverCrashPoint = null;
-          this.state.lastServerElapsedMs = 0;
-          this.state.localFlyingStart = null;
-          if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
-          const bp = this.state.bustPoint;
-          if (this.state.history[0] !== bp) {
-            this.state.history = [bp, ...this.state.history].slice(0, 20);
-            this.publishHistory();
+
+          if (this.locallyBusted) {
+            // animate() already fired the crash — just correct the bust point from server
+            // and do NOT re-trigger sounds or settleBustedBets.
+            if (serverBust !== null) {
+              this.state.bustPoint = serverBust;
+              this.state.multiplier = serverBust;
+            }
+          } else {
+            // First time seeing crash — normal crash path
+            this.state.phase = 'busted';
+            this.state.bustPoint = serverBust ?? this.state.multiplier;
+            this.state.multiplier = this.state.bustPoint;
+            this.state.serverCrashPoint = null;
+            this.state.lastServerElapsedMs = 0;
+            if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
+            const bp = this.state.bustPoint;
+            if (this.state.history[0] !== bp) {
+              this.state.history = [bp, ...this.state.history].slice(0, 20);
+              this.publishHistory();
+            }
+            this.settleBustedBets();
           }
-          this.settleBustedBets();
         } else {
           this.state.phase = 'busted';
           if (r.crash_point) {
@@ -377,18 +373,21 @@ class CrashEngine {
 
       // If server has revealed the crash point and we've reached it,
       // immediately transition to busted without waiting for the next poll.
+      // Set locallyBusted so poll() knows not to double-fire.
       if (this.state.serverCrashPoint != null && m >= this.state.serverCrashPoint) {
+        m = this.state.serverCrashPoint;
         if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
         this.state.phase = 'busted';
         this.state.bustPoint = this.state.serverCrashPoint;
         this.state.multiplier = this.state.serverCrashPoint;
+        this.state.serverCrashPoint = null;
+        this.locallyBusted = true;
         const bp = this.state.bustPoint;
         if (this.state.history[0] !== bp) {
           this.state.history = [bp, ...this.state.history].slice(0, 20);
           this.publishHistory();
         }
         this.settleBustedBets();
-        this.state.serverCrashPoint = null;
         this.publish();
         this.rafId = requestAnimationFrame(() => this.animate());
         return;
@@ -400,26 +399,7 @@ class CrashEngine {
       this.publish();
     } else if (this.state.phase === 'countdown') {
       const elapsed = (Date.now() - this.state.countdownSetAt) / 1000;
-      const remaining = Math.max(0, this.state.countdownAtSet - elapsed);
-      this.state.countdown = remaining;
-
-      // When the local countdown hits exactly 0, pre-transition to flying
-      // immediately rather than freezing for up to POLL_MS while waiting for
-      // the server to confirm the flying phase. The next poll will correct
-      // startedAt precisely.
-      if (remaining === 0 && this.state.localFlyingStart === null) {
-        const now = Date.now();
-        this.state.localFlyingStart = now;
-        this.state.phase = 'flying';
-        this.state.startedAt = now;
-        this.state.lastServerElapsedMs = 0;
-        this.state.multiplier = 1.0;
-        if (!this.didPlayStart) {
-          playStartSound();
-          this.didPlayStart = true;
-        }
-      }
-
+      this.state.countdown = Math.max(0, this.state.countdownAtSet - elapsed);
       this.publish();
     }
     this.rafId = requestAnimationFrame(() => this.animate());
@@ -478,10 +458,8 @@ class CrashEngine {
       win: slot.win ?? 0,
     });
     if (slot.dbId) {
-      // DB row exists — update it
       void settlePendingBet(slot.dbId, slot.win ?? 0, cashOutAt, cashOutAt, this.state.bustPoint, 'won');
     } else {
-      // insertPendingBet still in flight — mark settled so the callback deletes the orphan
       slot.settledBeforeInsert = true;
       void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
     }
@@ -502,10 +480,8 @@ class CrashEngine {
         win: 0,
       });
       if (slot.dbId) {
-        // DB row exists — update it
         void settlePendingBet(slot.dbId, 0, bustPoint, null, bustPoint, 'lost');
       } else {
-        // insertPendingBet still in flight — mark settled so the callback deletes the orphan
         slot.settledBeforeInsert = true;
         void settleSlotOnServer(slot, roundId, bustPoint);
       }
@@ -549,7 +525,6 @@ class CrashEngine {
       void insertPendingBet(session.userId, amount, this.state.roundId).then((dbId) => {
         if (!dbId) return;
         if (slot.settledBeforeInsert) {
-          // Round ended before insert completed — delete the orphan row immediately
           void deletePendingBet(dbId);
         } else {
           slot.dbId = dbId;
