@@ -16,6 +16,15 @@ export default function CrashCanvas({ state }: Props) {
   const [, force] = useState(0);
   useEffect(() => bus.on(CrashSettingsTopic, (s) => { settingsRef.current = s as CrashUiSettings; force((n) => n + 1); }), []);
 
+  /**
+   * Once we've seen busted we latch it so the canvas color never flickers back
+   * to purple on the same round even if a stale poll briefly reports 'flying'.
+   */
+  const bustedLatchRef = useRef(false);
+  if (state.phase === 'busted') bustedLatchRef.current = true;
+  // Reset latch when a new round starts (countdown with multiplier back to 1)
+  if (state.phase === 'countdown') bustedLatchRef.current = false;
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -76,18 +85,26 @@ export default function CrashCanvas({ state }: Props) {
       ctx.lineTo(padX, h - padY);
       ctx.stroke();
 
-      if (settingsRef.current.animation && (s.phase === 'flying' || s.phase === 'busted')) {
-        // FIX: When busted, always use bustPoint for the curve endpoint.
-        // During flying, use the current multiplier (already capped by engine).
-        const m = s.phase === 'busted' ? s.bustPoint : s.multiplier;
-        // Map multiplier to curve. Use log scale capped.
+      // Treat countdown-at-zero the same as flying for visual purposes
+      // so there's no freeze between 0 and the first flying frame.
+      const effectivePhase =
+        s.phase === 'countdown' && s.countdown <= 0 ? 'flying' : s.phase;
+
+      // Use the latch to prevent a single-frame flicker back to purple
+      // if a stale poll arrives after the crash.
+      const isVisuallyBusted = bustedLatchRef.current || effectivePhase === 'busted';
+
+      if (settingsRef.current.animation && (effectivePhase === 'flying' || isVisuallyBusted)) {
+        const m = isVisuallyBusted ? s.bustPoint : s.multiplier;
         const maxM = Math.max(2, m * 1.25);
         const xRatio = Math.min(1, (Math.log(m)) / Math.log(maxM));
         const yRatio = 1 - Math.min(1, (m - 1) / (maxM - 1));
         const endX = padX + plotW * Math.max(0.05, xRatio);
         const endY = padY + plotH * yRatio;
 
-        const color = s.phase === 'busted' ? '#ff3366' : '#b15eff';
+        // Color is fixed once busted — never flickers back to purple
+        const color = isVisuallyBusted ? '#ff3366' : '#b15eff';
+
         // Area fill
         const grad = ctx.createLinearGradient(0, padY, 0, h - padY);
         grad.addColorStop(0, color + '55');
@@ -134,37 +151,37 @@ export default function CrashCanvas({ state }: Props) {
         ctx.fill();
       }
 
-      // Center multiplier text — responsive sizing for large multipliers
+      // Center multiplier text
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       let label: string;
       let labelColor: string;
       let labelSize: number;
-      if (s.phase === 'countdown') {
-        label = Math.ceil(s.countdown).toString();
-        labelColor = '#ffcc4d';
-        labelSize = 38;
-      } else if (s.phase === 'busted') {
-        // FIX: Always show bustPoint (server-authoritative crash value)
-        // Previously this could show a stale s.multiplier that was lower than actual
+
+      if (isVisuallyBusted) {
         label = 'FLEW AWAY ' + s.bustPoint.toFixed(2) + 'x';
         labelColor = '#ff3366';
         labelSize = Math.max(14, 18 - Math.log(s.bustPoint) * 1.5);
-      } else {
-        // Flying phase — show live multiplier (already capped by engine)
+      } else if (effectivePhase === 'flying') {
         const m = s.multiplier;
         label = m.toFixed(2) + 'x';
         labelColor = '#b15eff';
         labelSize = Math.max(18, 38 - Math.log(m) * 3);
+      } else {
+        // countdown > 0
+        label = Math.ceil(s.countdown).toString();
+        labelColor = '#ffcc4d';
+        labelSize = 38;
       }
+
       ctx.font = `700 ${labelSize}px Sora, sans-serif`;
       ctx.fillStyle = labelColor;
       ctx.shadowColor = labelColor;
-      ctx.shadowBlur = s.phase === 'busted' ? 8 : 16;
+      ctx.shadowBlur = isVisuallyBusted ? 8 : 16;
       ctx.fillText(label, w / 2, h / 2);
       ctx.shadowBlur = 0;
 
-      if (s.phase === 'countdown') {
+      if (effectivePhase === 'countdown' && s.countdown > 0) {
         ctx.font = '600 12px Inter, sans-serif';
         ctx.fillStyle = '#94a3b8';
         ctx.fillText('Next round starts in', w / 2, h / 2 - 28);
@@ -179,12 +196,11 @@ export default function CrashCanvas({ state }: Props) {
   return (
     <div className="relative rounded-2xl border border-borderline-900 overflow-hidden">
       <canvas ref={canvasRef} className="w-full h-44 sm:h-52 md:h-60 block" />
-      {state.phase === 'flying' && (
-        <div className="absolute top-3 left-3 chip bg-emeraldwin-500/15 border border-emeraldwin-500/40 text-emeraldwin-400 animate-pulse-glow">
-          <span className="w-1.5 h-1.5 rounded-full bg-emeraldwin-500 animate-ticker-blink" />
-          LIVE
-        </div>
-      )}
+      {/* LIVE badge — always visible, static dot (no blink) */}
+      <div className="absolute top-3 left-3 chip bg-emeraldwin-500/15 border border-emeraldwin-500/40 text-emeraldwin-400">
+        <span className="w-1.5 h-1.5 rounded-full bg-emeraldwin-500" />
+        LIVE
+      </div>
     </div>
   );
 }
