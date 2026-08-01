@@ -39,7 +39,7 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
       <div className="flex items-center gap-2 min-w-0">
         <div className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 bg-ink-700 border border-ink-500/60 grid place-items-center">
           {aviatorLogo ? (
-            <img src={aviatorLogo} alt="Aviator" className="w-full h-full object-cover" />
+            <img src={aviatorLogo} alt="Aeronix" className="w-full h-full object-cover" />
           ) : (
             <div className="w-full h-full bg-gradient-to-br from-red-600 to-orange-500 grid place-items-center">
               <Plane className="w-4 h-4 text-white" />
