@@ -46,7 +46,9 @@ export function Header({ balance, soundOn, musicOn, animationOn, onToggleSound, 
             </div>
           )}
         </div>
-        <p className="text-sm font-black text-white leading-none">Aviator</p>
+        <p className="text-sm font-black text-white leading-none tracking-wide">
+          AERO<span className="text-aviator-red-bright">NIX</span>
+        </p>
       </div>
 
       {/* Right controls */}
