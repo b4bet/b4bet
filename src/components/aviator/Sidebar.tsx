@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Send, Share2, Trophy, Users, User } from 'lucide-react';
+import { Send, Share2, Users, User } from 'lucide-react';
 import type { Phase } from './game/useAviatorGame';
 import {
   formatMoney,
@@ -29,14 +29,6 @@ export interface ChatMessage {
   system?: boolean;
 }
 
-interface TopWinRecord {
-  username: string;
-  bet_amount: number;
-  win_amount: number;
-  multiplier: number;
-  placed_at: string;
-}
-
 interface SidebarProps {
   phase: Phase;
   multiplier: number;
@@ -48,7 +40,7 @@ interface SidebarProps {
   canShareBet: boolean;
 }
 
-type Tab = 'all' | 'mine' | 'top';
+type Tab = 'all' | 'mine';
 
 async function fetchMyBetsHistory(): Promise<BetRecord[]> {
   const session = auth.getSession();
@@ -69,7 +61,6 @@ async function fetchMyBetsHistory(): Promise<BetRecord[]> {
         cash_out_at: number | null;
       }[];
     };
-    // FIX: use actual username from session, not hardcoded 'You'
     const playerName = session.username ?? 'You';
     return (data.bets ?? []).map((b) => ({
       id: b.id,
@@ -84,32 +75,6 @@ async function fetchMyBetsHistory(): Promise<BetRecord[]> {
   } catch {
     return [];
   }
-}
-
-// Use Supabase RPC directly — Edge Function requires VITE_SUPABASE_ANON_KEY
-// which is not set in production (only VITE_SUPABASE_PUBLISHABLE_KEY is set).
-// The supabase client has hardcoded fallback credentials so it always works.
-async function fetchTopWins(): Promise<TopWinRecord[]> {
-  try {
-    const { data, error } = await supabase.rpc('get_aviator_top_wins', { p_limit: 10 });
-    if (error) {
-      console.error('[Sidebar] fetchTopWins RPC error:', error.message);
-      return [];
-    }
-    return (data ?? []) as TopWinRecord[];
-  } catch (err) {
-    console.error('[Sidebar] fetchTopWins exception:', err);
-    return [];
-  }
-}
-
-// Stable avatar colors for top wins — computed once per username so they don't flicker
-const topWinColorCache = new Map<string, string>();
-function stableColor(username: string): string {
-  if (!topWinColorCache.has(username)) {
-    topWinColorCache.set(username, randomAvatarColor());
-  }
-  return topWinColorCache.get(username)!;
 }
 
 export function Sidebar({
@@ -128,9 +93,6 @@ export function Sidebar({
 
   const [historyMyBets, setHistoryMyBets] = useState<BetRecord[]>([]);
   const [historyLoaded, setHistoryLoaded] = useState(false);
-
-  const [topWins, setTopWins] = useState<TopWinRecord[]>([]);
-  const [topWinsLoading, setTopWinsLoading] = useState(false);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -152,16 +114,6 @@ export function Sidebar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
-  useEffect(() => {
-    if (tab === 'top') {
-      setTopWinsLoading(true);
-      void fetchTopWins().then((wins) => {
-        setTopWins(wins);
-        setTopWinsLoading(false);
-      }).catch(() => setTopWinsLoading(false));
-    }
-  }, [tab]);
-
   function send() {
     const text = input.trim();
     if (!text) return;
@@ -175,7 +127,7 @@ export function Sidebar({
     if (!existingIds.has(h.id)) combinedMyBets.push(h);
   }
 
-  const list = tab === 'all' ? allBets : tab === 'mine' ? combinedMyBets : [];
+  const list = tab === 'all' ? allBets : combinedMyBets;
 
   return (
     <div className="flex flex-col bg-[#151a27] rounded-xl mx-2 mb-2 overflow-hidden border border-white/5">
@@ -186,69 +138,25 @@ export function Sidebar({
         <SideTab active={tab === 'mine'} onClick={() => setTab('mine')} icon={<User className="w-3.5 h-3.5" />}>
           My Bets
         </SideTab>
-        <SideTab active={tab === 'top'} onClick={() => setTab('top')} icon={<Trophy className="w-3.5 h-3.5" />}>
-          Top
-        </SideTab>
       </div>
 
-      {tab !== 'top' && (
-        <>
-          <div className="grid grid-cols-4 gap-1 px-3 py-1.5 text-[10px] font-semibold text-white/30 uppercase tracking-wider">
-            <span className="col-span-2">Player</span>
-            <span className="text-right">Bet</span>
-            <span className="text-right">Win</span>
-          </div>
+      <div className="grid grid-cols-4 gap-1 px-3 py-1.5 text-[10px] font-semibold text-white/30 uppercase tracking-wider">
+        <span className="col-span-2">Player</span>
+        <span className="text-right">Bet</span>
+        <span className="text-right">Win</span>
+      </div>
 
-          <div className="max-h-48 overflow-y-auto">
-            {list.length === 0 ? (
-              <div className="text-center text-white/30 text-xs py-6">
-                {tab === 'mine'
-                  ? auth.getSession() ? 'No bets yet this session.' : 'Sign in to see your bets.'
-                  : 'Waiting for players to join…'}
-              </div>
-            ) : (
-              list.map((b) => <BetRow key={b.id} bet={b} phase={phase} multiplier={multiplier} />)
-            )}
+      <div className="max-h-48 overflow-y-auto">
+        {list.length === 0 ? (
+          <div className="text-center text-white/30 text-xs py-6">
+            {tab === 'mine'
+              ? auth.getSession() ? 'No bets yet this session.' : 'Sign in to see your bets.'
+              : 'Waiting for players to join…'}
           </div>
-        </>
-      )}
-
-      {tab === 'top' && (
-        <div className="max-h-64 overflow-y-auto">
-          {topWinsLoading ? (
-            <div className="text-center text-white/30 text-xs py-6">Loading…</div>
-          ) : topWins.length === 0 ? (
-            <div className="text-center text-white/30 text-xs py-6">No big wins recorded yet.</div>
-          ) : (
-            <div>
-              <div className="grid grid-cols-4 gap-1 px-3 py-1.5 text-[10px] font-semibold text-white/30 uppercase tracking-wider">
-                <span className="col-span-2">Player</span>
-                <span className="text-right">Bet</span>
-                <span className="text-right">Win</span>
-              </div>
-              {topWins.map((w, i) => (
-                <div key={i} className="grid grid-cols-4 gap-1 px-3 py-1.5 text-xs border-b border-white/5 last:border-0">
-                  <div className="col-span-2 flex items-center gap-2 min-w-0">
-                    <span className="text-yellow-400 font-bold text-[10px] w-4 flex-shrink-0">#{i + 1}</span>
-                    <div
-                      className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold text-white flex-shrink-0"
-                      style={{ background: stableColor(w.username) }}
-                    >
-                      {(w.username || 'P').slice(0, 2).toUpperCase()}
-                    </div>
-                    <span className="text-white/80 truncate">{w.username}</span>
-                  </div>
-                  <span className="text-right text-white/60">{formatMoney(w.bet_amount)}</span>
-                  <span className="text-right text-green-400 font-bold">
-                    {formatMoney(w.win_amount)}
-                    <span className="text-[10px] text-green-400/60 ml-1">{Number(w.multiplier).toFixed(2)}x</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+        ) : (
+          list.map((b) => <BetRow key={b.id} bet={b} phase={phase} multiplier={multiplier} />)
+        )}
+      </div>
 
       {canShareBet && (
         <div className="px-3 py-1.5 border-t border-white/5">
@@ -390,3 +298,6 @@ export function makeSimBet(roundId: number, phase: Phase, multiplier: number): B
     status: cashedOutAt !== null ? 'won' : 'pending',
   };
 }
+
+// Unused import kept for compatibility — supabase may be used by consumers
+void supabase;
