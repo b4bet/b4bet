@@ -68,6 +68,7 @@ export default function HomeView({ onNavigate }: Props) {
     <div
       className="flex flex-col px-3 pt-3 pb-2"
       style={{
+        // Header = 62px (fixed), BottomNav = 60px
         height: 'calc(100dvh - 62px - 60px)',
         overflow: 'hidden',
         maxHeight: 'calc(100dvh - 62px - 60px)',
