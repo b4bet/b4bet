@@ -61,7 +61,7 @@ interface EngineState {
   roundId: string;
   roundSeq: number;
   bustPoint: number;
-  history: number[]
+  history: number[];
   bets: { A: BetSlot; B: BetSlot };
   startedAt: number;
   win: number | null;
@@ -271,16 +271,24 @@ class CrashEngine {
         this.broadcastBets();
       }
 
+      // ── CRITICAL: Check early-return conditions BEFORE updating lastKnownPhase ──
+      // If we update lastKnownPhase first and then return early, the next poll
+      // will see an incorrect prevPhase and re-trigger "first time flying",
+      // resetting startedAt → 1x jump mid-flight.
+
+      if (r.phase === 'waiting' && this.state.phase === 'flying') {
+        // We've already pre-transitioned to flying locally (countdown hit 0).
+        // Server is just lagging. Ignore this poll entirely — do NOT update
+        // lastKnownPhase so it stays 'flying' and the upcoming server 'flying'
+        // response is treated as a re-sync, not a fresh start.
+        return;
+      }
+
       const prevPhase = this.lastKnownPhase;
       this.lastKnownPhase = r.phase;
       try { sessionStorage.setItem(SESSION_PHASE_KEY, r.phase); } catch { /* ignore */ }
 
       if (r.phase === 'waiting') {
-        // ── FIX: Once we've locally pre-transitioned to flying, NEVER revert. ──
-        // Any 'waiting' poll after local phase is 'flying' is just server lag.
-        // Reverting would cause: countdown reset → double sound → double launch.
-        if (this.state.phase === 'flying') return;
-
         const waitTotal = 6000;
         const serverRemaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
 
@@ -290,21 +298,16 @@ class CrashEngine {
         this.state.lastServerElapsedMs = 0;
         this.locallyBusted = false;
 
-        // ── FIX: Never jump the countdown backwards. ──
-        // Compute where the local countdown currently is. Only advance the
-        // reference if the server shows LESS time remaining (server is ahead
-        // of local). If server is behind (higher remaining), keep local running
-        // smoothly to avoid visible backward jumps (6→0→2→3 bug).
+        // Never jump the countdown backwards.
+        // Only re-anchor if server is ahead of local, or it's a fresh round.
         const localRemaining = Math.max(
           0,
           this.state.countdownAtSet - (Date.now() - this.state.countdownSetAt) / 1000,
         );
         if (newRound || serverRemaining < localRemaining - 0.05) {
-          // Server is ahead or it's a new round — re-anchor the reference.
           this.state.countdownAtSet = serverRemaining;
           this.state.countdownSetAt = Date.now();
         }
-        // else: server is behind local — keep the local clock running as-is.
 
         if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
@@ -425,9 +428,10 @@ class CrashEngine {
       this.state.countdown = remaining;
 
       // When countdown locally hits 0, immediately pre-transition to flying.
-      // Set lastKnownPhase = 'flying' so the next poll() treats the upcoming
-      // server 'flying' response as a re-sync (not a fresh start), preventing
-      // double sound and double launch.
+      // Set lastKnownPhase = 'flying' so the next poll() — if server still
+      // reports 'waiting' — skips the early-return without touching lastKnownPhase,
+      // and when server confirms 'flying', prevPhase is already 'flying'
+      // so we only re-sync the clock (no 1x reset, no double sound).
       if (remaining === 0 && this.state.phase === 'countdown') {
         this.state.phase = 'flying';
         this.state.startedAt = Date.now();
