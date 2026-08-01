@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { LogIn, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '../integrations/supabase/client';
 import { cms } from '../lib/cms';
-import { bus, Topics } from '../lib/bus';
+import { loginStaff } from '../lib/cms_staff_patch';
 import type { StaffRole, PermissionKey } from '../lib/cms';
 
 async function sha256Hex(plain: string): Promise<string> {
@@ -24,11 +24,7 @@ interface StaffRow {
   password_hash?: string;
 }
 
-interface AdminLoginPageProps {
-  onSuccess?: () => void;
-}
-
-export default function AdminLoginPage({ onSuccess }: AdminLoginPageProps) {
+export default function AdminLoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
@@ -118,11 +114,8 @@ export default function AdminLoginPage({ onSuccess }: AdminLoginPageProps) {
         cms.staff = cms.staff.map((s) => s.id === staffRow!.id ? { ...s, ...staffAccount } : s);
       }
 
-      // Use loginStaff() to set session + emit bus event so React state updates instantly
-      cms.loginStaff(staffRow.id);
-
-      // Call optional onSuccess callback for immediate parent state update
-      onSuccess?.();
+      // Use patch helper — sets session, persists to localStorage, emits bus event
+      loginStaff(staffRow.id);
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -160,7 +153,7 @@ export default function AdminLoginPage({ onSuccess }: AdminLoginPageProps) {
                 type={showPwd ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="········"
+                placeholder="\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7\u00b7"
                 className="input w-full pr-10"
                 disabled={loading}
               />
