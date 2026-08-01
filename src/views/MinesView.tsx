@@ -1,10 +1,10 @@
 /**
  * MinesView — server-side outcome version.
- * FIX: Persist active session to localStorage so navigating away and back
- * restores the game state (grid, revealed tiles, multiplier, session id).
- * FIX: Sticky header + history capped to 4 visible rows (rest scroll inside box).
- * FIX: Remove CASHED OUT overlay & New Game button — bet panel shows immediately.
- * FIX: Stake persists across rounds. Start Game is sticky at the bottom.
+ * FIX: Persist active session to localStorage.
+ * FIX: Sticky header + history capped to 4 visible rows.
+ * FIX: Remove CASHED OUT overlay & New Game button.
+ * FIX: Stake persists across rounds. Start Game inside bet panel (not sticky).
+ * FIX: Grid made compact so Start Game visible without scrolling.
  */
 
 import { useState, useCallback, useEffect } from 'react';
@@ -108,22 +108,16 @@ function useSupabaseMinesHistory() {
         if (!cancelled) { setRows([]); setError(null); }
         return;
       }
-
       setLoading(true);
       setError(null);
-
       try {
         const { data, error: rpcError } = await supabase.rpc('get_my_mines_bets');
-
         if (rpcError) {
-          console.error('[mines] rpc error:', rpcError);
           if (!cancelled) setError(rpcError.message);
           return;
         }
-
         if (!cancelled) setRows((data ?? []) as MinesBetRow[]);
       } catch (e) {
-        console.error('[mines] fetch exception:', e);
         if (!cancelled) setError(String(e));
       } finally {
         if (!cancelled) setLoading(false);
@@ -166,7 +160,7 @@ function Cell({
       type="button"
       onClick={() => onReveal(index)}
       disabled={isRevealed || !active}
-      className={`relative aspect-square rounded-xl border transition-all duration-200 ${
+      className={`relative aspect-square rounded-lg border transition-all duration-200 ${
         isRevealed
           ? isMine
             ? 'bg-coral-500/20 border-coral-500/60'
@@ -176,12 +170,12 @@ function Cell({
     >
       {isRevealed && cell === 'gem' && (
         <span className="absolute inset-0 flex items-center justify-center">
-          <Gem className="w-5 h-5 text-emeraldwin-400" />
+          <Gem className="w-4 h-4 text-emeraldwin-400" />
         </span>
       )}
       {isRevealed && isMine && (
         <span className="absolute inset-0 flex items-center justify-center">
-          <Bomb className="w-5 h-5 text-coral-400" />
+          <Bomb className="w-4 h-4 text-coral-400" />
         </span>
       )}
       {!isRevealed && active && (
@@ -238,7 +232,7 @@ export default function MinesView() {
     try {
       const res = await GameService.minesStart(session.userId, minesInput, amt);
       store.setBalance(res.balance_after);
-      const newState: ClientMinesState = {
+      setGame({
         active: true,
         sessionId: res.session_id,
         stake: amt,
@@ -250,8 +244,7 @@ export default function MinesView() {
         revealed: new Array(25).fill(false),
         busted: false,
         cashedOut: false,
-      };
-      setGame(newState);
+      });
     } catch (err) {
       cms.toast({ title: 'Could not start', body: err instanceof Error ? err.message : 'Server error', kind: 'alert' });
     } finally {
@@ -315,20 +308,13 @@ export default function MinesView() {
     }
   }, [game, refreshHistory]);
 
-  // When round ends (busted or cashedOut), reset grid but keep stake & minesInput
-  const resetForNewRound = useCallback(() => {
-    setGame(initialState(minesInput, parseFloat(stakeStr) || store.getGameDefaultBet('mines')));
-  }, [minesInput, stakeStr]);
-
   const isDisabled = loading;
   const limits = store.getGameLimits('mines');
   const stakeNum = parseFloat(stakeStr) || 0;
   const lastQuickRef = { current: null as number | null };
 
-  // Show bet controls when game is not active (includes after bust/cashout)
   const showBetControls = !game.active;
 
-  // ~4 history rows × ~44px each = 176px visible, rest scroll
   const HISTORY_ROW_HEIGHT = 44;
   const HISTORY_VISIBLE_ROWS = 4;
   const historyMaxHeight = HISTORY_ROW_HEIGHT * HISTORY_VISIBLE_ROWS;
@@ -337,7 +323,7 @@ export default function MinesView() {
     <div className="flex flex-col bg-midnight-900" style={{ height: 'calc(100dvh - 52px)' }}>
 
       {/* ── STICKY HEADER ── */}
-      <div className="sticky top-0 z-10 flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-borderline-900 bg-midnight-900/95 backdrop-blur-sm">
+      <div className="sticky top-0 z-10 flex-shrink-0 flex items-center justify-between px-4 py-2 border-b border-borderline-900 bg-midnight-900/95 backdrop-blur-sm">
         <div className="flex items-center gap-2.5">
           {gameLogos['mines'] ? (
             <img src={gameLogos['mines']} alt="Mines" className="w-7 h-7 rounded-lg object-cover" />
@@ -355,12 +341,11 @@ export default function MinesView() {
       </div>
 
       {/* ── SCROLLABLE CONTENT ── */}
-      {/* pb-20 reserves space for the sticky Start Game button */}
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2 pb-20">
+      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-2">
 
-        {/* Grid */}
-        <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-2.5">
-          <div className="grid grid-cols-5 gap-1.5">
+        {/* Grid — compact padding & gap to save vertical space */}
+        <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-1.5">
+          <div className="grid grid-cols-5 gap-1">
             {Array.from({ length: 25 }, (_, i) => (
               <Cell
                 key={i}
@@ -376,20 +361,20 @@ export default function MinesView() {
 
         {/* Multiplier display when active */}
         {game.active && (
-          <div className="flex items-center justify-between px-4 py-2 rounded-xl bg-slatepanel-800 border border-borderline-900">
+          <div className="flex items-center justify-between px-3 py-1.5 rounded-xl bg-slatepanel-800 border border-borderline-900">
             <div className="text-center">
               <p className="text-[9px] text-slate-500 uppercase tracking-widest">Current</p>
-              <p className="font-display font-extrabold text-emeraldwin-400 text-base tabular">{game.currentMultiplier.toFixed(2)}x</p>
+              <p className="font-display font-extrabold text-emeraldwin-400 text-sm tabular">{game.currentMultiplier.toFixed(2)}x</p>
             </div>
-            <div className="w-px h-7 bg-borderline-900" />
+            <div className="w-px h-6 bg-borderline-900" />
             <div className="text-center">
               <p className="text-[9px] text-slate-500 uppercase tracking-widest">Next gem</p>
-              <p className="font-display font-extrabold text-neon-300 text-base tabular">{game.nextMultiplier.toFixed(2)}x</p>
+              <p className="font-display font-extrabold text-neon-300 text-sm tabular">{game.nextMultiplier.toFixed(2)}x</p>
             </div>
-            <div className="w-px h-7 bg-borderline-900" />
+            <div className="w-px h-6 bg-borderline-900" />
             <div className="text-center">
               <p className="text-[9px] text-slate-500 uppercase tracking-widest">Gems found</p>
-              <p className="font-display font-extrabold text-white text-base tabular">{game.gemsFound}</p>
+              <p className="font-display font-extrabold text-white text-sm tabular">{game.gemsFound}</p>
             </div>
           </div>
         )}
@@ -414,19 +399,19 @@ export default function MinesView() {
           </button>
         )}
 
-        {/* Bet controls — shown when not active (fresh start OR after bust/cashout) */}
+        {/* Bet controls + Start Game — shown when not active */}
         {showBetControls && (
-          <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-2.5 space-y-2">
+          <div className="rounded-2xl border border-borderline-900 bg-slatepanel-900 p-2 space-y-2">
             {/* Mines count */}
             <div>
-              <label className="text-[10px] text-slate-500 uppercase tracking-widest mb-1.5 block text-center">Mines count</label>
-              <div className="flex gap-1.5 flex-wrap justify-center">
+              <label className="text-[10px] text-slate-500 uppercase tracking-widest mb-1 block text-center">Mines count</label>
+              <div className="flex gap-1 flex-wrap justify-center">
                 {[1, 2, 3, 5, 8, 10, 15].map((n) => (
                   <button
                     key={n}
                     type="button"
                     onClick={() => setMinesInput(n)}
-                    className={`px-3 py-1 rounded-lg text-xs font-bold border transition-all ${
+                    className={`px-2.5 py-0.5 rounded-lg text-xs font-bold border transition-all ${
                       minesInput === n
                         ? 'bg-neon-500/20 border-neon-400/60 text-neon-300'
                         : 'bg-slatepanel-800 border-borderline-800 text-slate-400 hover:border-slate-600'
@@ -447,7 +432,7 @@ export default function MinesView() {
                 </span>
               </div>
               <div
-                className="rounded-xl border border-borderline-900 p-2 flex flex-col gap-1.5"
+                className="rounded-xl border border-borderline-900 p-1.5 flex flex-col gap-1"
                 style={{ background: 'rgba(10,12,26,0.8)' }}
               >
                 <div className="flex items-center gap-2">
@@ -455,8 +440,7 @@ export default function MinesView() {
                     type="button"
                     onClick={() => {
                       const cur = parseFloat(stakeStr) || 0;
-                      const next = Math.max(limits.min, cur - 50);
-                      setStakeStr(String(next));
+                      setStakeStr(String(Math.max(limits.min, cur - 50)));
                     }}
                     className="w-7 h-7 grid place-items-center rounded-lg bg-slatepanel-800 border border-borderline-800 text-slate-200 active:scale-95 transition-transform"
                   >
@@ -473,8 +457,7 @@ export default function MinesView() {
                     type="button"
                     onClick={() => {
                       const cur = parseFloat(stakeStr) || 0;
-                      const next = Math.min(limits.max, cur + 50);
-                      setStakeStr(String(next));
+                      setStakeStr(String(Math.min(limits.max, cur + 50)));
                     }}
                     className="w-7 h-7 grid place-items-center rounded-lg bg-slatepanel-800 border border-borderline-800 text-slate-200 active:scale-95 transition-transform"
                   >
@@ -497,7 +480,7 @@ export default function MinesView() {
                             setStakeStr(String(v));
                           }
                         }}
-                        className="flex-1 py-1 rounded-lg text-[10px] tabular font-bold border border-borderline-800 bg-slatepanel-800 text-slate-300 active:scale-95 transition-transform"
+                        className="flex-1 py-0.5 rounded-lg text-[10px] tabular font-bold border border-borderline-800 bg-slatepanel-800 text-slate-300 active:scale-95 transition-transform"
                       >
                         {label}
                       </button>
@@ -512,6 +495,24 @@ export default function MinesView() {
                 Stake must be between {store.currency}{limits.min} and {store.currency}{limits.max.toLocaleString()}
               </p>
             )}
+
+            {/* Start Game button — inside bet panel, not sticky */}
+            <button
+              type="button"
+              disabled={isDisabled || stakeNum < limits.min || stakeNum > limits.max || stakeNum > balance}
+              onClick={() => void start()}
+              className="w-full py-2.5 rounded-xl font-display font-extrabold text-white text-base uppercase tracking-wider
+                         bg-gradient-to-r from-neon-500 to-emeraldwin-500 border border-neon-400/40
+                         active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed
+                         flex items-center justify-center gap-2"
+            >
+              {isDisabled ? (
+                <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
+              ) : (
+                <Play className="w-4 h-4" />
+              )}
+              Start Game
+            </button>
           </div>
         )}
 
@@ -564,48 +565,6 @@ export default function MinesView() {
         </div>
 
       </div>
-
-      {/* ── STICKY BOTTOM — Start Game button (only when not active) ── */}
-      {showBetControls && (
-        <div className="flex-shrink-0 px-3 py-2 border-t border-borderline-900 bg-midnight-900/95 backdrop-blur-sm">
-          {/* After bust show small result badge above button */}
-          {(game.busted || game.cashedOut) && (
-            <div className={`flex items-center justify-center gap-2 mb-2 text-xs font-semibold rounded-lg px-3 py-1.5 ${
-              game.busted
-                ? 'bg-coral-500/10 border border-coral-500/30 text-coral-300'
-                : 'bg-emeraldwin-500/10 border border-emeraldwin-500/30 text-emeraldwin-300'
-            }`}>
-              {game.busted ? (
-                <><Bomb className="w-3.5 h-3.5" /> Busted — {game.gemsFound} gem{game.gemsFound !== 1 ? 's' : ''} found</>
-              ) : (
-                <><HandCoins className="w-3.5 h-3.5" /> Won {store.currency}{(game.stake * game.currentMultiplier).toFixed(2)} · {game.currentMultiplier.toFixed(2)}x</>
-              )}
-            </div>
-          )}
-          <button
-            type="button"
-            disabled={isDisabled || stakeNum < limits.min || stakeNum > limits.max || stakeNum > balance}
-            onClick={() => {
-              // If previous round ended, reset grid first then start
-              if (game.busted || game.cashedOut) {
-                resetForNewRound();
-              }
-              void start();
-            }}
-            className="w-full py-3 rounded-xl font-display font-extrabold text-white text-base uppercase tracking-wider
-                       bg-gradient-to-r from-neon-500 to-emeraldwin-500 border border-neon-400/40
-                       active:scale-[0.98] transition-all disabled:opacity-40 disabled:cursor-not-allowed
-                       flex items-center justify-center gap-2"
-          >
-            {isDisabled ? (
-              <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
-            ) : (
-              <Play className="w-4 h-4" />
-            )}
-            Start Game
-          </button>
-        </div>
-      )}
     </div>
   );
 }
