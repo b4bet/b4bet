@@ -13,7 +13,6 @@ import ProfileView from './views/ProfileView';
 import ReferralView from './views/ReferralView';
 import AdminView from './views/AdminView';
 import HistoryView from './views/HistoryView';
-import LudoView from './views/LudoView';
 import SunVsMoonView from './views/SunVsMoonView';
 import TradingGameView from './views/TradingGameView';
 import AffiliatePortalView from './views/AffiliatePortalView';
@@ -68,9 +67,6 @@ function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdm
   return true;
 }
 
-// Game routes use their own internal header — main app header is hidden
-const GAME_ROUTES: Route[] = ['crash', 'mines', 'aviator', 'sunvsmoon', 'trading', 'ludo'];
-
 export default function App() {
   const staffSession = useStaffSession();
   const [route, setRoute] = useState<Route>(() => {
@@ -91,8 +87,6 @@ export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const routeRef = useRef<Route>(route);
-  routeRef.current = route;
 
   useEffect(() => {
     if (maintenance && !maintenance.enabled) {
@@ -104,6 +98,7 @@ export default function App() {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsLoggedIn(!!session);
     });
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
         auth.logout();
@@ -118,13 +113,16 @@ export default function App() {
   useEffect(() => {
     const isAdminRoute = window.location.pathname === '/aryan' ||
       window.location.hash === '#aryan' || window.location.hash === '#/aryan';
+
     const handleConfig = (cfg: MaintenanceConfig | null) => {
       if (cfg !== null) {
         setMaintenance(cfg);
         applyMaintenance(cfg, !!staffSession, isAdminRoute);
       }
     };
+
     void fetchMaintenanceConfig().then(handleConfig);
+
     const channel = supabase
       .channel('maintenance_mode_watch')
       .on(
@@ -142,15 +140,18 @@ export default function App() {
         },
       )
       .subscribe();
+
     pollTimerRef.current = setInterval(() => {
       void fetchMaintenanceConfig().then(handleConfig);
     }, 10_000);
+
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void fetchMaintenanceConfig().then(handleConfig);
       }
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
+
     return () => {
       void supabase.removeChannel(channel);
       if (pollTimerRef.current) clearInterval(pollTimerRef.current);
@@ -167,24 +168,6 @@ export default function App() {
     return off;
   }, []);
 
-  // Push a history entry when navigating to a game so Android back button works
-  useEffect(() => {
-    if (GAME_ROUTES.includes(route)) {
-      window.history.pushState({ gameRoute: route }, '');
-    }
-  }, [route]);
-
-  // Android/mobile back button — go home from game routes
-  useEffect(() => {
-    const onPopState = () => {
-      if (GAME_ROUTES.includes(routeRef.current)) {
-        setRoute('home');
-      }
-    };
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, []);
-
   const openAuthModal = (mode: AuthModalMode) => { setAuthModalMode(mode); setAuthModalOpen(true); };
   const navigate = (r: Route) => setRoute(r);
 
@@ -198,10 +181,7 @@ export default function App() {
     startAllPersistentGameEngines();
   }, []);
 
-  const isGameRoute = GAME_ROUTES.includes(route);
-  // Hide main header on game routes (each game has its own header)
-  const showHeader = !isGameRoute && route !== 'admin' && route !== 'affiliate' && route !== 'landing';
-  // BottomNav is always visible EXCEPT on admin, affiliate, landing
+  const showHeader = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
   const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
 
   const isAdminRoute = route === 'admin';
@@ -211,15 +191,15 @@ export default function App() {
   if (showMaintenance) {
     return (
       <MaintenancePage
-        title={maintenance.title}
-        message={maintenance.message}
-        estimatedTime={maintenance.estimated_time}
+        title={maintenance!.title}
+        message={maintenance!.message}
+        estimatedTime={maintenance!.estimated_time}
       />
     );
   }
 
   return (
-    <div className="min-h-screen bg-midnight-950 text-white">
+    <div className="min-h-screen bg-background text-foreground">
       <GeoBlockOverlay />
 
       {showHeader && (
@@ -232,14 +212,13 @@ export default function App() {
         />
       )}
 
-      {/* pt-[62px] only when main header is visible; game routes start from top */}
-      <main className={`${showHeader ? 'pt-[62px]' : ''} ${showBottomNav ? 'pb-[52px]' : ''}`}>
+      <main>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
-        {route === 'deposit' && <DepositView onNavigate={navigate} />}
-        {route === 'wallet' && <WalletView onNavigate={navigate} />}
-        {route === 'withdraw' && <WithdrawView onNavigate={navigate} />}
+        {route === 'deposit' && <DepositView />}
+        {route === 'wallet' && <WalletView />}
+        {route === 'withdraw' && <WithdrawView />}
         {route === 'profile' && (
           <ProfileView
             onNavigate={navigate}
@@ -250,17 +229,16 @@ export default function App() {
         )}
         {route === 'referral' && <ReferralView onOpenWallet={() => setWalletOpen(true)} />}
         {route === 'admin' && <AdminView onOpenWallet={() => setWalletOpen(true)} />}
-        {route === 'history' && <HistoryView onClose={() => navigate('home')} />}
-        {route === 'ludo' && <LudoView onBack={() => navigate('home')} />}
-        {route === 'crash' && <CrashView onBack={() => navigate('home')} />}
-        {route === 'aviator' && <AviatorView onBack={() => navigate('home')} />}
-        {route === 'sunvsmoon' && <SunVsMoonView onBack={() => navigate('home')} />}
-        {route === 'trading' && <TradingGameView onBack={() => navigate('home')} />}
-        {route === 'affiliate' && <AffiliatePortalView onBack={() => navigate('home')} />}
+        {route === 'history' && <HistoryView />}
+        {route === 'crash' && <CrashView />}
+        {route === 'aviator' && <AviatorView onExit={() => navigate('home')} />}
+        {route === 'sunvsmoon' && <SunVsMoonView />}
+        {route === 'trading' && <TradingGameView />}
+        {route === 'affiliate' && <AffiliatePortalView onExit={() => navigate('home')} />}
         {route === 'landing' && <LandingPage onNavigate={navigate} />}
       </main>
 
-      {showBottomNav && <BottomNav current={route} onNavigate={navigate} />}
+      {showBottomNav && <BottomNav active={route} onNavigate={navigate} />}
 
       <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
       <ProfileDrawer
@@ -272,7 +250,8 @@ export default function App() {
       />
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
       <AuthModal open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
-      {staffSession && <AdminSupportNotification />}
+      {staffSession && <AdminSupportNotification staffSession={staffSession} />}
+
       {isLoggedIn && <BanPopup />}
       <ToastHost />
     </div>
