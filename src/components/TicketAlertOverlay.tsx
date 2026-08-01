@@ -13,7 +13,11 @@ interface Toast {
   ts: number;
 }
 
-export default function TicketAlertOverlay() {
+interface Props {
+  onNavigate?: (tab: string) => void;
+}
+
+export default function TicketAlertOverlay({ onNavigate: _onNavigate }: Props) {
   const tickets = useTickets();
   const sessionId = useStaffSession();
   const staff = useStaff();
