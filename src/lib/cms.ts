@@ -710,6 +710,22 @@ class Cms {
   markSupportRead(id?: string) { this.support = this.support.map(s => (!id || s.id === id ? { ...s, read: true } : s)); this.emitSupport(); }
   unreadSupport() { return this.support.filter(s => !s.read).length; }
 
+  // ---- Staff Session Management ----
+
+  /** Login staff: set session id, persist to localStorage, and emit bus event for React state update */
+  loginStaff(staffId: string) {
+    this.staffSessionId = staffId;
+    try { localStorage.setItem(ADMIN_SESSION_KEY, staffId); } catch { /* ignore */ }
+    bus.emit(Topics.StaffSession, staffId);
+  }
+
+  /** Logout staff: clear session, remove from localStorage, and emit bus event so React updates instantly */
+  logoutStaff() {
+    this.staffSessionId = null;
+    try { localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* ignore */ }
+    bus.emit(Topics.StaffSession, null);
+  }
+
   createTicket(accountId: string, subject: string, message: string): SupportTicket {
     const ticket: SupportTicket = {
       id: Math.random().toString(36).slice(2), accountId, status: 'unassigned', assignedStaffId: null,
@@ -748,233 +764,102 @@ class Cms {
     const msg: TicketMessage = { id: Math.random().toString(36).slice(2), role, body, ts: Date.now(), attachments };
     this.tickets = this.tickets.map(t => {
       if (t.id !== id) return t;
-      const updated = { ...t, messages: [...t.messages, msg] };
+      const updated: SupportTicket = { ...t, messages: [...t.messages, msg] };
       if (role === 'user') updated.lastUserMsgTs = msg.ts;
       return updated;
-    });
-    this.emitTickets();
+    }); this.emitTickets();
+    if (role === 'user') {
+      rpc(supabase.rpc('user_post_ticket_message', { p_account_id: id, p_body: body }))
+        .then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {});
+    }
   }
 
-  getOrCreateDM(fromId: string, toId: string): StaffDM[] {
-    return this.staffDMs.filter(d => (d.fromId === fromId && d.toId === toId) || (d.fromId === toId && d.toId === fromId));
-  }
-
-  sendDM(fromId: string, toId: string, body: string) {
-    const dm: StaffDM = { id: Math.random().toString(36).slice(2), fromId, toId, body, ts: Date.now(), read: false };
-    this.staffDMs = [...this.staffDMs, dm]; this.emitDMs();
-  }
-
-  markDMRead(fromId: string, toId: string) {
-    this.staffDMs = this.staffDMs.map(d => d.fromId === fromId && d.toId === toId ? { ...d, read: true } : d); this.emitDMs();
-  }
-
-  unreadDMs(toId: string) { return this.staffDMs.filter(d => d.toId === toId && !d.read).length; }
-
-  async addStaff(name: string, password: string, role: StaffRole, email?: string) {
-    const { data, error } = await supabase.rpc('admin_create_staff', { p_name: name, p_password: password, p_role: role, p_email: email ?? null });
-    if (error) throw error;
-    await this.syncStaffFromSupabase();
-    return data;
-  }
-
-  async removeStaff(id: string) {
-    await supabase.rpc('admin_delete_staff', { p_id: id });
-    await this.syncStaffFromSupabase();
-  }
-
-  async updateStaffPermissions(id: string, permissions: Partial<Record<PermissionKey, boolean>>) {
-    await supabase.rpc('admin_update_staff_permissions', { p_id: id, p_permissions: permissions as unknown as string });
-    await this.syncStaffFromSupabase();
+  acknowledgeTicket(id: string) {
+    this.tickets = this.tickets.map(t => t.id === id ? { ...t, acknowledged: true } : t); this.emitTickets();
   }
 
   async adminLogin(name: string, password: string): Promise<StaffAccount | null> {
     try {
-      const { data, error } = await supabase.rpc('admin_login', { p_name: name, p_password: password });
-      if (error || !data) return null;
-      const rows = data as Array<Record<string, unknown>>;
-      if (!rows || rows.length === 0) return null;
-      const account = mapSupabaseStaff(rows[0]);
+      const account = this.staff.find(s => s.name === name && s.password === password);
+      if (!account) return null;
       this.staffSessionId = account.id;
       try { localStorage.setItem(ADMIN_SESSION_KEY, account.id); } catch { /* ignore */ }
       return account;
     } catch { return null; }
   }
 
-  adminLogout() {
-    this.staffSessionId = null;
-    try { localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* ignore */ }
+  addCountry(c: Omit<Country, 'id'>) {
+    const country: Country = { ...c, id: 'c_' + Math.random().toString(36).slice(2) };
+    this.countries = [...this.countries, country];
+    bus.emit(Topics.Countries, this.countries);
   }
-
-  getStaffById(id: string): StaffAccount | undefined { return this.staff.find(s => s.id === id); }
-  getCurrentStaff(): StaffAccount | undefined { return this.staffSessionId ? this.staff.find(s => s.id === this.staffSessionId) : undefined; }
-
-  loginStaff(id: string) {
-    this.staffSessionId = id;
-    try { localStorage.setItem(ADMIN_SESSION_KEY, id); } catch { /* ignore */ }
-  }
-
-  hasPermission(staffId: string, key: PermissionKey): boolean {
-    const s = this.staff.find(x => x.id === staffId);
-    if (!s) return false;
-    if (s.isOwner) return true;
-    return s.permissions[key] === true;
-  }
-
-  async saveReferralConfig(config: ReferralConfig) {
-    this.referralConfig = config;
-    bus.emit(Topics.ReferralConfig, this.referralConfig);
-    await rpc(supabase.rpc('admin_update_setting', { p_key: 'referral_config', p_value: config as unknown as string })).catch(() => {});
-  }
-
-  async loadReferrals() {
-    try {
-      const { data, error } = await supabase.rpc('admin_get_referrals');
-      if (error) { console.warn('[cms] loadReferrals error:', error.message); return; }
-      if (data && Array.isArray(data)) {
-        this.referrals = (data as Array<Record<string, unknown>>).map(r => ({
-          id: r.id as string,
-          referrerId: r.referrer_id as string,
-          referredUserId: r.referred_id as string,
-          referredUsername: (r.referred_username as string) || '',
-          depositAmount: Number(r.deposit_amount) || 0,
-          firstDepositApproved: (r.status as string) === 'credited',
-          rewardPaid: (r.status as string) === 'credited',
-          rewardCredited: (r.status as string) === 'credited',
-          rewardAmount: Number(r.bonus_amount) || 0,
-          createdAt: new Date(r.created_at as string).getTime(),
-          ts: new Date(r.created_at as string).getTime(),
-        }));
-        this.emitReferrals();
-      }
-    } catch (e) { console.warn('[cms] loadReferrals failed:', e); }
-  }
-
-  async loadAffiliates() {
-    try {
-      const { data, error } = await supabase.from('affiliates').select('*').order('created_at', { ascending: false });
-      if (error) { console.warn('[cms] loadAffiliates error:', error.message); return; }
-      if (data && Array.isArray(data)) {
-        this.affiliates = (data as Array<Record<string, unknown>>).map(a => ({
-          id: a.id as string,
-          userId: a.user_id as string,
-          username: (a.username as string) || '',
-          email: (a.email as string) || '',
-          telegram: (a.telegram as string) || '',
-          trafficSource: (a.traffic_source as string) || '',
-          estimatedTraffic: (a.estimated_traffic as string) || '',
-          status: (a.status as 'pending' | 'approved' | 'rejected') || 'pending',
-          revSharePct: Number(a.rev_share_pct) || 0,
-          stats: { clicks: 0, registered: 0, deposits: 0, revenueShare: 0 },
-          ts: new Date(a.created_at as string).getTime(),
-        }));
-        bus.emit(Topics.Affiliates, this.affiliates);
-      }
-    } catch (e) { console.warn('[cms] loadAffiliates failed:', e); }
-  }
-
-  async updateAffiliateStatus(id: string, status: 'approved' | 'rejected', revSharePct?: number) {
-    await supabase.from('affiliates').update({ status, ...(revSharePct !== undefined ? { rev_share_pct: revSharePct } : {}) }).eq('id', id);
-    await this.loadAffiliates();
-  }
-
-  isGeoBlocked(): boolean {
-    const country = this.countries.find(c => c.id === this.detectedCountryId);
-    return country ? !country.isActive : false;
-  }
-
-  get detectedCountry(): Country | undefined {
-    return this.countries.find(c => c.id === this.detectedCountryId);
-  }
-
-  setDetectedCountry(countryId: string) {
-    this.detectedCountryId = countryId;
-  }
-
-  addCountry(country: Omit<Country, 'id'>) {
-    const newCountry: Country = { ...country, id: 'c_' + Math.random().toString(36).slice(2) };
-    this.countries = [...this.countries, newCountry];
-  }
-
   updateCountry(id: string, patch: Partial<Country>) {
     this.countries = this.countries.map(c => c.id === id ? { ...c, ...patch } : c);
+    bus.emit(Topics.Countries, this.countries);
+  }
+  removeCountry(id: string) {
+    this.countries = this.countries.filter(c => c.id !== id);
+    bus.emit(Topics.Countries, this.countries);
   }
 
-  hasIpAlreadySignedUp(_ip: string): boolean {
-    return false;
+  addGateway(g: Omit<AutoGateway, 'id'>) {
+    const gateway: AutoGateway = { ...g, id: 'gw_' + Math.random().toString(36).slice(2) };
+    this.autoGateways = [...this.autoGateways, gateway]; this.emitGateways();
+  }
+  updateGateway(id: string, patch: Partial<AutoGateway>) {
+    this.autoGateways = this.autoGateways.map(g => g.id === id ? { ...g, ...patch } : g); this.emitGateways();
+  }
+  removeGateway(id: string) {
+    this.autoGateways = this.autoGateways.filter(g => g.id !== id); this.emitGateways();
   }
 
-  addManualMethod(method: Omit<ManualMethod, 'id'>) {
-    const newMethod: ManualMethod = { ...method, id: 'mm_' + Math.random().toString(36).slice(2) };
-    this.manualMethods = [...this.manualMethods, newMethod];
-    this.emitManual();
-    const details = { ...method };
+  addManualMethod(m: Omit<ManualMethod, 'id'>) {
+    const method: ManualMethod = { ...m, id: 'mm_' + Math.random().toString(36).slice(2) };
+    this.manualMethods = [...this.manualMethods, method]; this.emitManual();
     rpc(supabase.rpc('admin_upsert_payment_method', {
       p_id: null, p_method_type: method.kind, p_is_active: method.active,
-      p_account_details: details as unknown as string, p_countries: method.countries as unknown as string,
+      p_account_details: { ...method } as unknown as string,
     })).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
   }
-
   updateManualMethod(id: string, patch: Partial<ManualMethod>) {
-    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m);
-    this.emitManual();
-    const updated = this.manualMethods.find(m => m.id === id);
-    if (updated) {
+    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
+    const method = this.manualMethods.find(m => m.id === id);
+    if (method) {
       rpc(supabase.rpc('admin_upsert_payment_method', {
-        p_id: id, p_method_type: updated.kind, p_is_active: updated.active,
-        p_account_details: updated as unknown as string, p_countries: updated.countries as unknown as string,
+        p_id: id, p_method_type: method.kind, p_is_active: method.active,
+        p_account_details: { ...method } as unknown as string,
       })).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
     }
   }
-
   removeManualMethod(id: string) {
-    this.manualMethods = this.manualMethods.filter(m => m.id !== id);
-    this.emitManual();
+    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
     rpc(supabase.rpc('admin_delete_payment_method', { p_id: id })).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
   }
 
-  addAutoGateway(gateway: Omit<AutoGateway, 'id'>) {
-    const newGateway: AutoGateway = { ...gateway, id: 'ag_' + Math.random().toString(36).slice(2) };
-    this.autoGateways = [...this.autoGateways, newGateway];
-    this.emitGateways();
+  addReferral(r: Omit<Referral, 'id' | 'ts'>) {
+    const referral: Referral = { ...r, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.referrals = [...this.referrals, referral]; this.emitReferrals();
+  }
+  approveReferral(id: string) {
+    this.referrals = this.referrals.map(r => r.id === id ? { ...r, rewardPaid: true, paidAt: Date.now() } : r); this.emitReferrals();
   }
 
-  updateAutoGateway(id: string, patch: Partial<AutoGateway>) {
-    this.autoGateways = this.autoGateways.map(g => g.id === id ? { ...g, ...patch } : g);
-    this.emitGateways();
+  addAffiliate(a: Omit<AffiliateApplication, 'id' | 'ts'>) {
+    const app: AffiliateApplication = { ...a, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.affiliates = [...this.affiliates, app];
+    bus.emit(Topics.Affiliates, this.affiliates);
+  }
+  updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
+    bus.emit(Topics.Affiliates, this.affiliates);
   }
 
-  removeAutoGateway(id: string) {
-    this.autoGateways = this.autoGateways.filter(g => g.id !== id);
-    this.emitGateways();
+  async sendStaffDM(fromId: string, toId: string, body: string) {
+    const dm: StaffDM = { id: Math.random().toString(36).slice(2), fromId, toId, body, ts: Date.now(), read: false };
+    this.staffDMs = [...this.staffDMs, dm]; this.emitDMs();
   }
-
-  addReferral(referral: Omit<Referral, 'id' | 'ts'>) {
-    const newReferral: Referral = { ...referral, id: 'ref_' + Math.random().toString(36).slice(2), ts: Date.now() };
-    this.referrals = [...this.referrals, newReferral];
-    this.emitReferrals();
-  }
-
-  updateReferralReward(id: string, patch: Partial<Pick<Referral, 'rewardPaid' | 'rewardCredited' | 'paidAt'>>) {
-    this.referrals = this.referrals.map(r => r.id === id ? { ...r, ...patch } : r);
-    this.emitReferrals();
-  }
-
-  recordReferralSignup(referrerId: string, referredUserId: string, referredUsername: string) {
-    const existing = this.referrals.find(r => r.referredUserId === referredUserId);
-    if (existing) return;
-    void supabase.rpc('record_referral_signup', { p_referrer_id: referrerId, p_referred_id: referredUserId }).catch(() => {});
-  }
-
-  sendStaffDM(fromId: string, toId: string, body: string) {
-    this.sendDM(fromId, toId, body);
-  }
-
-  staffConversation(staffId1: string, staffId2: string): StaffDM[] {
-    return this.getOrCreateDM(staffId1, staffId2);
-  }
-
-  async verifyStaffCredentialsAsync(name: string, password: string): Promise<StaffAccount | null> {
-    return this.adminLogin(name, password);
+  markDMsRead(fromId: string) {
+    this.staffDMs = this.staffDMs.map(d => d.fromId === fromId ? { ...d, read: true } : d); this.emitDMs();
   }
 }
 

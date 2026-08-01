@@ -24,7 +24,11 @@ interface StaffRow {
   password_hash?: string;
 }
 
-export default function AdminLoginPage() {
+interface AdminLoginPageProps {
+  onSuccess?: () => void;
+}
+
+export default function AdminLoginPage({ onSuccess }: AdminLoginPageProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPwd, setShowPwd] = useState(false);
@@ -114,11 +118,11 @@ export default function AdminLoginPage() {
         cms.staff = cms.staff.map((s) => s.id === staffRow!.id ? { ...s, ...staffAccount } : s);
       }
 
-      // Set session directly + emit bus so useStaffSession() React state updates instantly
-      // without needing a page refresh
-      cms.staffSessionId = staffRow.id;
-      try { localStorage.setItem('b4bet.admin.session', staffRow.id); } catch { /* ignore */ }
-      bus.emit(Topics.StaffSession, staffRow.id);
+      // Use loginStaff() to set session + emit bus event so React state updates instantly
+      cms.loginStaff(staffRow.id);
+
+      // Call optional onSuccess callback for immediate parent state update
+      onSuccess?.();
 
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
