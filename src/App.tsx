@@ -212,7 +212,8 @@ export default function App() {
         />
       )}
 
-      <main>
+      {/* pt-[62px] matches the fixed header height so content is never hidden behind it */}
+      <main className={showHeader ? 'pt-[62px]' : ''}>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
