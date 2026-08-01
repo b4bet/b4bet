@@ -179,7 +179,9 @@ class AuthManager {
         // IP logging — fire and forget
         const ipPromise = logIpWithFallback(data.user!.id, data.session?.access_token, 'signup');
 
-        // Upsert profile
+        // IMPORTANT: Upsert profile FIRST and await it.
+        // referrals table has a FK on profiles.id — inserting referral before
+        // profile exists causes a FK violation and silently drops the referral.
         const { error: profileErr } = await supabase.from('profiles').upsert({
           id: data.user!.id, username: uname, display_name: uname, phone: umobile,
           balance: 0, total_deposit: 0, total_withdrawal: 0, vip_level: 0, is_admin: false,
@@ -202,18 +204,19 @@ class AuthManager {
         // Send welcome email
         emailService.sendWelcome(umail, uname);
 
-        // Record referral if we found a valid referrer
+        // Record referral AFTER profile is upserted (FK constraint on referrals.referred_id → profiles.id)
         if (uref && referrerId) {
           cms.recordReferralSignup(
             { id: data.user!.id, accountId, username: uname, email: umail, mobile: umobile, referralCode: uref, createdAt: Date.now(), isActive: true },
             referrerId,
           );
-          void supabase.rpc('record_referral', {
+          const { error: refErr } = await supabase.rpc('record_referral', {
             p_referrer_id: referrerId,
             p_referred_id: data.user!.id,
             p_bonus_amount: 0,
             p_status: 'pending',
-          }).catch((e: unknown) => { console.error('[auth] record_referral error:', e); });
+          });
+          if (refErr) console.error('[auth] record_referral error:', refErr);
         }
 
         cms.pushFromTemplate('nt_welcome', 'Welcome!', `Account created. Welcome, ${uname}!`, 'success');
