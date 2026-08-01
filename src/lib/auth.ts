@@ -206,10 +206,9 @@ class AuthManager {
 
         // Record referral AFTER profile is upserted (FK constraint on referrals.referred_id → profiles.id)
         if (uref && referrerId) {
-          cms.recordReferralSignup(
-            { id: data.user!.id, accountId, username: uname, email: umail, mobile: umobile, referralCode: uref, createdAt: Date.now(), isActive: true },
-            referrerId,
-          );
+          // cms.recordReferralSignup(referrerId, referredUserId, referredUsername)
+          cms.recordReferralSignup(referrerId, data.user!.id, uname);
+
           const { error: refErr } = await supabase.rpc('record_referral', {
             p_referrer_id: referrerId,
             p_referred_id: data.user!.id,
