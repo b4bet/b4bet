@@ -613,18 +613,21 @@ class Cms {
       }
     }
     if (status === 'approved') {
-      const { error: creditErr } = await supabase.rpc('admin_approve_deposit_credit', { p_txn_id: id });
-      if (creditErr) { this.toast({ title: 'Balance credit failed', body: creditErr.message, kind: 'alert' }); }
-      if (before?.userId) {
-        const { data: rewardResult, error: rewardErr } = await supabase.rpc(
-          'process_referral_reward',
-          { p_referred_user_id: before.userId, p_deposit_amount: before.amount },
-        );
-        if (rewardErr) {
-          console.warn('[cms] process_referral_reward error:', rewardErr.message);
-        } else if (rewardResult && (rewardResult as { credited: boolean }).credited) {
-          const reward = (rewardResult as { reward: number }).reward;
-          this.pushFromTemplate('nt_referral_reward', 'Referral Reward Credited', `A referral reward of ${store.currency}${reward} was credited to the referrer.`, 'success');
+      // admin_approve_deposit_credit handles: balance credit + referral reward + in-app notification to referrer
+      const { data: creditResult, error: creditErr } = await supabase.rpc('admin_approve_deposit_credit', { p_txn_id: id });
+      if (creditErr) {
+        this.toast({ title: 'Balance credit failed', body: creditErr.message, kind: 'alert' });
+      } else {
+        // Show admin toast if a referral reward was credited
+        const result = creditResult as { credited: boolean; reward?: number; referred_name?: string } | null;
+        if (result?.credited && result.reward) {
+          const referredName = result.referred_name ?? 'user';
+          this.pushFromTemplate(
+            'nt_referral_reward',
+            'Referral Reward Credited',
+            `${referredName} ka deposit approve hua. Referrer ko ₹${result.reward} bonus mila!`,
+            'success',
+          );
         }
       }
     }
@@ -750,245 +753,117 @@ class Cms {
       return updated;
     });
     this.emitTickets();
-    if (role === 'user') {
-      rpc(supabase.rpc('user_post_ticket_message', { p_account_id: id, p_body: body }))
-        .then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {});
-    }
   }
 
-  sendStaffDM(fromId: string, toId: string, body: string) {
+  getOrCreateDM(fromId: string, toId: string): StaffDM[] {
+    return this.staffDMs.filter(d => (d.fromId === fromId && d.toId === toId) || (d.fromId === toId && d.toId === fromId));
+  }
+
+  sendDM(fromId: string, toId: string, body: string) {
     const dm: StaffDM = { id: Math.random().toString(36).slice(2), fromId, toId, body, ts: Date.now(), read: false };
     this.staffDMs = [...this.staffDMs, dm]; this.emitDMs();
   }
 
-  staffConversation(staffId1: string, staffId2: string): StaffDM[] {
-    return this.staffDMs.filter(d => (d.fromId === staffId1 && d.toId === staffId2) || (d.fromId === staffId2 && d.toId === staffId1));
+  markDMRead(fromId: string, toId: string) {
+    this.staffDMs = this.staffDMs.map(d => d.fromId === fromId && d.toId === toId ? { ...d, read: true } : d); this.emitDMs();
   }
 
-  markDMsRead(fromId: string, toId: string) {
-    this.staffDMs = this.staffDMs.map(d => d.fromId === fromId && d.toId === toId ? { ...d, read: true } : d);
-    this.emitDMs();
+  unreadDMs(toId: string) { return this.staffDMs.filter(d => d.toId === toId && !d.read).length; }
+
+  async addStaff(name: string, password: string, role: StaffRole, email?: string) {
+    const { data, error } = await supabase.rpc('admin_create_staff', { p_name: name, p_password: password, p_role: role, p_email: email ?? null });
+    if (error) throw error;
+    await this.syncStaffFromSupabase();
+    return data;
   }
 
-  get currentStaff(): StaffAccount | null {
-    if (!this.staffSessionId) return null;
-    return this.staff.find(s => s.id === this.staffSessionId) ?? null;
+  async removeStaff(id: string) {
+    await supabase.rpc('admin_delete_staff', { p_id: id });
+    await this.syncStaffFromSupabase();
   }
 
-  hasPermission(key: PermissionKey): boolean {
-    const s = this.currentStaff;
-    if (!s) return false;
-    if (s.isOwner) return true;
-    return Boolean(s.permissions[key]);
+  async updateStaffPermissions(id: string, permissions: Partial<Record<PermissionKey, boolean>>) {
+    await supabase.rpc('admin_update_staff_permissions', { p_id: id, p_permissions: permissions as unknown as string });
+    await this.syncStaffFromSupabase();
   }
 
-  async loginStaff(id: string): Promise<StaffAccount | null> {
+  async adminLogin(name: string, password: string): Promise<StaffAccount | null> {
     try {
-      const { data, error } = await supabase.rpc('staff_login', { p_id: id });
-      if (error || !data) {
-        const found = this.staff.find(s => s.id === id);
-        if (found) {
-          this.staffSessionId = id;
-          try { localStorage.setItem(ADMIN_SESSION_KEY, id); } catch { /* ignore */ }
-          this.emitStaff();
-          return found;
-        }
-        return null;
-      }
-      const account = mapSupabaseStaff(data as Record<string, unknown>);
+      const { data, error } = await supabase.rpc('admin_login', { p_name: name, p_password: password });
+      if (error || !data) return null;
+      const rows = data as Array<Record<string, unknown>>;
+      if (!rows || rows.length === 0) return null;
+      const account = mapSupabaseStaff(rows[0]);
       this.staffSessionId = account.id;
-      if (!this.staff.find(s => s.id === account.id)) {
-        this.staff = [...this.staff, account];
-      } else {
-        this.staff = this.staff.map(s => s.id === account.id ? account : s);
-      }
       try { localStorage.setItem(ADMIN_SESSION_KEY, account.id); } catch { /* ignore */ }
-      this.emitStaff();
       return account;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
-  logoutStaff() {
+  adminLogout() {
     this.staffSessionId = null;
     try { localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* ignore */ }
-    this.emitStaff();
   }
 
-  async verifyStaffCredentialsAsync(name: string, password: string): Promise<StaffAccount | null> {
-    try {
-      const { data, error } = await supabase.rpc('staff_login_by_credentials', { p_name: name, p_password: password });
-      if (error || !data) return null;
-      return mapSupabaseStaff(data as Record<string, unknown>);
-    } catch {
-      return null;
-    }
-  }
+  getStaffById(id: string): StaffAccount | undefined { return this.staff.find(s => s.id === id); }
+  getCurrentStaff(): StaffAccount | undefined { return this.staffSessionId ? this.staff.find(s => s.id === this.staffSessionId) : undefined; }
 
-  async addStaff(name: string, password: string, role: StaffRole, permissions: Partial<Record<PermissionKey, boolean>> = {}): Promise<StaffAccount | null> {
-    try {
-      const { data, error } = await supabase.rpc('add_staff_member', { p_name: name, p_password: password, p_role: role, p_permissions: permissions });
-      if (error || !data) {
-        const rec: StaffAccount = { id: Math.random().toString(36).slice(2), name, password: '', role, online: false, permissions };
-        this.staff = [...this.staff, rec]; this.emitStaff();
-        return rec;
-      }
-      const account = mapSupabaseStaff(data as Record<string, unknown>);
-      this.staff = [...this.staff, account]; this.emitStaff();
-      return account;
-    } catch {
-      return null;
-    }
-  }
-
-  async addStaffAccount(name: string, _email: string, password: string, role: StaffRole, permissions: Partial<Record<PermissionKey, boolean>> = {}): Promise<StaffAccount | null> {
-    return this.addStaff(name, password, role, permissions);
-  }
-
-  async setStaffPermission(staffId: string, key: PermissionKey, value: boolean) {
-    this.staff = this.staff.map(s => s.id === staffId ? { ...s, permissions: { ...s.permissions, [key]: value } } : s);
-    this.emitStaff();
-    await rpc(supabase.rpc('update_staff_permission', { p_id: staffId, p_key: key, p_value: value })).catch(() => {});
-  }
-
-  async updateStaffPassword(staffId: string, newPassword: string) {
-    await rpc(supabase.rpc('update_staff_password', { p_id: staffId, p_password: newPassword })).catch(() => {});
-  }
-
-  async changeStaffPassword(staffId: string, oldPassword: string, newPassword: string): Promise<boolean> {
-    try {
-      const { data, error } = await supabase.rpc('change_staff_password', { p_id: staffId, p_old_password: oldPassword, p_new_password: newPassword });
-      if (error) return false;
-      return Boolean(data);
-    } catch {
-      return false;
-    }
-  }
-
-  async removeStaff(staffId: string) {
-    this.staff = this.staff.filter(s => s.id !== staffId); this.emitStaff();
-    await rpc(supabase.rpc('deactivate_staff', { p_id: staffId })).catch(() => {});
-  }
-
-  addManualMethod(method: Omit<ManualMethod, 'id'>) {
-    const rec: ManualMethod = { ...method, id: Math.random().toString(36).slice(2) };
-    this.manualMethods = [...this.manualMethods, rec]; this.emitManual();
-    rpc(supabase.rpc('admin_upsert_payment_method', { p_id: null, p_method_type: rec.kind, p_account_details: rec as unknown as string, p_is_active: rec.active }))
-      .then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
-  }
-
-  updateManualMethod(id: string, patch: Partial<ManualMethod>) {
-    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
-    const updated = this.manualMethods.find(m => m.id === id);
-    if (updated) {
-      rpc(supabase.rpc('admin_upsert_payment_method', { p_id: id, p_method_type: updated.kind, p_account_details: updated as unknown as string, p_is_active: updated.active }))
-        .then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
-    }
-  }
-
-  removeManualMethod(id: string) {
-    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
-    rpc(supabase.rpc('admin_delete_payment_method', { p_id: id })).catch(() => {});
-  }
-
-  addAutoGateway(gw: Omit<AutoGateway, 'id'>) {
-    const rec: AutoGateway = { ...gw, id: Math.random().toString(36).slice(2) };
-    this.autoGateways = [...this.autoGateways, rec]; this.emitGateways();
-  }
-
-  updateAutoGateway(id: string, patch: Partial<AutoGateway>) {
-    this.autoGateways = this.autoGateways.map(g => g.id === id ? { ...g, ...patch } : g); this.emitGateways();
-  }
-
-  removeAutoGateway(id: string) {
-    this.autoGateways = this.autoGateways.filter(g => g.id !== id); this.emitGateways();
-  }
-
-  isGeoBlocked(): boolean {
-    const country = this.countries.find(c => c.id === this.detectedCountryId);
-    return country ? !country.isActive : false;
-  }
-
-  get detectedCountry(): Country | undefined {
-    return this.countries.find(c => c.id === this.detectedCountryId);
-  }
-
-  setDetectedCountry(countryId: string) {
-    this.detectedCountryId = countryId;
-  }
-
-  addCountry(country: Omit<Country, 'id'>) {
-    const rec: Country = { ...country, id: 'c_' + Math.random().toString(36).slice(2) };
-    this.countries = [...this.countries, rec];
-  }
-
-  updateCountry(id: string, patch: Partial<Country>) {
-    this.countries = this.countries.map(c => c.id === id ? { ...c, ...patch } : c);
-  }
-
-  async hasIpAlreadySignedUp(ip: string): Promise<boolean> {
-    try {
-      const { data } = await supabase.rpc('check_ip_signup', { p_ip: ip });
-      return Boolean(data);
-    } catch {
-      return false;
-    }
-  }
-
-  recordReferralSignup(referrerId: string, referredUserId: string, referredUsername: string) {
-    const rec: Referral = {
-      id: Math.random().toString(36).slice(2), referrerId, referredUserId, referredUsername,
-      depositAmount: 0, firstDepositApproved: false, rewardPaid: false, rewardCredited: false,
-      rewardAmount: this.referralConfig.rewardAmount, createdAt: Date.now(), ts: Date.now(),
-    };
-    this.referrals = [...this.referrals, rec]; this.emitReferrals();
-  }
-
-  updateReferralReward(referralId: string, patch: Partial<Referral>) {
-    this.referrals = this.referrals.map(r => r.id === referralId ? { ...r, ...patch } : r);
-    this.emitReferrals();
-  }
-
-  updateReferralConfig(patch: Partial<ReferralConfig>) {
-    this.referralConfig = { ...this.referralConfig, ...patch };
+  async saveReferralConfig(config: ReferralConfig) {
+    this.referralConfig = config;
     bus.emit(Topics.ReferralConfig, this.referralConfig);
-    void rpc(supabase.rpc('admin_update_setting', { p_key: 'referral_config', p_value: this.referralConfig as unknown as string })).catch(() => {});
+    await rpc(supabase.rpc('admin_update_setting', { p_key: 'referral_config', p_value: config as unknown as string })).catch(() => {});
   }
 
-  addReferral(referral: Omit<Referral, 'id' | 'ts'>) {
-    const rec: Referral = { ...referral, id: Math.random().toString(36).slice(2), ts: Date.now() };
-    this.referrals = [...this.referrals, rec]; this.emitReferrals();
+  async loadReferrals() {
+    try {
+      const { data, error } = await supabase.rpc('admin_get_referrals');
+      if (error) { console.warn('[cms] loadReferrals error:', error.message); return; }
+      if (data && Array.isArray(data)) {
+        this.referrals = (data as Array<Record<string, unknown>>).map(r => ({
+          id: r.id as string,
+          referrerId: r.referrer_id as string,
+          referredUserId: r.referred_id as string,
+          referredUsername: (r.referred_username as string) || '',
+          depositAmount: Number(r.deposit_amount) || 0,
+          firstDepositApproved: (r.status as string) === 'credited',
+          rewardPaid: (r.status as string) === 'credited',
+          rewardCredited: (r.status as string) === 'credited',
+          rewardAmount: Number(r.bonus_amount) || 0,
+          createdAt: new Date(r.created_at as string).getTime(),
+          ts: new Date(r.created_at as string).getTime(),
+        }));
+        this.emitReferrals();
+      }
+    } catch (e) { console.warn('[cms] loadReferrals failed:', e); }
   }
 
   async loadAffiliates() {
     try {
-      const { data } = await supabase.from('affiliate_applications').select('*').order('created_at', { ascending: false });
+      const { data, error } = await supabase.from('affiliates').select('*').order('created_at', { ascending: false });
+      if (error) { console.warn('[cms] loadAffiliates error:', error.message); return; }
       if (data && Array.isArray(data)) {
-        this.affiliates = (data as Array<Record<string, unknown>>).map(r => ({
-          id: r.id as string, userId: (r.user_id as string) || '', username: (r.username as string) || '',
-          email: (r.email as string) || '', telegram: (r.telegram as string) || '',
-          trafficSource: (r.traffic_source as string) || '', estimatedTraffic: (r.estimated_traffic as string) || '',
-          status: (r.status as AffiliateApplication['status']) || 'pending',
-          revSharePct: Number(r.rev_share_pct) || 0,
+        this.affiliates = (data as Array<Record<string, unknown>>).map(a => ({
+          id: a.id as string,
+          userId: a.user_id as string,
+          username: (a.username as string) || '',
+          email: (a.email as string) || '',
+          telegram: (a.telegram as string) || '',
+          trafficSource: (a.traffic_source as string) || '',
+          estimatedTraffic: (a.estimated_traffic as string) || '',
+          status: (a.status as 'pending' | 'approved' | 'rejected') || 'pending',
+          revSharePct: Number(a.rev_share_pct) || 0,
           stats: { clicks: 0, registered: 0, deposits: 0, revenueShare: 0 },
-          ts: new Date(r.created_at as string).getTime(),
+          ts: new Date(a.created_at as string).getTime(),
         }));
         bus.emit(Topics.Affiliates, this.affiliates);
       }
     } catch (e) { console.warn('[cms] loadAffiliates failed:', e); }
   }
 
-  async updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
-    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
-    bus.emit(Topics.Affiliates, this.affiliates);
-    if (patch.status) {
-      await supabase.from('affiliate_applications').update({ status: patch.status, rev_share_pct: patch.revSharePct ?? 0 }).eq('id', id).catch(() => {});
-    }
+  async updateAffiliateStatus(id: string, status: 'approved' | 'rejected', revSharePct?: number) {
+    await supabase.from('affiliates').update({ status, ...(revSharePct !== undefined ? { rev_share_pct: revSharePct } : {}) }).eq('id', id);
+    await this.loadAffiliates();
   }
-
-  // Unused but required by AuthUser interface consumers
-  updateCurrentUser(_patch: Partial<AuthUser>) { /* no-op: managed by Supabase auth */ }
 }
 
 export const cms = new Cms();
