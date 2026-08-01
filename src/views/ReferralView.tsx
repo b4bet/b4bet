@@ -14,6 +14,7 @@ interface SupabaseReferral {
   status: string;
   created_at: string;
   referred_username?: string;
+  referred_account_id?: string; // 6-digit short ID
 }
 
 // ── Main View ──────────────────────────────────────────────────────────────
@@ -99,6 +100,7 @@ function ReferAndEarn({
               status: r.status,
               created_at: r.created_at,
               referred_username: r.referred_username ?? undefined,
+              referred_account_id: r.referred_account_id ?? undefined,
             })),
           );
         }
@@ -129,6 +131,11 @@ function ReferAndEarn({
             {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
           </button>
         </div>
+        {accountId && (
+          <p className="text-[10px] text-slate-500 mt-1.5">
+            Your referral code: <span className="font-mono text-neon-300 font-semibold">{accountId}</span>
+          </p>
+        )}
       </div>
 
       {/* Config metrics */}
@@ -159,7 +166,7 @@ function ReferAndEarn({
         {loading ? (
           <p className="text-xs text-slate-500 text-center py-4">Loading...</p>
         ) : referrals.length === 0 ? (
-          <p className="text-xs text-slate-500 text-center py-4">No referrals yet</p>
+          <p className="text-xs text-slate-500 text-center py-4">No referrals yet. Share your link to start earning!</p>
         ) : (
           <div className="space-y-2 max-h-80 overflow-y-auto">
             {referrals.map((r) => (
@@ -187,6 +194,10 @@ function ReferralRow({ refData }: { refData: SupabaseReferral }) {
   const statusColor = isCredited ? 'text-emeraldwin-400' : 'text-slate-400';
   const statusText = isCredited ? 'Rewarded' : 'Awaiting deposit';
 
+  // Display name: prefer username, fallback to short ID
+  const displayName = refData.referred_username || refData.referred_id.slice(0, 8);
+  const shortId = refData.referred_account_id || refData.referred_id.slice(0, 8);
+
   return (
     <>
       <div
@@ -196,9 +207,9 @@ function ReferralRow({ refData }: { refData: SupabaseReferral }) {
         <div className="flex items-center gap-2 min-w-0">
           <UserPlus className="w-4 h-4 text-neon-300 flex-shrink-0" />
           <div>
-            <p className="text-sm font-semibold text-white truncate">{refData.referred_username || refData.referred_id.slice(0, 8)}</p>
+            <p className="text-sm font-semibold text-white truncate">{displayName}</p>
             <p className="text-[10px] text-slate-500">
-              {new Date(refData.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+              ID: {shortId} &middot; {new Date(refData.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
             </p>
           </div>
         </div>
@@ -216,8 +227,8 @@ function ReferralRow({ refData }: { refData: SupabaseReferral }) {
               <button onClick={() => setOpen(false)} className="p-1 rounded-lg hover:bg-slatepanel-800"><ArrowLeft className="w-5 h-5 text-slate-400" /></button>
             </div>
             <div className="space-y-3 text-sm">
-              <DetailRow label="Referred User" value={refData.referred_username || refData.referred_id.slice(0, 8)} />
-              <DetailRow label="User ID" value={refData.referred_id} />
+              <DetailRow label="Referred User" value={displayName} />
+              <DetailRow label="Account ID" value={shortId} />
               <DetailRow label="Date" value={new Date(refData.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} />
               <DetailRow label="Status" value={statusText} />
               <DetailRow label="Reward Amount" value={isCredited ? `${store.currency}${refData.bonus_amount}` : 'Pending'} />
