@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, Copy, Check, Users, UserPlus } from 'lucide-react';
 import { useReferralConfig } from '../lib/cmsHooks';
 import { useAuth } from '../lib/hooks';
@@ -15,6 +15,7 @@ interface SupabaseReferral {
   created_at: string;
   referred_username?: string;
   referred_account_id?: string; // 6-digit short ID
+  deposit_amount?: number;
 }
 
 // ── Main View ──────────────────────────────────────────────────────────────
@@ -81,32 +82,59 @@ function ReferAndEarn({
     setTimeout(() => setCopied(false), 1500);
   };
 
+  const fetchReferrals = useCallback(async (uid: string) => {
+    const { data, error } = await supabase
+      .rpc('get_my_referrals', { p_user_id: uid, p_limit: 100 });
+    if (error) {
+      console.error('[ReferralView] get_my_referrals error:', error);
+      return;
+    }
+    if (data) {
+      setReferrals(
+        (data as SupabaseReferral[]).map((r) => ({
+          id: r.id,
+          referrer_id: r.referrer_id,
+          referred_id: r.referred_id,
+          bonus_amount: Number(r.bonus_amount),
+          status: r.status,
+          created_at: r.created_at,
+          referred_username: r.referred_username ?? undefined,
+          referred_account_id: r.referred_account_id ?? undefined,
+          deposit_amount: r.deposit_amount !== undefined ? Number(r.deposit_amount) : undefined,
+        })),
+      );
+    }
+  }, []);
+
   useEffect(() => {
     if (!userId) return;
+
+    // Initial fetch
     setLoading(true);
-    supabase
-      .rpc('get_my_referrals', { p_user_id: userId, p_limit: 100 })
-      .then(({ data, error }) => {
-        if (error) {
-          console.error('[ReferralView] get_my_referrals error:', error);
-        }
-        if (data) {
-          setReferrals(
-            (data as SupabaseReferral[]).map((r) => ({
-              id: r.id,
-              referrer_id: r.referrer_id,
-              referred_id: r.referred_id,
-              bonus_amount: Number(r.bonus_amount),
-              status: r.status,
-              created_at: r.created_at,
-              referred_username: r.referred_username ?? undefined,
-              referred_account_id: r.referred_account_id ?? undefined,
-            })),
-          );
-        }
-        setLoading(false);
-      });
-  }, [userId]);
+    fetchReferrals(userId).finally(() => setLoading(false));
+
+    // Realtime subscription — auto-refresh when referrals table changes for this user
+    const channel = supabase
+      .channel(`referrals_user_${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'referrals',
+          filter: `referrer_id=eq.${userId}`,
+        },
+        () => {
+          // Re-fetch on any insert/update so list stays fresh
+          void fetchReferrals(userId);
+        },
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [userId, fetchReferrals]);
 
   const totalEarned = referrals.filter((r) => r.status === 'credited').reduce((s, r) => s + r.bonus_amount, 0);
 
@@ -230,6 +258,7 @@ function ReferralRow({ refData }: { refData: SupabaseReferral }) {
               <DetailRow label="Referred User" value={displayName} />
               <DetailRow label="Account ID" value={shortId} />
               <DetailRow label="Date" value={new Date(refData.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} />
+              <DetailRow label="Deposit Amount" value={refData.deposit_amount ? `${store.currency}${refData.deposit_amount}` : 'No deposit yet'} />
               <DetailRow label="Status" value={statusText} />
               <DetailRow label="Reward Amount" value={isCredited ? `${store.currency}${refData.bonus_amount}` : 'Pending'} />
             </div>
