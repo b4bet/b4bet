@@ -4,7 +4,7 @@ import { Topics } from '../lib/bus';
 import type { MinesState } from '../lib/minesEngine';
 import { minesEngine } from '../lib/minesEngine';
 
-export type Route = 'home' | 'crash' | 'mines' | 'aviator' | 'games' | 'deposit' | 'wallet' | 'profile' | 'referral' | 'admin' | 'sunvsmoon' | 'trading' | 'history' | 'withdraw' | 'affiliate' | 'landing' | 'ludo';
+export type Route = 'home' | 'crash' | 'mines' | 'aviator' | 'games' | 'deposit' | 'wallet' | 'profile' | 'referral' | 'admin' | 'sunvsmoon' | 'trading' | 'history' | 'withdraw' | 'affiliate' | 'landing' | 'ludo' | 'wingo' | 'k3' | 'fived';
 
 interface NavItem {
   id: string;
@@ -18,7 +18,7 @@ interface Props {
 }
 
 // Game routes — treated as "Games" tab being active
-const GAME_ROUTES: Route[] = ['crash', 'mines', 'aviator', 'sunvsmoon', 'trading', 'ludo'];
+const GAME_ROUTES: Route[] = ['crash', 'mines', 'aviator', 'sunvsmoon', 'trading', 'ludo', 'wingo', 'k3', 'fived'];
 
 export default function BottomNav({ current, onNavigate }: Props) {
   const minesState = useBus<MinesState>(Topics.MinesState, minesEngine.getState());
