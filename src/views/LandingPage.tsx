@@ -3,14 +3,11 @@ import { bus } from '../lib/bus';
 import { auth } from '../lib/auth';
 
 const GAMES = [
-  { name: 'Aviator', emoji: '✈️', desc: 'Fly high, cash out before crash!', color: 'from-red-900/40 to-orange-900/40', badge: 'TRENDING' },
-  { name: 'Wingo', emoji: '🎡', desc: 'Predict colors, win big.', color: 'from-neon-900/40 to-cyan-900/40', badge: 'POPULAR' },
-  { name: 'Crash', emoji: '🚀', desc: 'Multiplier climbs until it crashes.', color: 'from-purple-900/40 to-indigo-900/40', badge: 'HOT' },
-  { name: 'Mines', emoji: '💣', desc: 'Navigate the minefield for rewards.', color: 'from-amber-900/40 to-yellow-900/40', badge: 'NEW' },
-  { name: 'K3', emoji: '🎲', desc: 'Three dice, infinite possibilities.', color: 'from-blue-900/40 to-teal-900/40', badge: '' },
-  { name: '5D Lottery', emoji: '🎟️', desc: 'Five digits, one lucky winner.', color: 'from-pink-900/40 to-rose-900/40', badge: '' },
-  { name: 'Trading', emoji: '📈', desc: 'Trade crypto-style predictions.', color: 'from-green-900/40 to-emerald-900/40', badge: '' },
-  { name: 'Sun vs Moon', emoji: '☀️', desc: 'Classic dual-side betting.', color: 'from-orange-900/40 to-amber-900/40', badge: '' },
+  { name: 'Aviator',    emoji: '✈️', desc: 'Fly high, cash out before crash!',          color: 'from-red-900/40 to-orange-900/40',   badge: 'TRENDING' },
+  { name: 'Crash',      emoji: '🚀', desc: 'Multiplier climbs until it crashes.',        color: 'from-purple-900/40 to-indigo-900/40', badge: 'HOT' },
+  { name: 'Mines',      emoji: '💣', desc: 'Navigate the minefield for rewards.',        color: 'from-amber-900/40 to-yellow-900/40',  badge: 'NEW' },
+  { name: 'Trading',    emoji: '📈', desc: 'Trade crypto-style predictions.',            color: 'from-green-900/40 to-emerald-900/40', badge: '' },
+  { name: 'Sun vs Moon',emoji: '☀️', desc: 'Classic dual-side betting.',                color: 'from-orange-900/40 to-amber-900/40',  badge: '' },
 ];
 
 const FEATURES = [
@@ -25,7 +22,7 @@ const FEATURES = [
 const STATS = [
   { value: '10L+', label: 'Happy Players' },
   { value: '₹50Cr+', label: 'Paid Out' },
-  { value: '8', label: 'Live Games' },
+  { value: '5', label: 'Live Games' },
   { value: '24/7', label: 'Support' },
 ];
 
@@ -61,26 +58,23 @@ export default function LandingPage({ onNavigate }: Props) {
   const openAuth = (mode: 'login' | 'signup') => bus.emit('auth:open_modal', mode);
 
   return (
-    <div className="min-h-screen bg-[#050a14] text-white">
+    <div className="min-h-screen bg-[#0a0a0f] text-white overflow-x-hidden">
       {/* Sticky Header */}
-      <header className={`fixed top-0 left-0 right-0 z-50 transition-all ${
-        scrolled ? 'bg-[#050a14]/95 backdrop-blur-md border-b border-white/5 shadow-2xl' : 'bg-transparent'
-      }`}>
-        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+      <header className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${scrolled ? 'bg-black/80 backdrop-blur-md border-b border-white/10' : ''}`}>
+        <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gradient-to-br from-neon-400 to-cyan-500 rounded-lg flex items-center justify-center">
-              <span className="text-black font-black text-sm">B4</span>
-            </div>
-            <span className="font-black text-xl tracking-wide">B4BET</span>
+            <div className="w-8 h-8 bg-gradient-to-br from-neon-500 to-cyan-500 rounded-lg flex items-center justify-center font-black text-black text-sm">B4</div>
+            <span className="font-black text-lg tracking-tight">B4BET</span>
           </div>
           <nav className="hidden md:flex items-center gap-6 text-sm text-slate-400">
             <a href="#games" className="hover:text-white transition">Games</a>
             <a href="#features" className="hover:text-white transition">Features</a>
             <a href="#affiliate" className="hover:text-white transition">Affiliate</a>
           </nav>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             {isLoggedIn ? (
-              <button onClick={() => onNavigate('home')}
+              <button
+                onClick={() => onNavigate('home')}
                 className="px-4 py-2 bg-neon-500 hover:bg-neon-400 text-black font-bold rounded-xl text-sm transition">
                 Play Now →
               </button>
@@ -99,53 +93,52 @@ export default function LandingPage({ onNavigate }: Props) {
       </header>
 
       {/* Hero */}
-      <section className="relative pt-24 pb-20 px-4 overflow-hidden">
+      <section className="relative pt-24 pb-16 px-4 text-center overflow-hidden">
         {/* Background gradient orbs */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-20 left-1/4 w-96 h-96 bg-neon-500/10 rounded-full blur-3xl" />
-          <div className="absolute top-40 right-1/4 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl" />
-          <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full h-32 bg-gradient-to-t from-[#050a14] to-transparent" />
-        </div>
-        <div className="relative max-w-4xl mx-auto text-center space-y-8">
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-neon-500/10 border border-neon-500/30 rounded-full text-sm text-neon-300">
-            🔥 India\'s Most Trusted Betting Platform
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-neon-500/10 rounded-full blur-3xl pointer-events-none" />
+        <div className="absolute top-20 right-1/4 w-80 h-80 bg-cyan-500/8 rounded-full blur-3xl pointer-events-none" />
+        <div className="relative z-10 max-w-4xl mx-auto">
+          <div className="inline-flex items-center gap-2 bg-white/5 border border-white/10 rounded-full px-4 py-1.5 text-xs text-neon-300 font-semibold mb-6">
+            🔥 India's Most Trusted Betting Platform
           </div>
-          <h1 className="text-5xl md:text-7xl font-black leading-tight">
+          <h1 className="text-5xl md:text-7xl font-black leading-none mb-6">
             Win Big with{' '}
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-neon-400 to-cyan-400">B4BET</span>
+            <span className="bg-gradient-to-r from-neon-400 to-cyan-400 bg-clip-text text-transparent">B4BET</span>
           </h1>
           <p className="text-xl text-slate-400 max-w-2xl mx-auto">
-            Play Aviator, Crash, Wingo and 5+ more exciting games. Instant UPI deposits, fast withdrawals, and huge bonuses.
+            Play Aviator, Crash, Mines and 2+ more exciting games. Instant UPI deposits, fast withdrawals, and huge bonuses.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <button onClick={() => openAuth('signup')}
+          <div className="flex items-center justify-center gap-4 mt-8 flex-wrap">
+            <button
+              onClick={() => openAuth('signup')}
               className="px-8 py-4 bg-gradient-to-r from-neon-500 to-cyan-500 text-black font-black text-lg rounded-2xl hover:shadow-lg hover:shadow-neon-500/25 transition-all">
               Start Playing Free →
             </button>
             {isLoggedIn && (
-              <button onClick={() => onNavigate('home')}
+              <button
+                onClick={() => onNavigate('home')}
                 className="px-8 py-4 bg-white/5 border border-white/10 text-white font-bold text-lg rounded-2xl hover:bg-white/10 transition">
                 Continue Playing
               </button>
             )}
           </div>
           {/* Live stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-8">
-            <div className="bg-white/5 rounded-2xl p-4">
-              <div className="text-3xl font-black text-neon-400">{(count.players / 100000).toFixed(1)}L+</div>
-              <div className="text-slate-400 text-sm">Happy Players</div>
+          <div className="flex items-center justify-center gap-8 mt-10 flex-wrap">
+            <div className="text-center">
+              <div className="text-2xl font-black text-neon-400">{(count.players / 100000).toFixed(1)}L+</div>
+              <div className="text-xs text-slate-500">Happy Players</div>
             </div>
-            <div className="bg-white/5 rounded-2xl p-4">
-              <div className="text-3xl font-black text-neon-400">₹{Math.floor(count.paid / 10000000)}Cr+</div>
-              <div className="text-slate-400 text-sm">Paid Out</div>
+            <div className="text-center">
+              <div className="text-2xl font-black text-neon-400">₹{Math.floor(count.paid / 10000000)}Cr+</div>
+              <div className="text-xs text-slate-500">Paid Out</div>
             </div>
-            <div className="bg-white/5 rounded-2xl p-4">
-              <div className="text-3xl font-black text-purple-400">8</div>
-              <div className="text-slate-400 text-sm">Live Games</div>
+            <div className="text-center">
+              <div className="text-2xl font-black text-neon-400">5</div>
+              <div className="text-xs text-slate-500">Live Games</div>
             </div>
-            <div className="bg-white/5 rounded-2xl p-4">
-              <div className="text-3xl font-black text-amber-400">24/7</div>
-              <div className="text-slate-400 text-sm">Support</div>
+            <div className="text-center">
+              <div className="text-2xl font-black text-neon-400">24/7</div>
+              <div className="text-xs text-slate-500">Support</div>
             </div>
           </div>
         </div>
@@ -155,20 +148,22 @@ export default function LandingPage({ onNavigate }: Props) {
       <section id="games" className="py-16 px-4">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-10">
-            <h2 className="text-3xl md:text-4xl font-black mb-3">All Games</h2>
-            <p className="text-slate-400">8 exciting games with provably fair results</p>
+            <h2 className="text-3xl font-black mb-2">All Games</h2>
+            <p className="text-slate-400">5 exciting games with provably fair results</p>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
             {GAMES.map(g => (
-              <button key={g.name} onClick={() => isLoggedIn ? onNavigate(g.name.toLowerCase().replace(' ', '')) : openAuth('signup')}
+              <button
+                key={g.name}
+                onClick={() => isLoggedIn ? onNavigate(g.name.toLowerCase().replace(' vs ', 'vs').replace(' ', '')) : openAuth('signup')}
                 className={`relative bg-gradient-to-br ${g.color} border border-white/10 rounded-2xl p-5 text-left hover:border-neon-500/40 hover:shadow-lg transition-all group`}>
                 {g.badge && (
-                  <span className="absolute top-3 right-3 px-2 py-0.5 bg-neon-500/20 text-neon-400 text-[10px] font-bold rounded-full">{g.badge}</span>
+                  <span className="absolute top-3 right-3 text-[10px] font-black text-black bg-neon-400 rounded-full px-1.5 py-0.5">{g.badge}</span>
                 )}
                 <div className="text-3xl mb-3">{g.emoji}</div>
-                <h3 className="font-bold text-sm mb-1">{g.name}</h3>
-                <p className="text-slate-400 text-xs">{g.desc}</p>
-                <div className="mt-3 text-neon-400 text-xs font-semibold group-hover:translate-x-1 transition-transform">Play Now →</div>
+                <div className="font-bold text-white">{g.name}</div>
+                <div className="text-xs text-slate-400 mt-1">{g.desc}</div>
+                <div className="text-neon-400 text-xs font-semibold mt-3 group-hover:translate-x-1 transition-transform">Play Now →</div>
               </button>
             ))}
           </div>
@@ -176,18 +171,18 @@ export default function LandingPage({ onNavigate }: Props) {
       </section>
 
       {/* Features */}
-      <section id="features" className="py-16 px-4 bg-white/2">
+      <section id="features" className="py-16 px-4 bg-white/[0.02]">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-10">
-            <h2 className="text-3xl md:text-4xl font-black mb-3">Why B4Bet?</h2>
+            <h2 className="text-3xl font-black mb-2">Why B4Bet?</h2>
             <p className="text-slate-400">Trusted by lakhs of players across India</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {FEATURES.map(f => (
-              <div key={f.title} className="bg-white/5 border border-white/5 rounded-2xl p-5 hover:border-neon-500/20 transition">
+              <div key={f.title} className="bg-white/5 border border-white/10 rounded-2xl p-6">
                 <div className="text-3xl mb-3">{f.icon}</div>
-                <h3 className="font-bold mb-2">{f.title}</h3>
-                <p className="text-slate-400 text-sm">{f.desc}</p>
+                <div className="font-bold text-white mb-1">{f.title}</div>
+                <div className="text-sm text-slate-400">{f.desc}</div>
               </div>
             ))}
           </div>
@@ -196,29 +191,30 @@ export default function LandingPage({ onNavigate }: Props) {
 
       {/* Affiliate CTA */}
       <section id="affiliate" className="py-16 px-4">
-        <div className="max-w-4xl mx-auto">
-          <div className="bg-gradient-to-br from-neon-900/30 to-purple-900/30 border border-neon-500/20 rounded-3xl p-8 md:p-12 text-center space-y-6">
-            <div className="text-5xl">💰</div>
-            <h2 className="text-3xl md:text-4xl font-black">Earn With Our Affiliate Program</h2>
-            <p className="text-slate-300 max-w-xl mx-auto">
-              Earn up to <span className="text-neon-400 font-bold">₹500 CPA</span> per depositing player or{' '}
-              <span className="text-purple-400 font-bold">10% RevShare</span> for lifetime. No cap, no limits.
+        <div className="max-w-4xl mx-auto text-center">
+          <div className="bg-gradient-to-br from-neon-900/40 to-cyan-900/20 border border-neon-500/20 rounded-3xl p-10">
+            <div className="text-4xl mb-4">💰</div>
+            <h2 className="text-3xl font-black mb-3">Earn With Our Affiliate Program</h2>
+            <p className="text-slate-400 mb-6 max-w-lg mx-auto">
+              Earn up to ₹500 CPA per depositing player or{' '}
+              <span className="text-neon-400 font-bold">10% RevShare</span> for lifetime. No cap, no limits.
             </p>
-            <div className="grid grid-cols-3 gap-4 max-w-sm mx-auto">
-              <div className="bg-slatepanel-800/60 rounded-xl p-3">
-                <div className="text-neon-400 font-black text-lg">₹500</div>
-                <div className="text-slate-400 text-xs">CPA Rate</div>
+            <div className="flex items-center justify-center gap-8 mb-8 flex-wrap">
+              <div className="text-center">
+                <div className="text-2xl font-black text-neon-400">₹500</div>
+                <div className="text-xs text-slate-500">CPA Rate</div>
               </div>
-              <div className="bg-slatepanel-800/60 rounded-xl p-3">
-                <div className="text-purple-400 font-black text-lg">10%</div>
-                <div className="text-slate-400 text-xs">RevShare</div>
+              <div className="text-center">
+                <div className="text-2xl font-black text-neon-400">10%</div>
+                <div className="text-xs text-slate-500">RevShare</div>
               </div>
-              <div className="bg-slatepanel-800/60 rounded-xl p-3">
-                <div className="text-amber-400 font-black text-lg">∞</div>
-                <div className="text-slate-400 text-xs">No Cap</div>
+              <div className="text-center">
+                <div className="text-2xl font-black text-neon-400">∞</div>
+                <div className="text-xs text-slate-500">No Cap</div>
               </div>
             </div>
-            <button onClick={() => onNavigate('affiliate')}
+            <button
+              onClick={() => onNavigate('affiliate')}
               className="px-8 py-4 bg-gradient-to-r from-neon-500 to-cyan-500 text-black font-black text-lg rounded-2xl hover:shadow-lg hover:shadow-neon-500/25 transition-all">
               Join Affiliate Program →
             </button>
@@ -227,31 +223,28 @@ export default function LandingPage({ onNavigate }: Props) {
       </section>
 
       {/* CTA */}
-      <section className="py-20 px-4">
-        <div className="max-w-2xl mx-auto text-center space-y-6">
-          <h2 className="text-4xl md:text-5xl font-black">
-            Ready to Win?
-          </h2>
-          <p className="text-slate-400 text-lg">Join thousands of players winning daily on B4Bet.</p>
-          <button onClick={() => openAuth('signup')}
+      <section className="py-16 px-4 text-center">
+        <div className="max-w-2xl mx-auto">
+          <h2 className="text-4xl font-black mb-4">Ready to Win?</h2>
+          <p className="text-slate-400 mb-8">Join thousands of players winning daily on B4Bet.</p>
+          <button
+            onClick={() => openAuth('signup')}
             className="px-10 py-5 bg-gradient-to-r from-neon-500 to-cyan-500 text-black font-black text-xl rounded-2xl hover:shadow-xl hover:shadow-neon-500/30 transition-all">
             Create Free Account →
           </button>
-          <p className="text-slate-500 text-sm">No deposit required to register. 18+ only. Play responsibly.</p>
+          <p className="text-xs text-slate-600 mt-4">No deposit required to register. 18+ only. Play responsibly.</p>
         </div>
       </section>
 
       {/* Footer */}
-      <footer className="border-t border-white/5 py-8 px-4">
-        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4 text-slate-500 text-sm">
+      <footer className="py-8 px-4 border-t border-white/5">
+        <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2">
-            <div className="w-6 h-6 bg-gradient-to-br from-neon-400 to-cyan-500 rounded flex items-center justify-center">
-              <span className="text-black font-black text-[10px]">B4</span>
-            </div>
-            <span className="font-bold text-slate-400">B4BET</span>
+            <div className="w-6 h-6 bg-gradient-to-br from-neon-500 to-cyan-500 rounded flex items-center justify-center font-black text-black text-xs">B4</div>
+            <span className="font-bold">B4BET</span>
           </div>
-          <p>© {new Date().getFullYear()} B4Bet. All rights reserved. 18+ only. Gamble responsibly.</p>
-          <div className="flex gap-4">
+          <p className="text-xs text-slate-600">© {new Date().getFullYear()} B4Bet. All rights reserved. 18+ only. Gamble responsibly.</p>
+          <div className="flex gap-4 text-xs text-slate-600">
             <button onClick={() => onNavigate('home')} className="hover:text-white transition">Terms</button>
             <button onClick={() => onNavigate('home')} className="hover:text-white transition">Privacy</button>
           </div>
