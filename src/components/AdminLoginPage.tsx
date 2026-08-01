@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { LogIn, Eye, EyeOff } from 'lucide-react';
 import { supabase } from '../integrations/supabase/client';
 import { cms } from '../lib/cms';
+import { bus, Topics } from '../lib/bus';
 import type { StaffRole, PermissionKey } from '../lib/cms';
 
 async function sha256Hex(plain: string): Promise<string> {
@@ -113,8 +114,12 @@ export default function AdminLoginPage() {
         cms.staff = cms.staff.map((s) => s.id === staffRow!.id ? { ...s, ...staffAccount } : s);
       }
 
-      // Use loginStaff() — this is the correct method name in cms.ts
-      cms.loginStaff(staffRow.id);
+      // Set session directly + emit bus so useStaffSession() React state updates instantly
+      // without needing a page refresh
+      cms.staffSessionId = staffRow.id;
+      try { localStorage.setItem('b4bet.admin.session', staffRow.id); } catch { /* ignore */ }
+      bus.emit(Topics.StaffSession, staffRow.id);
+
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(`Login error: ${msg}`);
