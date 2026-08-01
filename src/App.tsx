@@ -14,6 +14,9 @@ import ReferralView from './views/ReferralView';
 import AdminView from './views/AdminView';
 import HistoryView from './views/HistoryView';
 import LudoView from './views/LudoView';
+import WingoView from './views/WingoView';
+import K3View from './views/K3View';
+import FiveDView from './views/FiveDView';
 import SunVsMoonView from './views/SunVsMoonView';
 import TradingGameView from './views/TradingGameView';
 import AffiliatePortalView from './views/AffiliatePortalView';
@@ -238,6 +241,9 @@ export default function App() {
         {route === 'ludo' && <LudoView onBack={() => navigate('home')} />}
         {route === 'crash' && <CrashView />}
         {route === 'aviator' && <AviatorView onBack={() => navigate('home')} />}
+        {route === 'wingo' && <WingoView onBack={() => navigate('home')} />}
+        {route === 'k3' && <K3View onBack={() => navigate('home')} />}
+        {route === 'fived' && <FiveDView onBack={() => navigate('home')} />}
         {route === 'sunvsmoon' && <SunVsMoonView />}
         {route === 'trading' && <TradingGameView />}
         {route === 'affiliate' && <AffiliatePortalView onBack={() => navigate('home')} />}
