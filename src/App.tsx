@@ -14,6 +14,9 @@ import ReferralView from './views/ReferralView';
 import AdminView from './views/AdminView';
 import HistoryView from './views/HistoryView';
 import LudoView from './views/LudoView';
+import WingoView from './views/WingoView';
+import K3View from './views/K3View';
+import FiveDView from './views/FiveDView';
 import SunVsMoonView from './views/SunVsMoonView';
 import TradingGameView from './views/TradingGameView';
 import AffiliatePortalView from './views/AffiliatePortalView';
@@ -27,7 +30,7 @@ import AuthModal, { type AuthModalMode } from './components/AuthModal';
 import AdminSupportNotification from './components/AdminSupportNotification';
 import BanPopup from './components/BanPopup';
 import MaintenancePage from './components/MaintenancePage';
-import { bus } from './lib/bus';
+import { bus, Topics } from './lib/bus';
 import { crashEngine } from './lib/crashEngine';
 import { startAllPersistentGameEngines } from './lib/persistentGameEngine';
 import { useStaffSession } from './lib/cmsHooks';
@@ -58,18 +61,22 @@ async function fetchMaintenanceConfig(): Promise<MaintenanceConfig | null> {
   return null;
 }
 
+// Check if current page was loaded while maintenance was OFF.
+// If maintenance is now ON and JS is from old cache, force a hard reload
+// so the browser fetches fresh JS bundle and shows the maintenance page.
 const MAINTENANCE_FLAG = 'b4bet_maint_v1';
 
 function applyMaintenance(cfg: MaintenanceConfig | null, isStaff: boolean, isAdmin: boolean) {
   if (!cfg?.enabled || isStaff || isAdmin) return false;
+
+  // If the maintenance flag is already set this session, no reload needed
   if (sessionStorage.getItem(MAINTENANCE_FLAG) === '1') return true;
+
+  // Set flag and hard-reload to bust JS cache
   sessionStorage.setItem(MAINTENANCE_FLAG, '1');
   window.location.reload();
   return true;
 }
-
-// Routes where header should be hidden (full-screen game/admin routes)
-const ROUTES_WITHOUT_HEADER: Route[] = ['admin', 'affiliate', 'landing', 'crash', 'mines', 'aviator', 'sunvsmoon', 'trading'];
 
 export default function App() {
   const staffSession = useStaffSession();
@@ -92,11 +99,29 @@ export default function App() {
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Clear the reload flag when maintenance is turned OFF so future ON triggers reload again
   useEffect(() => {
     if (maintenance && !maintenance.enabled) {
       sessionStorage.removeItem(MAINTENANCE_FLAG);
     }
   }, [maintenance?.enabled]);
+
+  // Dynamic favicon: listen to cms:favicon bus event and update <link rel="icon">
+  useEffect(() => {
+    const off = bus.on(Topics.Favicon, (payload: unknown) => {
+      const url = payload as string | null;
+      if (!url) return;
+      // Update existing favicon link or create one
+      let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+      }
+      link.href = url;
+    });
+    return off;
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -114,6 +139,7 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Load maintenance mode + realtime + polling so cache never causes a stale state
   useEffect(() => {
     const isAdminRoute = window.location.pathname === '/aryan' ||
       window.location.hash === '#aryan' || window.location.hash === '#/aryan';
@@ -121,12 +147,15 @@ export default function App() {
     const handleConfig = (cfg: MaintenanceConfig | null) => {
       if (cfg !== null) {
         setMaintenance(cfg);
+        // If we just loaded and maintenance is ON — force hard reload to bust JS cache
         applyMaintenance(cfg, !!staffSession, isAdminRoute);
       }
     };
 
+    // Initial load
     void fetchMaintenanceConfig().then(handleConfig);
 
+    // Realtime subscription — fires instantly when admin toggles maintenance
     const channel = supabase
       .channel('maintenance_mode_watch')
       .on(
@@ -139,16 +168,19 @@ export default function App() {
               : payload.new.value;
             const cfg = val as MaintenanceConfig;
             setMaintenance(cfg);
+            // Hard reload so cached JS is replaced with fresh bundle
             applyMaintenance(cfg, !!staffSession, isAdminRoute);
           }
         },
       )
       .subscribe();
 
+    // Polling fallback every 10s — catches cache/network misses
     pollTimerRef.current = setInterval(() => {
       void fetchMaintenanceConfig().then(handleConfig);
     }, 10_000);
 
+    // Re-fetch when the tab becomes visible (user switches back from another tab)
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void fetchMaintenanceConfig().then(handleConfig);
@@ -185,7 +217,7 @@ export default function App() {
     startAllPersistentGameEngines();
   }, []);
 
-  const showHeader = !ROUTES_WITHOUT_HEADER.includes(route);
+  const showHeader = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
   const showBottomNav = route !== 'admin' && route !== 'affiliate' && route !== 'landing';
 
   const isAdminRoute = route === 'admin';
@@ -203,9 +235,9 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <GeoBlockOverlay />
+    <div className="app">
       <ToastHost />
+      <GeoBlockOverlay />
 
       {showHeader && (
         <Header
@@ -217,13 +249,13 @@ export default function App() {
         />
       )}
 
-      <main className={showHeader ? 'pt-[62px]' : ''}>
+      <main>
         {route === 'home' && <HomeView onNavigate={navigate} />}
         {route === 'mines' && <MinesView />}
         {route === 'games' && <GamesView onNavigate={navigate} />}
-        {route === 'deposit' && <DepositView onNavigate={navigate} />}
+        {route === 'deposit' && <DepositView />}
         {route === 'wallet' && <WalletView onNavigate={navigate} />}
-        {route === 'withdraw' && <WithdrawView onNavigate={navigate} />}
+        {route === 'withdraw' && <WithdrawView />}
         {route === 'profile' && (
           <ProfileView
             onNavigate={navigate}
@@ -232,19 +264,22 @@ export default function App() {
             onOpenMenu={() => setWalletOpen(true)}
           />
         )}
-        {route === 'referral' && <ReferralView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
-        {route === 'admin' && <AdminView onNavigate={navigate} onOpenWallet={() => setWalletOpen(true)} />}
-        {route === 'history' && <HistoryView onClose={() => navigate('home')} />}
-        {route === 'ludo' && <LudoView onBack={() => navigate('home')} />}
+        {route === 'referral' && <ReferralView onNavigate={() => setWalletOpen(true)} />}
+        {route === 'admin' && <AdminView onNavigate={() => setWalletOpen(true)} />}
+        {route === 'history' && <HistoryView />}
+        {route === 'ludo' && <LudoView onExit={() => navigate('home')} />}
         {route === 'crash' && <CrashView />}
-        {route === 'aviator' && <AviatorView onBack={() => navigate('home')} />}
+        {route === 'aviator' && <AviatorView onExit={() => navigate('home')} />}
+        {route === 'wingo' && <WingoView />}
+        {route === 'k3' && <K3View />}
+        {route === 'fived' && <FiveDView />}
         {route === 'sunvsmoon' && <SunVsMoonView />}
         {route === 'trading' && <TradingGameView />}
-        {route === 'affiliate' && <AffiliatePortalView onBack={() => navigate('home')} />}
-        {route === 'landing' && <LandingPage onNavigate={navigate} />}
+        {route === 'affiliate' && <AffiliatePortalView onExit={() => navigate('home')} />}
+        {route === 'landing' && <LandingPage />}
       </main>
 
-      {showBottomNav && <BottomNav current={route} onNavigate={navigate} />}
+      {showBottomNav && <BottomNav route={route} onNavigate={navigate} />}
 
       <NotificationDrawer open={notifOpen} onClose={() => setNotifOpen(false)} />
       <ProfileDrawer
@@ -255,7 +290,7 @@ export default function App() {
         onOpenAuthModal={openAuthModal}
       />
       <SupportChat open={supportChatOpen} onClose={() => setSupportChatOpen(false)} />
-      <AuthModal open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
+      <AuthModal open={authModalOpen} mode={authModalMode} onClose={() => setAuthModalOpen(false)} />
       {staffSession && <AdminSupportNotification />}
 
       {isLoggedIn && <BanPopup />}
