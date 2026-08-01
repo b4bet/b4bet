@@ -808,6 +808,18 @@ class Cms {
   getStaffById(id: string): StaffAccount | undefined { return this.staff.find(s => s.id === id); }
   getCurrentStaff(): StaffAccount | undefined { return this.staffSessionId ? this.staff.find(s => s.id === this.staffSessionId) : undefined; }
 
+  loginStaff(id: string) {
+    this.staffSessionId = id;
+    try { localStorage.setItem(ADMIN_SESSION_KEY, id); } catch { /* ignore */ }
+  }
+
+  hasPermission(staffId: string, key: PermissionKey): boolean {
+    const s = this.staff.find(x => x.id === staffId);
+    if (!s) return false;
+    if (s.isOwner) return true;
+    return s.permissions[key] === true;
+  }
+
   async saveReferralConfig(config: ReferralConfig) {
     this.referralConfig = config;
     bus.emit(Topics.ReferralConfig, this.referralConfig);
@@ -863,6 +875,106 @@ class Cms {
   async updateAffiliateStatus(id: string, status: 'approved' | 'rejected', revSharePct?: number) {
     await supabase.from('affiliates').update({ status, ...(revSharePct !== undefined ? { rev_share_pct: revSharePct } : {}) }).eq('id', id);
     await this.loadAffiliates();
+  }
+
+  isGeoBlocked(): boolean {
+    const country = this.countries.find(c => c.id === this.detectedCountryId);
+    return country ? !country.isActive : false;
+  }
+
+  get detectedCountry(): Country | undefined {
+    return this.countries.find(c => c.id === this.detectedCountryId);
+  }
+
+  setDetectedCountry(countryId: string) {
+    this.detectedCountryId = countryId;
+  }
+
+  addCountry(country: Omit<Country, 'id'>) {
+    const newCountry: Country = { ...country, id: 'c_' + Math.random().toString(36).slice(2) };
+    this.countries = [...this.countries, newCountry];
+  }
+
+  updateCountry(id: string, patch: Partial<Country>) {
+    this.countries = this.countries.map(c => c.id === id ? { ...c, ...patch } : c);
+  }
+
+  hasIpAlreadySignedUp(_ip: string): boolean {
+    return false;
+  }
+
+  addManualMethod(method: Omit<ManualMethod, 'id'>) {
+    const newMethod: ManualMethod = { ...method, id: 'mm_' + Math.random().toString(36).slice(2) };
+    this.manualMethods = [...this.manualMethods, newMethod];
+    this.emitManual();
+    const details = { ...method };
+    rpc(supabase.rpc('admin_upsert_payment_method', {
+      p_id: null, p_method_type: method.kind, p_is_active: method.active,
+      p_account_details: details as unknown as string, p_countries: method.countries as unknown as string,
+    })).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+  }
+
+  updateManualMethod(id: string, patch: Partial<ManualMethod>) {
+    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m);
+    this.emitManual();
+    const updated = this.manualMethods.find(m => m.id === id);
+    if (updated) {
+      rpc(supabase.rpc('admin_upsert_payment_method', {
+        p_id: id, p_method_type: updated.kind, p_is_active: updated.active,
+        p_account_details: updated as unknown as string, p_countries: updated.countries as unknown as string,
+      })).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+    }
+  }
+
+  removeManualMethod(id: string) {
+    this.manualMethods = this.manualMethods.filter(m => m.id !== id);
+    this.emitManual();
+    rpc(supabase.rpc('admin_delete_payment_method', { p_id: id })).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+  }
+
+  addAutoGateway(gateway: Omit<AutoGateway, 'id'>) {
+    const newGateway: AutoGateway = { ...gateway, id: 'ag_' + Math.random().toString(36).slice(2) };
+    this.autoGateways = [...this.autoGateways, newGateway];
+    this.emitGateways();
+  }
+
+  updateAutoGateway(id: string, patch: Partial<AutoGateway>) {
+    this.autoGateways = this.autoGateways.map(g => g.id === id ? { ...g, ...patch } : g);
+    this.emitGateways();
+  }
+
+  removeAutoGateway(id: string) {
+    this.autoGateways = this.autoGateways.filter(g => g.id !== id);
+    this.emitGateways();
+  }
+
+  addReferral(referral: Omit<Referral, 'id' | 'ts'>) {
+    const newReferral: Referral = { ...referral, id: 'ref_' + Math.random().toString(36).slice(2), ts: Date.now() };
+    this.referrals = [...this.referrals, newReferral];
+    this.emitReferrals();
+  }
+
+  updateReferralReward(id: string, patch: Partial<Pick<Referral, 'rewardPaid' | 'rewardCredited' | 'paidAt'>>) {
+    this.referrals = this.referrals.map(r => r.id === id ? { ...r, ...patch } : r);
+    this.emitReferrals();
+  }
+
+  recordReferralSignup(referrerId: string, referredUserId: string, referredUsername: string) {
+    const existing = this.referrals.find(r => r.referredUserId === referredUserId);
+    if (existing) return;
+    void supabase.rpc('record_referral_signup', { p_referrer_id: referrerId, p_referred_id: referredUserId }).catch(() => {});
+  }
+
+  sendStaffDM(fromId: string, toId: string, body: string) {
+    this.sendDM(fromId, toId, body);
+  }
+
+  staffConversation(staffId1: string, staffId2: string): StaffDM[] {
+    return this.getOrCreateDM(staffId1, staffId2);
+  }
+
+  async verifyStaffCredentialsAsync(name: string, password: string): Promise<StaffAccount | null> {
+    return this.adminLogin(name, password);
   }
 }
 
