@@ -98,7 +98,7 @@ export default function CrashView({ onBack }: Props) {
               <Rocket className="w-4 h-4 text-neon-400" />
             )}
           </div>
-          <span className="text-sm font-bold text-white">Crash</span>
+          <span className="text-sm font-bold text-white">JetX</span>
         </div>
 
         <div className="flex items-center gap-2">
