@@ -1,5 +1,5 @@
-// Patch: adds loginStaff and logoutStaff to the cms singleton
-// Import this file once at app entry (main.tsx) or use directly.
+// Patch: adds loginStaff and logoutStaff to the cms singleton at import time.
+// Import this file in AdminLoginPage and AdminView to fix login/logout.
 import { bus, Topics } from './bus';
 import { cms } from './cms';
 
@@ -18,3 +18,10 @@ export function logoutStaff(): void {
   try { localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* ignore */ }
   bus.emit(Topics.StaffSession, null);
 }
+
+// Monkey-patch the cms singleton so calls like cms.loginStaff(id) / cms.logoutStaff()
+// don't crash even if the Cms class doesn't define those methods.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const cmsAny = cms as Record<string, unknown>;
+if (!cmsAny['loginStaff']) cmsAny['loginStaff'] = loginStaff;
+if (!cmsAny['logoutStaff']) cmsAny['logoutStaff'] = logoutStaff;
