@@ -4,6 +4,7 @@ import { useReferralConfig } from '../lib/cmsHooks';
 import { useAuth } from '../lib/hooks';
 import { store } from '../lib/store';
 import { supabase } from '../integrations/supabase/client';
+import type { Route } from '../components/BottomNav';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 interface SupabaseReferral {
@@ -19,22 +20,29 @@ interface SupabaseReferral {
 }
 
 // ── Main View ──────────────────────────────────────────────────────────────
-export default function ReferralView({ onOpenWallet }: { onOpenWallet?: () => void }) {
+export default function ReferralView({ onNavigate, onOpenWallet }: { onNavigate?: (r: Route) => void; onOpenWallet?: () => void }) {
   const session = useAuth();
   const cfg = useReferralConfig();
 
+  // Back: go to home (not open the wallet drawer)
+  const goBack = () => {
+    if (onNavigate) onNavigate('home');
+    else onOpenWallet?.();
+  };
+
   useEffect(() => {
     window.history.pushState({ referralView: true }, '');
-    const handlePopstate = () => { onOpenWallet?.(); };
+    const handlePopstate = () => { goBack(); };
     window.addEventListener('popstate', handlePopstate);
     return () => { window.removeEventListener('popstate', handlePopstate); };
-  }, [onOpenWallet]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="space-y-4 animate-fade-in px-4 pb-4">
       <div className="flex items-center gap-3 pt-4">
         <button
-          onClick={() => onOpenWallet?.()}
+          onClick={goBack}
           className="w-9 h-9 rounded-xl bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/40 transition-colors flex-shrink-0"
           aria-label="Go back"
         >
@@ -223,7 +231,6 @@ function ReferralRow({
   const displayName = refData.referred_username || refData.referred_id.slice(0, 8);
   const shortId = refData.referred_account_id || refData.referred_id.slice(0, 8);
 
-  // Calculate expected reward for pending referrals (informational)
   const expectedReward = cfg.rewardAmount;
 
   return (
