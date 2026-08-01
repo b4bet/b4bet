@@ -106,6 +106,9 @@ class AuthManager {
   private usersCache: AuthUser[] = [];
   private bannedUsers: BanRecord[] = [];
   private bansLoaded = false;
+  // Flag: set to true once user explicitly logs in or out — prevents
+  // background loadSession() from overwriting a fresh manual session.
+  private sessionSettled = false;
 
   constructor() {
     this.loadSession();
@@ -131,12 +134,29 @@ class AuthManager {
 
   private async loadSession() {
     try { const raw = localStorage.getItem('b4bet.session'); if (raw) this.session = JSON.parse(raw) as AuthSession; } catch { /* ignore */ }
-    if (this.session) {
-      const { data: { session: s } } = await supabase.auth.getSession();
-      if (s) {
-        this.session = { userId: s.user.id, accountId: (s.user.user_metadata['accountId'] as string) || '', username: (s.user.user_metadata['username'] as string) || s.user.email || '', email: s.user.email || '', loggedInAt: Date.now() };
-        this.persistSession();
-      } else { this.session = null; this.persistSession(); }
+
+    // Eagerly emit whatever we loaded from localStorage so the UI isn't blank.
+    this.emitState();
+
+    // Now validate with Supabase in the background.
+    // But if user already explicitly logged in/out while we were waiting, skip.
+    const { data: { session: s } } = await supabase.auth.getSession();
+
+    // If the user logged in or out manually while we were awaiting, do nothing.
+    if (this.sessionSettled) return;
+
+    if (s) {
+      this.session = {
+        userId: s.user.id,
+        accountId: (s.user.user_metadata['accountId'] as string) || '',
+        username: (s.user.user_metadata['username'] as string) || s.user.email || '',
+        email: s.user.email || '',
+        loggedInAt: Date.now(),
+      };
+      this.persistSession();
+    } else {
+      this.session = null;
+      this.persistSession();
     }
     this.emitState();
   }
@@ -190,6 +210,7 @@ class AuthManager {
 
     // Set session immediately so user is logged in
     this.session = { userId: data.user.id, accountId, username: uname, email: umail, loggedInAt: Date.now() };
+    this.sessionSettled = true; // prevent background loadSession() from overwriting
     this.persistSession();
     this.emitState();
 
@@ -266,6 +287,7 @@ class AuthManager {
             if (!e && d.user) {
               const accountId = (d.user.user_metadata['accountId'] as string) || '';
               this.session = { userId: d.user.id, accountId, username: (d.user.user_metadata['username'] as string) || username, email: d.user.email || '', loggedInAt: Date.now() };
+              this.sessionSettled = true;
               this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
               if (accountId) void supabase.from('profiles').update({ account_id: accountId }).eq('id', d.user.id).then(() => {}).catch(() => {});
               void logIpWithFallback(d.user.id, d.session?.access_token, 'login');
@@ -291,6 +313,7 @@ class AuthManager {
         if (d2.user) {
           const accountId = (d2.user.user_metadata['accountId'] as string) || '';
           this.session = { userId: d2.user.id, accountId, username: (d2.user.user_metadata['username'] as string) || idLower, email: d2.user.email || '', loggedInAt: Date.now() };
+          this.sessionSettled = true;
           this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
           if (accountId) void supabase.from('profiles').update({ account_id: accountId }).eq('id', d2.user.id).then(() => {}).catch(() => {});
           void logIpWithFallback(d2.user.id, d2.session?.access_token, 'login');
@@ -303,6 +326,7 @@ class AuthManager {
     if (!data.user) return { ok: false, error: 'Login failed.' };
     const accountId = (data.user.user_metadata['accountId'] as string) || '';
     this.session = { userId: data.user.id, accountId, username: (data.user.user_metadata['username'] as string) || idLower, email: data.user.email || '', loggedInAt: Date.now() };
+    this.sessionSettled = true;
     this.persistSession(); this.emitState(); this.applyPendingReferralRewards();
     if (accountId) void supabase.from('profiles').update({ account_id: accountId }).eq('id', data.user.id).then(() => {}).catch(() => {});
     void logIpWithFallback(data.user.id, data.session?.access_token, 'login');
@@ -317,7 +341,9 @@ class AuthManager {
     this.isLoggingOut = true;
     try {
       await supabase.auth.signOut();
-      this.session = null; this.persistSession(); this.emitState();
+      this.session = null;
+      this.sessionSettled = true; // prevent background loadSession() from restoring old session
+      this.persistSession(); this.emitState();
       cms.pushFromTemplate('nt_logout', 'Logged Out', 'Your session has ended. See you next time!', 'info');
     } finally { this.isLoggingOut = false; }
   }
