@@ -119,18 +119,6 @@ export default function SliderBanner({ onCta }: { onCta: (i: number) => void }) 
               );
             })}
       </div>
-
-      {/* Dot indicators */}
-      <div className="absolute bottom-2 left-1/2 -translate-x-1/2 flex gap-1.5 z-10">
-        {Array.from({ length: count }).map((_, i) => (
-          <button
-            key={i}
-            onClick={() => setIdx(i)}
-            className={`h-1.5 rounded-full transition-all ${i === idx ? 'w-6 bg-neon-400' : 'w-1.5 bg-slate-600'}`}
-            aria-label={`Slide ${i + 1}`}
-          />
-        ))}
-      </div>
     </div>
   );
 }
