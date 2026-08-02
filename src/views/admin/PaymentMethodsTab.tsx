@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus, Trash2, Edit3, X, Save, ArrowDownCircle, ArrowUpCircle,
   Banknote, Smartphone, Coins, ToggleLeft, ToggleRight,
-  TrendingDown, TrendingUp, RefreshCw, Wifi,
+  TrendingDown, TrendingUp, RefreshCw, Wifi, Upload, QrCode, ImageOff,
 } from 'lucide-react';
 import { supabase } from '../../integrations/supabase/client';
 
@@ -53,12 +53,25 @@ const kindMeta: Record<MethodKind, { label: string; icon: typeof Banknote }> = {
   custom: { label: 'Custom', icon: Banknote },
 };
 
+// Upload QR image to Supabase storage, return public URL
+async function uploadQrToStorage(file: File, methodId: string): Promise<string> {
+  const ext = file.name.split('.').pop() ?? 'png';
+  const path = `upi-qr/${methodId}.${ext}`;
+  const { error } = await supabase.storage.from('payment-qr').upload(path, file, { upsert: true, contentType: file.type });
+  if (error) throw error;
+  const { data } = supabase.storage.from('payment-qr').getPublicUrl(path);
+  // Bust cache with timestamp
+  return `${data.publicUrl}?t=${Date.now()}`;
+}
+
 export default function PaymentMethodsTab() {
   const [methods, setMethods] = useState<ManualMethod[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<{ id: string | null; draft: Draft } | null>(null);
   const [activeTab, setActiveTab] = useState<MethodFlow>('deposit');
   const [saving, setSaving] = useState(false);
+  const [uploadingQr, setUploadingQr] = useState(false);
+  const qrInputRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -134,6 +147,30 @@ export default function PaymentMethodsTab() {
   };
 
   const grouped = (flow: MethodFlow) => methods.filter((m) => m.flow === flow);
+
+  // QR upload handler
+  const handleQrUpload = async (file: File) => {
+    if (!editing) return;
+    setUploadingQr(true);
+    try {
+      // If editing existing method, upload directly to storage
+      const methodId = editing.id ?? `new_${Date.now()}`;
+      const url = await uploadQrToStorage(file, methodId);
+      setEditing({ ...editing, draft: { ...editing.draft, details: { ...editing.draft.details, qrImageUrl: url } } });
+    } catch (e) {
+      console.error('[PaymentMethodsTab] QR upload error:', e);
+      alert('QR upload failed. Check console.');
+    } finally {
+      setUploadingQr(false);
+    }
+  };
+
+  const removeQr = () => {
+    if (!editing) return;
+    const details = { ...editing.draft.details };
+    delete details.qrImageUrl;
+    setEditing({ ...editing, draft: { ...editing.draft, details } });
+  };
 
   // Crypto sub-editor helpers
   const getCryptoList = (): CryptoCurrency[] => {
@@ -227,6 +264,7 @@ export default function PaymentMethodsTab() {
                 {list.map((m) => {
                   const Kind = kindMeta[m.kind] || kindMeta.custom;
                   const cryptos = (m.details.cryptoCurrencies as CryptoCurrency[] | undefined) ?? [];
+                  const qrUrl = m.details.qrImageUrl as string | undefined;
                   return (
                     <div key={m.id} className={`panel p-3 transition-opacity ${m.is_active ? '' : 'opacity-50'}`}>
                       <div className="flex items-center justify-between gap-2">
@@ -243,6 +281,11 @@ export default function PaymentMethodsTab() {
                             <div className="flex items-center gap-2">
                               <span className="text-sm text-white font-semibold truncate">{m.label}</span>
                               <span className="chip text-[9px] bg-slatepanel-700 text-slate-400 uppercase">{m.kind}</span>
+                              {m.kind === 'upi' && m.flow === 'deposit' && qrUrl && (
+                                <span className="chip text-[9px] bg-neon-500/15 text-neon-300 flex items-center gap-0.5">
+                                  <QrCode className="w-2.5 h-2.5" /> QR
+                                </span>
+                              )}
                             </div>
                             <div className="text-[10px] text-slate-500">
                               Min ₹{m.min_amount} · Max ₹{m.max_amount}
@@ -278,6 +321,11 @@ export default function PaymentMethodsTab() {
                             <span className="text-slate-300">{(m.details.upiId as string) || '—'}</span>
                             <span className="text-slate-500">{m.flow === 'withdrawal' ? 'Holder Name:' : 'Display:'}</span>
                             <span className="text-slate-300">{(m.details.upiDisplayName as string) || '—'}</span>
+                            {m.flow === 'deposit' && qrUrl && (
+                              <div className="col-span-2 mt-1">
+                                <img src={qrUrl} alt="UPI QR" className="w-16 h-16 rounded-lg border border-borderline-900 object-contain bg-white" />
+                              </div>
+                            )}
                           </>
                         )}
                         {m.kind === 'crypto' && cryptos.map((cc) => (
@@ -410,6 +458,70 @@ export default function PaymentMethodsTab() {
                         placeholder={d.flow === 'withdrawal' ? 'e.g. Raj Kumar' : 'PhonePe / GPay'} className="input mt-1 w-full" />
                     </div>
                   </div>
+
+                  {/* QR Upload — only for deposit UPI */}
+                  {d.flow === 'deposit' && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase text-slate-500 font-semibold flex items-center gap-1">
+                        <QrCode className="w-3 h-3" /> UPI QR Code (Optional)
+                      </label>
+                      <p className="text-[10px] text-slate-500">Upload aapka UPI QR code — users deposit karte waqt scan kar sakte hain.</p>
+
+                      {/* Hidden file input */}
+                      <input
+                        ref={qrInputRef}
+                        type="file"
+                        accept="image/png,image/jpeg,image/jpg,image/webp"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) void handleQrUpload(file);
+                          e.target.value = '';
+                        }}
+                      />
+
+                      {d.details.qrImageUrl ? (
+                        <div className="flex items-start gap-3">
+                          <div className="relative">
+                            <img
+                              src={d.details.qrImageUrl as string}
+                              alt="UPI QR Preview"
+                              className="w-28 h-28 rounded-xl border border-neon-500/30 object-contain bg-white p-1"
+                            />
+                            <button
+                              onClick={removeQr}
+                              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 flex items-center justify-center hover:bg-red-600"
+                              title="Remove QR"
+                            >
+                              <X className="w-3 h-3 text-white" />
+                            </button>
+                          </div>
+                          <div className="flex flex-col gap-2">
+                            <span className="text-[10px] text-neon-300 flex items-center gap-1"><QrCode className="w-3 h-3" /> QR uploaded</span>
+                            <button
+                              onClick={() => qrInputRef.current?.click()}
+                              disabled={uploadingQr}
+                              className="btn-ghost px-2 py-1 text-xs flex items-center gap-1 disabled:opacity-50"
+                            >
+                              <Upload className="w-3 h-3" /> Change QR
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => qrInputRef.current?.click()}
+                          disabled={uploadingQr}
+                          className="flex items-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-borderline-900 hover:border-neon-500/40 text-slate-400 hover:text-neon-300 transition-colors w-full justify-center disabled:opacity-50"
+                        >
+                          {uploadingQr ? (
+                            <><RefreshCw className="w-4 h-4 animate-spin" /> Uploading…</>
+                          ) : (
+                            <><Upload className="w-4 h-4" /> <ImageOff className="w-3 h-3 opacity-50" /> Click to upload QR image</>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
