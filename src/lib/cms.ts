@@ -711,12 +711,15 @@ class Cms {
   unreadSupport() { return this.support.filter(s => !s.read).length; }
 
   // ---- Staff Session Management ----
+
+  /** Login: set session, persist to localStorage, emit bus event so React updates instantly */
   loginStaff(staffId: string) {
     this.staffSessionId = staffId;
     try { localStorage.setItem(ADMIN_SESSION_KEY, staffId); } catch { /* ignore */ }
     bus.emit(Topics.StaffSession, staffId);
   }
 
+  /** Logout: clear session, remove from localStorage, emit bus event so React updates instantly */
   logoutStaff() {
     this.staffSessionId = null;
     try { localStorage.removeItem(ADMIN_SESSION_KEY); } catch { /* ignore */ }
@@ -799,7 +802,252 @@ class Cms {
     await this.syncUsersFromSupabase();
   }
 
-  // ---- Affiliate helpers ----
+  // ---- Tickets ----
+  createTicket(accountId: string, subject: string, message: string): SupportTicket {
+    const ticket: SupportTicket = {
+      id: Math.random().toString(36).slice(2), accountId, status: 'unassigned', assignedStaffId: null,
+      messages: [{ id: Math.random().toString(36).slice(2), role: 'user', body: message, ts: Date.now() }],
+      createdTs: Date.now(), lastUserMsgTs: Date.now(), acknowledged: false,
+    };
+    this.tickets = [ticket, ...this.tickets]; this.emitTickets();
+    rpc(supabase.rpc('user_post_ticket_message', { p_account_id: accountId, p_body: message }))
+      .then(() => { void this.syncTicketsFromSupabase(); })
+      .catch(() => { supabase.from('support_tickets').insert({ user_id: accountId, subject, message, status: 'open', priority: 'normal' }).then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {}); });
+    return ticket;
+  }
+
+  getTicket(id: string): SupportTicket | undefined { return this.tickets.find(t => t.id === id); }
+
+  assignTicket(id: string, staffId: string) {
+    this.tickets = this.tickets.map(t => t.id === id ? { ...t, status: 'assigned' as TicketStatus, assignedStaffId: staffId } : t); this.emitTickets();
+    rpc(supabase.rpc('admin_assign_ticket', { p_ticket_id: id, p_staff_id: staffId }))
+      .then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {});
+  }
+
+  closeTicket(id: string) {
+    this.tickets = this.tickets.map(t => t.id === id ? { ...t, status: 'closed' as TicketStatus } : t); this.emitTickets();
+    rpc(supabase.rpc('admin_close_ticket', { p_ticket_id: id }))
+      .then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {});
+  }
+
+  acknowledgeTicket(id: string) {
+    this.tickets = this.tickets.map(t => t.id === id ? { ...t, acknowledged: true } : t); this.emitTickets();
+  }
+
+  replyToTicket(id: string, body: string, staffId: string, attachments?: TicketAttachment[]) {
+    const msg: TicketMessage = { id: Math.random().toString(36).slice(2), role: 'agent', agentId: staffId, body, ts: Date.now(), attachments };
+    this.tickets = this.tickets.map(t => {
+      if (t.id !== id) return t;
+      const updated: SupportTicket = { ...t, messages: [...t.messages, msg] };
+      return updated;
+    }); this.emitTickets();
+    rpc(supabase.rpc('admin_reply_ticket', { p_ticket_id: id, p_staff_id: staffId, p_body: body }))
+      .then(() => { void this.syncTicketsFromSupabase(); }).catch(() => {});
+  }
+
+  // ---- Staff DMs ----
+  getOrCreateDM(fromId: string, toId: string): StaffDM[] {
+    return this.staffDMs.filter(d => (d.fromId === fromId && d.toId === toId) || (d.fromId === toId && d.toId === fromId));
+  }
+
+  sendDM(fromId: string, toId: string, body: string) {
+    const dm: StaffDM = { id: Math.random().toString(36).slice(2), fromId, toId, body, ts: Date.now(), read: false };
+    this.staffDMs = [...this.staffDMs, dm]; this.emitDMs();
+  }
+
+  markDMRead(fromId: string, toId: string) {
+    this.staffDMs = this.staffDMs.map(d => d.fromId === fromId && d.toId === toId ? { ...d, read: true } : d); this.emitDMs();
+  }
+
+  markDMsRead(fromId: string) {
+    this.staffDMs = this.staffDMs.map(d => d.fromId === fromId ? { ...d, read: true } : d); this.emitDMs();
+  }
+
+  unreadDMs(toId: string) { return this.staffDMs.filter(d => d.toId === toId && !d.read).length; }
+
+  async sendStaffDM(fromId: string, toId: string, body: string) {
+    const dm: StaffDM = { id: Math.random().toString(36).slice(2), fromId, toId, body, ts: Date.now(), read: false };
+    this.staffDMs = [...this.staffDMs, dm]; this.emitDMs();
+  }
+
+  staffConversation(staffId1: string, staffId2: string): StaffDM[] {
+    return this.getOrCreateDM(staffId1, staffId2);
+  }
+
+  // ---- Countries ----
+  addCountry(country: Omit<Country, 'id'>) {
+    const newCountry: Country = { ...country, id: 'c_' + Math.random().toString(36).slice(2) };
+    this.countries = [...this.countries, newCountry];
+    bus.emit(Topics.Countries, this.countries);
+  }
+
+  updateCountry(id: string, patch: Partial<Country>) {
+    this.countries = this.countries.map(c => c.id === id ? { ...c, ...patch } : c);
+    bus.emit(Topics.Countries, this.countries);
+  }
+
+  removeCountry(id: string) {
+    this.countries = this.countries.filter(c => c.id !== id);
+    bus.emit(Topics.Countries, this.countries);
+  }
+
+  isGeoBlocked(): boolean {
+    const country = this.countries.find(c => c.id === this.detectedCountryId);
+    return country ? !country.isActive : false;
+  }
+
+  get detectedCountry(): Country | undefined {
+    return this.countries.find(c => c.id === this.detectedCountryId);
+  }
+
+  setDetectedCountry(countryId: string) {
+    this.detectedCountryId = countryId;
+  }
+
+  hasIpAlreadySignedUp(_ip: string): boolean {
+    return false;
+  }
+
+  // ---- Payment Methods ----
+  addManualMethod(method: Omit<ManualMethod, 'id'>) {
+    const newMethod: ManualMethod = { ...method, id: 'mm_' + Math.random().toString(36).slice(2) };
+    this.manualMethods = [...this.manualMethods, newMethod]; this.emitManual();
+    rpc(supabase.rpc('admin_upsert_payment_method', {
+      p_id: null, p_method_type: newMethod.kind, p_is_active: newMethod.active,
+      p_account_details: { ...newMethod } as unknown as string, p_countries: newMethod.countries as unknown as string,
+    })).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+  }
+
+  updateManualMethod(id: string, patch: Partial<ManualMethod>) {
+    this.manualMethods = this.manualMethods.map(m => m.id === id ? { ...m, ...patch } : m); this.emitManual();
+    const updated = this.manualMethods.find(m => m.id === id);
+    if (updated) {
+      rpc(supabase.rpc('admin_upsert_payment_method', {
+        p_id: id, p_method_type: updated.kind, p_is_active: updated.active,
+        p_account_details: { ...updated } as unknown as string, p_countries: updated.countries as unknown as string,
+      })).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+    }
+  }
+
+  removeManualMethod(id: string) {
+    this.manualMethods = this.manualMethods.filter(m => m.id !== id); this.emitManual();
+    rpc(supabase.rpc('admin_delete_payment_method', { p_id: id })).then(() => { void this.syncPaymentMethodsFromSupabase(); }).catch(() => {});
+  }
+
+  // ---- Auto Gateways ----
+  addAutoGateway(gateway: Omit<AutoGateway, 'id'>) {
+    const newGateway: AutoGateway = { ...gateway, id: 'ag_' + Math.random().toString(36).slice(2) };
+    this.autoGateways = [...this.autoGateways, newGateway]; this.emitGateways();
+  }
+  addGateway(g: Omit<AutoGateway, 'id'>) { return this.addAutoGateway(g); }
+
+  updateAutoGateway(id: string, patch: Partial<AutoGateway>) {
+    this.autoGateways = this.autoGateways.map(g => g.id === id ? { ...g, ...patch } : g); this.emitGateways();
+  }
+  updateGateway(id: string, patch: Partial<AutoGateway>) { return this.updateAutoGateway(id, patch); }
+
+  removeAutoGateway(id: string) {
+    this.autoGateways = this.autoGateways.filter(g => g.id !== id); this.emitGateways();
+  }
+  removeGateway(id: string) { return this.removeAutoGateway(id); }
+
+  // ---- Referrals ----
+  async saveReferralConfig(config: ReferralConfig) {
+    this.referralConfig = config;
+    bus.emit(Topics.ReferralConfig, this.referralConfig);
+    await rpc(supabase.rpc('admin_update_setting', { p_key: 'referral_config', p_value: config as unknown as string })).catch(() => {});
+  }
+
+  async loadReferrals() {
+    try {
+      const { data, error } = await supabase.rpc('admin_get_referrals');
+      if (error) { console.warn('[cms] loadReferrals error:', error.message); return; }
+      if (data && Array.isArray(data)) {
+        this.referrals = (data as Array<Record<string, unknown>>).map(r => ({
+          id: r.id as string,
+          referrerId: r.referrer_id as string,
+          referredUserId: r.referred_id as string,
+          referredUsername: (r.referred_username as string) || '',
+          depositAmount: Number(r.deposit_amount) || 0,
+          firstDepositApproved: (r.status as string) === 'credited',
+          rewardPaid: (r.status as string) === 'credited',
+          rewardCredited: (r.status as string) === 'credited',
+          rewardAmount: Number(r.bonus_amount) || 0,
+          createdAt: new Date(r.created_at as string).getTime(),
+          ts: new Date(r.created_at as string).getTime(),
+        }));
+        this.emitReferrals();
+      }
+    } catch (e) { console.warn('[cms] loadReferrals failed:', e); }
+  }
+
+  async syncReferralsFromSupabase() { return this.loadReferrals(); }
+
+  addReferral(referral: Omit<Referral, 'id' | 'ts'>) {
+    const newReferral: Referral = { ...referral, id: 'ref_' + Math.random().toString(36).slice(2), ts: Date.now() };
+    this.referrals = [...this.referrals, newReferral]; this.emitReferrals();
+  }
+
+  updateReferralReward(id: string, patch: Partial<Pick<Referral, 'rewardPaid' | 'rewardCredited' | 'paidAt'>>) {
+    this.referrals = this.referrals.map(r => r.id === id ? { ...r, ...patch } : r); this.emitReferrals();
+  }
+
+  approveReferral(id: string) {
+    this.referrals = this.referrals.map(r => r.id === id ? { ...r, rewardPaid: true, paidAt: Date.now() } : r); this.emitReferrals();
+  }
+
+  recordReferralSignup(referrerId: string, referredUserId: string, _referredUsername: string) {
+    const existing = this.referrals.find(r => r.referredUserId === referredUserId);
+    if (existing) return;
+    void supabase.rpc('record_referral_signup', { p_referrer_id: referrerId, p_referred_id: referredUserId }).catch(() => {});
+  }
+
+  // ---- Affiliates ----
+  async loadAffiliates() {
+    try {
+      const { data, error } = await supabase.from('affiliates').select('*').order('created_at', { ascending: false });
+      if (error) { console.warn('[cms] loadAffiliates error:', error.message); return; }
+      if (data && Array.isArray(data)) {
+        this.affiliates = (data as Array<Record<string, unknown>>).map(a => ({
+          id: a.id as string,
+          userId: a.user_id as string,
+          username: (a.username as string) || '',
+          email: (a.email as string) || '',
+          telegram: (a.telegram as string) || '',
+          trafficSource: (a.traffic_source as string) || '',
+          estimatedTraffic: (a.estimated_traffic as string) || '',
+          status: (a.status as 'pending' | 'approved' | 'rejected') || 'pending',
+          revSharePct: Number(a.rev_share_pct) || 0,
+          stats: { clicks: 0, registered: 0, deposits: 0, revenueShare: 0 },
+          ts: new Date(a.created_at as string).getTime(),
+        }));
+        bus.emit(Topics.Affiliates, this.affiliates);
+      }
+    } catch (e) { console.warn('[cms] loadAffiliates failed:', e); }
+  }
+
+  async syncAffiliatesFromSupabase() { return this.loadAffiliates(); }
+
+  async updateAffiliateStatus(id: string, status: 'approved' | 'rejected', revSharePct?: number) {
+    await supabase.from('affiliates').update({ status, ...(revSharePct !== undefined ? { rev_share_pct: revSharePct } : {}) }).eq('id', id);
+    await this.loadAffiliates();
+  }
+
+  addAffiliate(a: Omit<AffiliateApplication, 'id' | 'ts'>) {
+    const app: AffiliateApplication = { ...a, id: Math.random().toString(36).slice(2), ts: Date.now() };
+    this.affiliates = [...this.affiliates, app];
+    bus.emit(Topics.Affiliates, this.affiliates);
+  }
+
+  updateAffiliate(id: string, patch: Partial<AffiliateApplication>) {
+    this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, ...patch } : a);
+    bus.emit(Topics.Affiliates, this.affiliates);
+  }
+
+  getAffiliateByUserId(userId: string): AffiliateApplication | undefined {
+    return this.affiliates.find(a => a.userId === userId);
+  }
+
   async approveAffiliate(id: string, revSharePct: number) {
     this.affiliates = this.affiliates.map(a => a.id === id ? { ...a, status: 'approved' as const, revSharePct } : a);
     bus.emit(Topics.Affiliates, this.affiliates);
@@ -812,140 +1060,27 @@ class Cms {
     await supabase.rpc('admin_reject_affiliate', { p_id: id }).catch(() => {});
   }
 
-  // ---- Referral helpers ----
-  async syncReferralsFromSupabase() {
-    try {
-      const { data, error } = await supabase.rpc('admin_get_referrals');
-      if (error) { console.warn('[cms] syncReferrals error:', error.message); return; }
-      if (data && Array.isArray(data)) {
-        this.referrals = (data as Array<Record<string, unknown>>).map(r => ({
-          id: r.id as string,
-          referrerId: r.referrer_id as string,
-          referredUserId: r.referred_user_id as string,
-          referredUsername: (r.referred_username as string) || '',
-          depositAmount: Number(r.deposit_amount) || 0,
-          firstDepositApproved: Boolean(r.first_deposit_approved),
-          rewardPaid: Boolean(r.reward_paid),
-          rewardCredited: Boolean(r.reward_credited),
-          rewardAmount: Number(r.reward_amount) || 0,
-          createdAt: new Date(r.created_at as string).getTime(),
-          paidAt: r.paid_at ? new Date(r.paid_at as string).getTime() : undefined,
-          ts: new Date(r.created_at as string).getTime(),
-        }));
-        this.emitReferrals();
-      }
-    } catch (e) { console.warn('[cms] syncReferrals failed:', e); }
+  // ---- hashPassword ----
+  async hashPassword(plain: string): Promise<string> {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(plain));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
-  // ---- Auto Gateway helpers ----
-  async syncAutoGatewaysFromSupabase() {
-    try {
-      const { data, error } = await supabase.rpc('admin_get_auto_gateways');
-      if (error) { console.warn('[cms] syncAutoGateways error:', error.message); return; }
-      if (data && Array.isArray(data)) {
-        this.autoGateways = (data as Array<Record<string, unknown>>).map(r => ({
-          id: r.id as string,
-          name: (r.name as string) || '',
-          secretKey: (r.secret_key as string) || '',
-          publicKey: (r.public_key as string) || '',
-          merchantId: (r.merchant_id as string) || '',
-          webhookUrl: (r.webhook_url as string) || '',
-          minDeposit: Number(r.min_deposit) || 0,
-          maxDeposit: Number(r.max_deposit) || 0,
-          countries: (r.countries as Record<string, boolean>) ?? {},
-        }));
-        this.emitGateways();
-      }
-    } catch (e) { console.warn('[cms] syncAutoGateways failed:', e); }
-  }
-
-  async upsertAutoGateway(gateway: AutoGateway) {
-    await supabase.rpc('admin_upsert_auto_gateway', {
-      p_id: gateway.id || null,
-      p_name: gateway.name,
-      p_secret_key: gateway.secretKey,
-      p_public_key: gateway.publicKey,
-      p_merchant_id: gateway.merchantId,
-      p_webhook_url: gateway.webhookUrl,
-      p_min_deposit: gateway.minDeposit,
-      p_max_deposit: gateway.maxDeposit,
-      p_countries: gateway.countries,
-    });
-    await this.syncAutoGatewaysFromSupabase();
-  }
-
-  async deleteAutoGateway(id: string) {
-    await supabase.rpc('admin_delete_auto_gateway', { p_id: id });
-    await this.syncAutoGatewaysFromSupabase();
-  }
-
-  // ---- Staff DM helpers ----
-  async syncStaffDMsFromSupabase(staffId: string) {
-    try {
-      const { data, error } = await supabase.rpc('get_staff_dms', { p_staff_id: staffId });
-      if (error) { console.warn('[cms] syncStaffDMs error:', error.message); return; }
-      if (data && Array.isArray(data)) {
-        this.staffDMs = (data as Array<Record<string, unknown>>).map(r => ({
-          id: r.id as string,
-          fromId: r.from_id as string,
-          toId: r.to_id as string,
-          body: r.body as string,
-          ts: new Date(r.created_at as string).getTime(),
-          read: Boolean(r.read),
-        }));
-        this.emitDMs();
-      }
-    } catch (e) { console.warn('[cms] syncStaffDMs failed:', e); }
-  }
-
-  async sendStaffDM(fromId: string, toId: string, body: string) {
-    await supabase.rpc('send_staff_dm', { p_from_id: fromId, p_to_id: toId, p_body: body });
-    await this.syncStaffDMsFromSupabase(fromId);
-  }
-
-  // ---- Support Ticket helpers ----
-  async replyToTicket(ticketId: string, staffId: string, body: string) {
-    await supabase.rpc('staff_reply_ticket', { p_ticket_id: ticketId, p_staff_id: staffId, p_body: body });
-    await this.syncTicketsFromSupabase();
-  }
-
-  async assignTicket(ticketId: string, staffId: string) {
-    await supabase.rpc('admin_assign_ticket', { p_ticket_id: ticketId, p_staff_id: staffId });
-    await this.syncTicketsFromSupabase();
-  }
-
-  async closeTicket(ticketId: string) {
-    await supabase.rpc('admin_close_ticket', { p_ticket_id: ticketId });
-    await this.syncTicketsFromSupabase();
-  }
-
-  // ---- Affiliate sync ----
-  async syncAffiliatesFromSupabase() {
-    try {
-      const { data, error } = await supabase.rpc('admin_get_affiliates');
-      if (error) { console.warn('[cms] syncAffiliates error:', error.message); return; }
-      if (data && Array.isArray(data)) {
-        this.affiliates = (data as Array<Record<string, unknown>>).map(r => ({
-          id: r.id as string,
-          userId: r.user_id as string,
-          username: (r.username as string) || '',
-          email: (r.email as string) || '',
-          telegram: (r.telegram as string) || '',
-          trafficSource: (r.traffic_source as string) || '',
-          estimatedTraffic: (r.estimated_traffic as string) || '',
-          status: (r.status as AffiliateApplication['status']) || 'pending',
-          revSharePct: Number(r.rev_share_pct) || 0,
-          stats: {
-            clicks: Number((r.stats as Record<string, unknown>)?.clicks) || 0,
-            registered: Number((r.stats as Record<string, unknown>)?.registered) || 0,
-            deposits: Number((r.stats as Record<string, unknown>)?.deposits) || 0,
-            revenueShare: Number((r.stats as Record<string, unknown>)?.revenueShare) || 0,
-          },
-          ts: new Date(r.created_at as string).getTime(),
-        }));
-        bus.emit(Topics.Affiliates, this.affiliates);
-      }
-    } catch (e) { console.warn('[cms] syncAffiliates failed:', e); }
+  // ---- updateUserProfile ----
+  async updateUserProfile(userId: string, patch: { username?: string; email?: string; phone?: string; vipLevel?: number; isActive?: boolean }) {
+    const update: Record<string, unknown> = {};
+    if (patch.username !== undefined) update.username = patch.username;
+    if (patch.email !== undefined) update.email = patch.email;
+    if (patch.phone !== undefined) update.phone = patch.phone;
+    if (patch.vipLevel !== undefined) update.vip_level = patch.vipLevel;
+    if (patch.isActive !== undefined) update.is_active = patch.isActive;
+    if (Object.keys(update).length > 0) {
+      await supabase.from('profiles').update(update).eq('id', userId).catch(() => {});
+    }
+    this.adminUsers = this.adminUsers.map(u =>
+      u.id === userId ? { ...u, ...(patch.username !== undefined ? { username: patch.username } : {}), ...(patch.vipLevel !== undefined ? { vipLevel: patch.vipLevel } : {}) } : u,
+    );
+    bus.emit(Topics.AdminUsers, this.adminUsers);
   }
 }
 
