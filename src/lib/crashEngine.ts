@@ -1,5 +1,5 @@
 // crashEngine.ts — SERVER-SYNCED shared crash round.
-// Client polls crash_current_round every 200ms.
+// Client polls crash_current_round every 300ms.
 // On startup, loads last 20 rounds from server for history bar.
 // IMPORTANT: getState() and getBets() MUST exist — hooks.ts calls them as initial values.
 
@@ -33,8 +33,8 @@ export interface BetSlot {
   cashedOutAt: number | null;
   cashedOut: boolean;
   win: number | null;
+  /** Supabase bets row id — set after pending insert */
   dbId: string | null;
-  settledBeforeInsert: boolean;
 }
 
 export interface CrashState {
@@ -62,16 +62,24 @@ interface EngineState {
   win: number | null;
   serverElapsedAtConnect: number;
   connectTime: number;
+  /** Server-known crash point used to cap animation overshoot */
   serverCrashPoint: number | null;
-  /** Highest elapsed_ms we have ever received from the server for this round.
-   *  Used to make clock re-syncs monotonic: we never move startedAt backwards. */
+  /** Last server-reported elapsed_ms during flying — used to prevent overshoot */
   lastServerElapsedMs: number;
+  /** When the poll last set countdown (for smooth animation) */
   countdownSetAt: number;
+  /** Countdown value at the time it was last set by poll */
   countdownAtSet: number;
 }
 
-const POLL_MS = 200;
-const MAX_AHEAD_MS = 1000;
+const POLL_MS = 300;
+/** Maximum ms the local animation is allowed to run ahead of the last server-reported elapsed */
+const MAX_AHEAD_MS = 400;
+/**
+ * If local clock is THIS many ms ahead of server, gently nudge startedAt forward.
+ * Keeps multiplier from drifting too far above server while avoiding jitter resets.
+ */
+const DRIFT_CORRECTION_MS = 800;
 const SESSION_ROUND_KEY = 'b4bet.crash.lastRoundId';
 const SESSION_PHASE_KEY = 'b4bet.crash.lastPhase';
 
@@ -86,7 +94,6 @@ function freshBet(id: 'A' | 'B'): BetSlot {
     cashedOut: false,
     win: null,
     dbId: null,
-    settledBeforeInsert: false,
   };
 }
 
@@ -94,7 +101,11 @@ function multiplierFromElapsed(elapsedMs: number): number {
   return Math.pow(Math.E, 0.12 * (elapsedMs / 1000));
 }
 
-async function settleSlotOnServer(slot: BetSlot, roundId: string, bustPoint: number): Promise<void> {
+async function settleSlotOnServer(
+  slot: BetSlot,
+  roundId: string,
+  bustPoint: number,
+): Promise<void> {
   const session = auth.getSession();
   if (!session) return;
   try {
@@ -111,7 +122,11 @@ async function settleSlotOnServer(slot: BetSlot, roundId: string, bustPoint: num
   }
 }
 
-async function insertPendingBet(userId: string, amount: number, roundId: string): Promise<string | null> {
+async function insertPendingBet(
+  userId: string,
+  amount: number,
+  roundId: string,
+): Promise<string | null> {
   try {
     const { data, error } = await supabase
       .from('bets')
@@ -121,12 +136,15 @@ async function insertPendingBet(userId: string, amount: number, roundId: string)
         win_amount: 0,
         multiplier: 0,
         status: 'pending',
-        bet_details: { game: 'crash', bustPoint: 0, cashOutAt: null, roundId },
+        bet_details: { bustPoint: 0, cashOutAt: null, roundId },
         placed_at: new Date().toISOString(),
       })
       .select('id')
       .single();
-    if (error) { console.warn('[CrashEngine] insertPendingBet error:', error.message); return null; }
+    if (error) {
+      console.warn('[CrashEngine] insertPendingBet error:', error.message);
+      return null;
+    }
     return (data as { id: string } | null)?.id ?? null;
   } catch (e) {
     console.warn('[CrashEngine] insertPendingBet exception:', e);
@@ -135,23 +153,35 @@ async function insertPendingBet(userId: string, amount: number, roundId: string)
 }
 
 async function settlePendingBet(
-  dbId: string, winAmount: number, multiplier: number,
-  cashOutAt: number | null, bustPoint: number, status: 'won' | 'lost',
+  dbId: string,
+  winAmount: number,
+  multiplier: number,
+  cashOutAt: number | null,
+  bustPoint: number,
+  status: 'won' | 'lost',
 ): Promise<void> {
   try {
-    await supabase.from('bets').update({
-      win_amount: winAmount, multiplier, status,
-      resolved_at: new Date().toISOString(),
-      bet_details: { game: 'crash', bustPoint, cashOutAt },
-    }).eq('id', dbId);
+    await supabase
+      .from('bets')
+      .update({
+        win_amount: winAmount,
+        multiplier,
+        status,
+        resolved_at: new Date().toISOString(),
+        bet_details: { bustPoint, cashOutAt },
+      })
+      .eq('id', dbId);
   } catch (e) {
     console.warn('[CrashEngine] settlePendingBet exception:', e);
   }
 }
 
 async function deletePendingBet(dbId: string): Promise<void> {
-  try { await supabase.from('bets').delete().eq('id', dbId); }
-  catch (e) { console.warn('[CrashEngine] deletePendingBet exception:', e); }
+  try {
+    await supabase.from('bets').delete().eq('id', dbId);
+  } catch (e) {
+    console.warn('[CrashEngine] deletePendingBet exception:', e);
+  }
 }
 
 class CrashEngine {
@@ -181,7 +211,6 @@ class CrashEngine {
     (sessionStorage.getItem(SESSION_PHASE_KEY) as 'waiting' | 'flying' | 'crashed' | '') ?? '';
   private didPlayStart = false;
   private didPlayCrash = false;
-  private locallyBusted = false;
 
   start() {
     if (this.pollTimer) return;
@@ -224,22 +253,9 @@ class CrashEngine {
         this.state.roundId = r.round_uuid ?? '';
         this.state.roundSeq += 1;
         this.state.lastServerElapsedMs = 0;
-        this.locallyBusted = false;
         this.didPlayStart = false;
         this.didPlayCrash = false;
-        this.lastKnownPhase = '';
         this.broadcastBets();
-      }
-
-      // ── Guard: check early-exit BEFORE updating lastKnownPhase ──
-      // If we updated lastKnownPhase first then returned early, the next poll
-      // would see a wrong prevPhase and re-trigger "first time flying" →
-      // startedAt reset → 1x jump.
-      if (r.phase === 'waiting' && this.state.phase === 'flying') {
-        // Local has already pre-transitioned; server is just lagging.
-        // Leave lastKnownPhase as 'flying' so the upcoming 'flying' poll
-        // is treated as a re-sync, not a fresh start.
-        return;
       }
 
       const prevPhase = this.lastKnownPhase;
@@ -248,24 +264,14 @@ class CrashEngine {
 
       if (r.phase === 'waiting') {
         const waitTotal = 6000;
-        const serverRemaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
-
+        const remaining = Math.max(0, (waitTotal - r.elapsed_ms) / 1000);
         this.state.phase = 'countdown';
+        this.state.countdown = remaining;
+        this.state.countdownAtSet = remaining;
+        this.state.countdownSetAt = Date.now();
         this.state.multiplier = 1.0;
         this.state.serverCrashPoint = null;
         this.state.lastServerElapsedMs = 0;
-        this.locallyBusted = false;
-
-        // Never jump countdown backwards — only advance if server is ahead.
-        const localRemaining = Math.max(
-          0,
-          this.state.countdownAtSet - (Date.now() - this.state.countdownSetAt) / 1000,
-        );
-        if (newRound || serverRemaining < localRemaining - 0.05) {
-          this.state.countdownAtSet = serverRemaining;
-          this.state.countdownSetAt = Date.now();
-        }
-
         if (r.last_crash_point) {
           const bp = Number(r.last_crash_point);
           if (this.state.history[0] !== bp) {
@@ -276,29 +282,30 @@ class CrashEngine {
       }
 
       if (r.phase === 'flying') {
-        // ── MONOTONIC CLOCK RE-SYNC ──
-        // Multiple concurrent async polls can arrive out of order. An older
-        // poll with lower elapsed_ms would set startedAt to a more recent
-        // timestamp, making the multiplier jump back to ~1x visually.
-        // Fix: only update startedAt when elapsed_ms is strictly advancing.
-        if (r.elapsed_ms >= this.state.lastServerElapsedMs) {
-          this.state.startedAt = Date.now() - r.elapsed_ms;
-          this.state.lastServerElapsedMs = r.elapsed_ms;
-        }
-
         if (prevPhase !== 'flying') {
-          // First confirmed flying for this round — init state.
-          // startedAt is already set above from r.elapsed_ms.
+          // First time entering flying — set startedAt once
           this.state.phase = 'flying';
           this.state.serverElapsedAtConnect = r.elapsed_ms;
           this.state.connectTime = Date.now();
+          this.state.startedAt = Date.now() - r.elapsed_ms;
           this.state.bustPoint = 0;
+          this.state.lastServerElapsedMs = r.elapsed_ms;
           if (!this.didPlayStart) {
             playStartSound();
             this.didPlayStart = true;
           }
+        } else {
+          // Already flying — only update lastServerElapsedMs.
+          // DO NOT reset startedAt on every poll — that causes jitter/2x-fly.
+          // Only apply gentle correction if local clock has drifted >DRIFT_CORRECTION_MS ahead.
+          const localElapsed = Date.now() - this.state.startedAt;
+          const drift = localElapsed - r.elapsed_ms;
+          if (drift > DRIFT_CORRECTION_MS) {
+            // Nudge startedAt forward slightly to stay in sync without hard reset
+            this.state.startedAt = Date.now() - r.elapsed_ms;
+          }
+          this.state.lastServerElapsedMs = r.elapsed_ms;
         }
-
         if (r.crash_point != null && Number(r.crash_point) >= 1.0) {
           this.state.serverCrashPoint = Number(r.crash_point);
         }
@@ -310,25 +317,18 @@ class CrashEngine {
       if (r.phase === 'crashed') {
         if (prevPhase !== 'crashed') {
           const serverBust = r.crash_point != null ? Number(r.crash_point) : null;
-          if (this.locallyBusted) {
-            if (serverBust !== null) {
-              this.state.bustPoint = serverBust;
-              this.state.multiplier = serverBust;
-            }
-          } else {
-            this.state.phase = 'busted';
-            this.state.bustPoint = serverBust ?? this.state.multiplier;
-            this.state.multiplier = this.state.bustPoint;
-            this.state.serverCrashPoint = null;
-            this.state.lastServerElapsedMs = 0;
-            if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
-            const bp = this.state.bustPoint;
-            if (this.state.history[0] !== bp) {
-              this.state.history = [bp, ...this.state.history].slice(0, 20);
-              this.publishHistory();
-            }
-            this.settleBustedBets();
+          this.state.phase = 'busted';
+          this.state.bustPoint = serverBust ?? this.state.multiplier;
+          this.state.multiplier = this.state.bustPoint;
+          this.state.serverCrashPoint = null;
+          this.state.lastServerElapsedMs = 0;
+          if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
+          const bp = this.state.bustPoint;
+          if (this.state.history[0] !== bp) {
+            this.state.history = [bp, ...this.state.history].slice(0, 20);
+            this.publishHistory();
           }
+          this.settleBustedBets();
         } else {
           this.state.phase = 'busted';
           if (r.crash_point) {
@@ -357,21 +357,6 @@ class CrashEngine {
 
       if (this.state.serverCrashPoint != null && m >= this.state.serverCrashPoint) {
         m = this.state.serverCrashPoint;
-        if (!this.didPlayCrash) { playCrashSound(); this.didPlayCrash = true; }
-        this.state.phase = 'busted';
-        this.state.bustPoint = this.state.serverCrashPoint;
-        this.state.multiplier = this.state.serverCrashPoint;
-        this.state.serverCrashPoint = null;
-        this.locallyBusted = true;
-        const bp = this.state.bustPoint;
-        if (this.state.history[0] !== bp) {
-          this.state.history = [bp, ...this.state.history].slice(0, 20);
-          this.publishHistory();
-        }
-        this.settleBustedBets();
-        this.publish();
-        this.rafId = requestAnimationFrame(() => this.animate());
-        return;
       }
 
       playTickSound(m);
@@ -380,149 +365,131 @@ class CrashEngine {
       this.publish();
     } else if (this.state.phase === 'countdown') {
       const elapsed = (Date.now() - this.state.countdownSetAt) / 1000;
-      const remaining = Math.max(0, this.state.countdownAtSet - elapsed);
-      this.state.countdown = remaining;
-
-      if (remaining === 0 && this.state.phase === 'countdown') {
-        this.state.phase = 'flying';
-        this.state.startedAt = Date.now();
-        this.state.lastServerElapsedMs = 0;
-        this.state.multiplier = 1.0;
-        // Pre-set so concurrent stale 'waiting' polls are ignored (early return)
-        // and when server confirms 'flying', it's treated as re-sync not fresh start.
-        this.lastKnownPhase = 'flying';
-        if (!this.didPlayStart) {
-          playStartSound();
-          this.didPlayStart = true;
-        }
-      }
-
+      const smooth = Math.max(0, this.state.countdownAtSet - elapsed);
+      this.state.countdown = smooth;
       this.publish();
     }
+
     this.rafId = requestAnimationFrame(() => this.animate());
   }
 
   private checkAutoCashouts() {
+    if (this.state.phase !== 'flying') return;
     const m = this.state.multiplier;
-    for (const slot of Object.values(this.state.bets)) {
-      if (slot.placed && !slot.cashedOut && slot.autoEnabled && slot.autoCashAt !== null && m >= slot.autoCashAt) {
-        this.performCashOut(slot.id, slot.autoCashAt);
+    for (const id of ['A', 'B'] as const) {
+      const slot = this.state.bets[id];
+      if (!slot.placed || slot.cashedOut || !slot.autoEnabled || slot.autoCashAt == null) continue;
+      if (m >= slot.autoCashAt) {
+        this.cashOut(id);
       }
     }
   }
 
-  private publish() { bus.emit(Topics.CrashState, this.getState()); }
-  private publishHistory() { bus.emit(Topics.CrashHistory, [...this.state.history]); }
+  cashOut(id: 'A' | 'B') {
+    const slot = this.state.bets[id];
+    if (!slot.placed || slot.cashedOut || this.state.phase !== 'flying') return;
+    const m = this.state.multiplier;
+    slot.cashedOutAt = m;
+    slot.cashedOut = true;
+    slot.win = Math.floor(slot.amount * m);
+    store.addBalance(slot.win);
+    playCashoutSound();
+    this.broadcastBets();
+    this.publish();
+    void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
+    if (slot.dbId) {
+      void settlePendingBet(slot.dbId, slot.win, m, m, this.state.bustPoint, 'won');
+    }
+  }
+
+  placeBet(id: 'A' | 'B', amount: number, autoCashAt: number | null, autoEnabled: boolean) {
+    if (this.state.phase !== 'countdown') return;
+    const slot = this.state.bets[id];
+    if (slot.placed) return;
+    if (!store.deductBalance(amount)) return;
+    slot.amount = amount;
+    slot.placed = true;
+    slot.autoCashAt = autoCashAt;
+    slot.autoEnabled = autoEnabled;
+    slot.cashedOutAt = null;
+    slot.cashedOut = false;
+    slot.win = null;
+    slot.dbId = null;
+    this.broadcastBets();
+    this.publish();
+    const session = auth.getSession();
+    if (session) {
+      void insertPendingBet(session.userId, amount, this.state.roundId).then((dbId) => {
+        if (dbId) slot.dbId = dbId;
+      });
+    }
+  }
+
+  cancelBet(id: 'A' | 'B') {
+    const slot = this.state.bets[id];
+    if (!slot.placed || this.state.phase !== 'countdown') return;
+    store.addBalance(slot.amount);
+    if (slot.dbId) void deletePendingBet(slot.dbId);
+    this.state.bets[id] = freshBet(id);
+    this.broadcastBets();
+    this.publish();
+  }
+
+  private settleBustedBets() {
+    for (const id of ['A', 'B'] as const) {
+      const slot = this.state.bets[id];
+      if (!slot.placed || slot.cashedOut) continue;
+      slot.win = 0;
+      this.broadcastBets();
+      this.publish();
+      void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
+      if (slot.dbId) {
+        void settlePendingBet(slot.dbId, 0, 0, null, this.state.bustPoint, 'lost');
+      }
+    }
+  }
 
   private broadcastBets() {
     const bets: Record<'A' | 'B', BetSlot> = { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
     bus.emit(Topics.CrashBets, bets);
-    bus.emit(Topics.CrashTick, bets);
   }
 
-  private performCashOut(id: 'A' | 'B', cashOutAt: number) {
-    const slot = this.state.bets[id];
-    if (!slot.placed || slot.cashedOutAt !== null) return;
-    slot.cashedOutAt = cashOutAt;
-    slot.cashedOut = true;
-    slot.win = Math.floor(slot.amount * cashOutAt);
-    playCashoutSound();
-    bus.emit(Topics.CrashCashout, { id, amount: slot.win, multiplier: cashOutAt, ts: Date.now() } satisfies CashoutEvent);
-    this.broadcastBets();
-    store.addBalance(slot.win);
-    store.recordCrashBet({ roundId: this.state.roundSeq, amount: slot.amount, cashOutAt, bustPoint: this.state.bustPoint, win: slot.win ?? 0 });
-    if (slot.dbId) {
-      void settlePendingBet(slot.dbId, slot.win ?? 0, cashOutAt, cashOutAt, this.state.bustPoint, 'won');
-    } else {
-      slot.settledBeforeInsert = true;
-      void settleSlotOnServer(slot, this.state.roundId, this.state.bustPoint);
-    }
+  private publishHistory() {
+    bus.emit(Topics.CrashHistory, [...this.state.history]);
   }
 
-  private settleBustedBets() {
-    const { bustPoint, roundSeq, roundId } = this.state;
-    for (const slot of Object.values(this.state.bets)) {
-      if (!slot.placed || slot.cashedOutAt !== null) continue;
-      slot.win = 0;
-      store.recordCrashBet({ roundId: roundSeq, amount: slot.amount, cashOutAt: null, bustPoint, win: 0 });
-      if (slot.dbId) {
-        void settlePendingBet(slot.dbId, 0, bustPoint, null, bustPoint, 'lost');
-      } else {
-        slot.settledBeforeInsert = true;
-        void settleSlotOnServer(slot, roundId, bustPoint);
-      }
-    }
-    this.broadcastBets();
+  private publish() {
+    const s = this.state;
+    bus.emit(Topics.CrashState, {
+      phase: s.phase,
+      multiplier: s.multiplier,
+      countdown: s.countdown,
+      roundId: s.roundId,
+      roundSeq: s.roundSeq,
+      bustPoint: s.bustPoint,
+      history: s.history,
+      bets: { A: { ...s.bets.A }, B: { ...s.bets.B } },
+      startedAt: s.startedAt,
+    } satisfies CrashState);
   }
-
-  // ─── Public API ────────────────────────────────────────────────────────────
 
   getState(): CrashState {
+    const s = this.state;
     return {
-      phase: this.state.phase,
-      multiplier: this.state.multiplier,
-      countdown: this.state.countdown,
-      roundId: this.state.roundId,
-      roundSeq: this.state.roundSeq,
-      bustPoint: this.state.bustPoint,
-      history: [...this.state.history],
-      bets: { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } },
-      startedAt: this.state.startedAt,
+      phase: s.phase,
+      multiplier: s.multiplier,
+      countdown: s.countdown,
+      roundId: s.roundId,
+      roundSeq: s.roundSeq,
+      bustPoint: s.bustPoint,
+      history: [...s.history],
+      bets: { A: { ...s.bets.A }, B: { ...s.bets.B } },
+      startedAt: s.startedAt,
     };
   }
 
   getBets(): Record<'A' | 'B', BetSlot> {
     return { A: { ...this.state.bets.A }, B: { ...this.state.bets.B } };
-  }
-
-  placeBet(id: 'A' | 'B', amount: number): { ok: boolean; reason?: string } {
-    const slot = this.state.bets[id];
-    if (this.state.phase !== 'countdown') return { ok: false, reason: 'Round not in betting phase' };
-    if (slot.placed) return { ok: false, reason: 'Already placed' };
-    if (amount <= 0) return { ok: false, reason: 'Invalid amount' };
-    if (amount > store.balance) return { ok: false, reason: 'Insufficient balance' };
-    slot.amount = amount;
-    slot.placed = true;
-    store.debit(amount);
-    this.broadcastBets();
-    const session = auth.getSession();
-    if (session?.userId) {
-      void insertPendingBet(session.userId, amount, this.state.roundId).then((dbId) => {
-        if (!dbId) return;
-        if (slot.settledBeforeInsert) { void deletePendingBet(dbId); } else { slot.dbId = dbId; }
-      });
-    }
-    return { ok: true };
-  }
-
-  cancelBet(id: 'A' | 'B'): { ok: boolean; reason?: string } {
-    const slot = this.state.bets[id];
-    if (this.state.phase !== 'countdown') return { ok: false, reason: 'Cannot cancel after round starts' };
-    if (!slot.placed) return { ok: false, reason: 'No bet to cancel' };
-    store.addBalance(slot.amount);
-    if (slot.dbId) { void deletePendingBet(slot.dbId); }
-    this.state.bets[id] = freshBet(id);
-    this.broadcastBets();
-    return { ok: true };
-  }
-
-  setAutoCashAt(id: 'A' | 'B', at: number | null) { this.state.bets[id].autoCashAt = at; }
-
-  setAuto(id: 'A' | 'B', enabled: boolean, target: number) {
-    this.state.bets[id].autoEnabled = enabled;
-    this.state.bets[id].autoCashAt = enabled ? target : null;
-  }
-
-  cashOut(id: 'A' | 'B'): { ok: boolean; reason?: string } {
-    const slot = this.state.bets[id];
-    if (this.state.phase !== 'flying') return { ok: false, reason: 'Not in flight' };
-    if (!slot.placed) return { ok: false, reason: 'No bet placed' };
-    if (slot.cashedOut) return { ok: false, reason: 'Already cashed out' };
-    if (this.state.serverCrashPoint != null && this.state.multiplier >= this.state.serverCrashPoint) {
-      return { ok: false, reason: 'Round has ended' };
-    }
-    this.performCashOut(id, this.state.multiplier);
-    return { ok: true };
   }
 }
 
