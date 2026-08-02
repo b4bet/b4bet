@@ -36,6 +36,10 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const popupTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const popupFadeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Copy toast state
+  const [copyToast, setCopyToast] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Always-fresh refs so closures never go stale
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -56,6 +60,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   useEffect(() => () => {
     if (popupTimer.current) clearTimeout(popupTimer.current);
     if (popupFadeTimer.current) clearTimeout(popupFadeTimer.current);
+    if (copyTimer.current) clearTimeout(copyTimer.current);
   }, []);
 
   useEffect(() => {
@@ -206,9 +211,54 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   };
 
+  // Custom copy toast — no browser alert
   const copyToClipboard = (text: string) => {
-    navigator.clipboard?.writeText(text).then(() => { alert('Copied!'); }).catch(() => {});
+    navigator.clipboard?.writeText(text).then(() => {
+      if (copyTimer.current) clearTimeout(copyTimer.current);
+      setCopyToast(true);
+      copyTimer.current = setTimeout(() => setCopyToast(false), 1000);
+    }).catch(() => {});
   };
+
+  // Copy toast element
+  const copyToastEl = (
+    <div
+      style={{
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        transform: `translate(-50%, -50%) scale(${copyToast ? 1 : 0.85})`,
+        opacity: copyToast ? 1 : 0,
+        transition: 'opacity 0.18s ease, transform 0.18s ease',
+        pointerEvents: 'none',
+        zIndex: 9999,
+      }}
+    >
+      <div style={{
+        background: 'linear-gradient(135deg,#0f2820,#0d1f17)',
+        border: '1.5px solid rgba(16,185,129,0.5)',
+        borderRadius: 14,
+        padding: '12px 22px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(16,185,129,0.1)',
+      }}>
+        <div style={{
+          width: 30, height: 30, borderRadius: '50%',
+          background: 'rgba(16,185,129,0.2)',
+          border: '1.5px solid rgba(16,185,129,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        }}>
+          <CheckCircle2 style={{ width: 15, height: 15, color: '#34d399' }} />
+        </div>
+        <div>
+          <p style={{ color: '#fff', fontWeight: 700, fontSize: 13, margin: 0 }}>Copied!</p>
+          <p style={{ color: '#6ee7b7', fontSize: 11, margin: '1px 0 0' }}>Clipboard me copy ho gaya</p>
+        </div>
+      </div>
+    </div>
+  );
 
   const toast = popup ? (
     <div
@@ -312,6 +362,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
           )}
           {toast}
         </div>
+        {copyToastEl}
       </div>
     );
   }
@@ -319,13 +370,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   // ── Form page ─────────────────────────────────────────────────────────────
   const limits = getEffectiveLimits();
 
-  // Get QR URL from ManualMethod — stored in qrDataUrl field OR in customData.qrImageUrl
+  // Get QR URL — check qrDataUrl first, then qrImageUrl (admin stores it as qrImageUrl in details)
   const upiQrUrl: string | undefined = (() => {
     if (selected.kind !== 'upi' || flow !== 'deposit') return undefined;
     if (selected.qrDataUrl) return selected.qrDataUrl;
-    // fallback: try customData JSON
+    // Fallback: check customData JSON for qrImageUrl (set by admin PaymentMethodsTab)
     if (selected.customData) {
-      try { const obj = JSON.parse(selected.customData) as { qrImageUrl?: string }; return obj.qrImageUrl; } catch { /* ignore */ }
+      try { const obj = JSON.parse(selected.customData) as { qrImageUrl?: string }; if (obj.qrImageUrl) return obj.qrImageUrl; } catch { /* ignore */ }
     }
     return undefined;
   })();
@@ -526,6 +577,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
         {toast}
       </form>
+      {copyToastEl}
     </div>
   );
 }
