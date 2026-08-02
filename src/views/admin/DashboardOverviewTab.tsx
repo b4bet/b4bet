@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  Users, TrendingUp, TrendingDown, Clock, CheckCircle2,
-  Activity, RefreshCw, Gamepad2, BarChart3, Wifi, ShieldAlert,
-  Bell, ArrowRight, Banknote,
+  Users, TrendingDown, Clock, CheckCircle2,
+  Activity, RefreshCw, BarChart3, Wifi, ShieldAlert,
+  Bell, ArrowRight, Banknote, TrendingUp,
 } from 'lucide-react';
 import { supabase } from '../../integrations/supabase/client';
 import { cms } from '../../lib/cms';
+import { useStaffSession } from '../../lib/cmsHooks';
 import { supabaseGetTransactions, supabaseGetUsers, type SupabaseTransaction, type SupabaseProfile } from '../../lib/supabaseIntegration';
 
 function fmt(n: number) {
@@ -28,6 +29,7 @@ interface DashStats {
 }
 
 export default function DashboardOverviewTab() {
+  const staffSessionId = useStaffSession();
   const [stats, setStats] = useState<DashStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -35,10 +37,16 @@ export default function DashboardOverviewTab() {
   const [transactions, setTransactions] = useState<SupabaseTransaction[]>([]);
   const [profiles, setProfiles] = useState<SupabaseProfile[]>([]);
 
-  const canSeeRequests = cms.hasPermission('requests');
-  const canSeeFinance  = cms.hasPermission('finance');
-  const canSeeUsers    = cms.hasPermission('users');
-  const canSeeTickets  = cms.hasPermission('tickets');
+  // Safe permission check — only call when we have a valid staffSessionId
+  const hasPermission = (key: Parameters<typeof cms.hasPermission>[1]) => {
+    if (!staffSessionId) return false;
+    return cms.hasPermission(staffSessionId, key);
+  };
+
+  const canSeeRequests = hasPermission('requests');
+  const canSeeFinance  = hasPermission('finance');
+  const canSeeUsers    = hasPermission('users');
+  const canSeeTickets  = hasPermission('tickets');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -46,9 +54,11 @@ export default function DashboardOverviewTab() {
       const tasks: Promise<unknown>[] = [supabase.rpc('admin_get_dashboard_stats')];
       if (canSeeRequests) tasks.push(supabaseGetTransactions(), supabaseGetUsers());
       const results = await Promise.all(tasks);
-      const { data, error } = results[0] as { data: DashStats; error: Error | null };
+      const { data, error } = results[0] as { data: DashStats | DashStats[]; error: Error | null };
       if (error) throw error;
-      setStats(data);
+      // admin_get_dashboard_stats may return array or object depending on Supabase version
+      const statsData = Array.isArray(data) ? (data[0] as DashStats) : (data as DashStats);
+      setStats(statsData);
       if (canSeeRequests) {
         setTransactions((results[1] as SupabaseTransaction[]) ?? []);
         setProfiles((results[2] as SupabaseProfile[]) ?? []);
@@ -87,7 +97,7 @@ export default function DashboardOverviewTab() {
   }, [transactions]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-4">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="font-display font-bold text-xl text-white">Dashboard Overview</h2>
@@ -134,7 +144,20 @@ export default function DashboardOverviewTab() {
             </div>
           </div>
 
-          {/* New Requests — notification only; visible only to staff with Requests access */}
+          {/* Finance row */}
+          {canSeeFinance && (
+            <div>
+              <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Finance</h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <StatCard label="Total Deposits"      value={fmt(stats.total_deposits)}     icon={TrendingUp}   color="text-emeraldwin-300" sub="Approved" />
+                <StatCard label="Total Withdrawals"   value={fmt(stats.total_withdrawals)}  icon={TrendingDown} color="text-coral-300"      sub="Approved" />
+                <StatCard label="Pending Deposits"    value={stats.pending_deposits.toString()}   icon={Clock} color="text-amber-300"     sub="Awaiting approval" highlight={stats.pending_deposits > 0} />
+                <StatCard label="Pending Withdrawals" value={stats.pending_withdrawals.toString()} icon={Clock} color="text-amber-300"    sub="Awaiting approval" highlight={stats.pending_withdrawals > 0} />
+              </div>
+            </div>
+          )}
+
+          {/* New Requests notification */}
           {canSeeRequests && (
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -178,9 +201,7 @@ export default function DashboardOverviewTab() {
 
           {/* Quick links */}
           <div className="panel p-4">
-            <h3 className="text-sm font-display font-bold text-white mb-3 flex items-center gap-2">
-              <Gamepad2 className="w-4 h-4 text-neon-300" /> Quick Actions
-            </h3>
+            <h3 className="text-sm font-display font-bold text-white mb-3">Quick Actions</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               {canSeeFinance && (
                 <QuickAction label="Finance Overview"  icon={TrendingUp}   onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'finance' }))} />
