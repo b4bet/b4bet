@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Wallet, X, Info, Copy, Coins, AlertTriangle, Loader2, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, Wallet, X, Info, Copy, Coins, AlertTriangle, Loader2, CheckCircle2, QrCode } from 'lucide-react';
 import { useAuth, useBalance } from '../lib/hooks';
 import { supabase } from '../integrations/supabase/client';
 import { useManualMethods } from '../lib/cmsHooks';
@@ -53,13 +53,11 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }, 2500);
   };
 
-  // Cleanup timers on unmount
   useEffect(() => () => {
     if (popupTimer.current) clearTimeout(popupTimer.current);
     if (popupFadeTimer.current) clearTimeout(popupFadeTimer.current);
   }, []);
 
-  // Reset form when opened
   useEffect(() => {
     if (open) {
       setSelected(null);
@@ -73,18 +71,15 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   }, [open]);
 
-  // Mobile hardware back button support
   useEffect(() => {
     if (!open) return;
     window.history.pushState({ pmf: true }, '');
     const onPop = () => {
       if (selectedRef.current) {
-        // Go back to method list
         setSelected(null);
         setSelectedCrypto(null);
         window.history.pushState({ pmf: true }, '');
       } else {
-        // Close the flow
         onCloseRef.current();
       }
     };
@@ -197,7 +192,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
         return;
       }
 
-      // Success: go back to method list and show toast
       resetForm();
       showPopup(
         flow === 'deposit' ? 'Deposit Submitted!' : 'Withdrawal Requested!',
@@ -216,7 +210,6 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     navigator.clipboard?.writeText(text).then(() => { alert('Copied!'); }).catch(() => {});
   };
 
-  // Small toast at bottom — NOT fixed/portal so it never blocks buttons
   const toast = popup ? (
     <div
       style={{
@@ -273,22 +266,17 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   if (!selected) {
     return (
       <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', flexDirection: 'column' }} className="bg-slatepanel-900">
-        {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
           <h3 className="font-display font-bold text-white" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Wallet style={{ width: 16, height: 16, color: 'var(--color-neon-400, #00ff88)' }} />
             Select {title} Method
           </h3>
-          <button
-            type="button"
-            onClick={doClose}
-            style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', display: 'grid', placeItems: 'center', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}
-          >
+          <button type="button" onClick={doClose}
+            style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', display: 'grid', placeItems: 'center', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
             <X style={{ width: 16, height: 16, color: '#cbd5e1' }} />
           </button>
         </div>
 
-        {/* Method list */}
         <div style={{ flex: 1, overflowY: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12, position: 'relative' }}>
           {flowMethods.length === 0 ? (
             <div style={{ textAlign: 'center', paddingTop: 48 }}>
@@ -299,10 +287,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
             flowMethods.map((m) => {
               const kindIcon = m.kind === 'upi' ? '📱' : m.kind === 'bank' ? '🏦' : m.kind === 'crypto' ? '🪙' : '📄';
               return (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => setSelected(m)}
+                <button key={m.id} type="button" onClick={() => setSelected(m)}
                   style={{ width: '100%', textAlign: 'left', padding: '14px 16px', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.04)', color: '#fff', fontWeight: 600, fontSize: 15, cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -334,16 +319,23 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   // ── Form page ─────────────────────────────────────────────────────────────
   const limits = getEffectiveLimits();
 
+  // Get QR URL from ManualMethod — stored in qrDataUrl field OR in customData.qrImageUrl
+  const upiQrUrl: string | undefined = (() => {
+    if (selected.kind !== 'upi' || flow !== 'deposit') return undefined;
+    if (selected.qrDataUrl) return selected.qrDataUrl;
+    // fallback: try customData JSON
+    if (selected.customData) {
+      try { const obj = JSON.parse(selected.customData) as { qrImageUrl?: string }; return obj.qrImageUrl; } catch { /* ignore */ }
+    }
+    return undefined;
+  })();
+
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 210, display: 'flex', flexDirection: 'column' }} className="bg-slatepanel-900">
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0, background: 'var(--bg-slatepanel-900, #0f1225)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button
-            type="button"
-            onClick={handleBackToMethodList}
-            style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', display: 'grid', placeItems: 'center', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}
-          >
+          <button type="button" onClick={handleBackToMethodList}
+            style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', display: 'grid', placeItems: 'center', cursor: 'pointer', WebkitTapHighlightColor: 'transparent' }}>
             <ArrowLeft style={{ width: 16, height: 16, color: '#cbd5e1' }} />
           </button>
           <div>
@@ -377,7 +369,25 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
           <div className="space-y-3">
             {flow === 'deposit' && (
               <div className="panel-inner p-4 rounded-xl bg-midnight-850 border border-borderline-900">
-                <h4 className="text-xs font-semibold text-neon-300 mb-2">Pay to this UPI ID</h4>
+                <h4 className="text-xs font-semibold text-neon-300 mb-3 flex items-center gap-1.5">
+                  <QrCode className="w-3.5 h-3.5" /> Pay to this UPI
+                </h4>
+
+                {/* QR Code from Supabase storage */}
+                {upiQrUrl && (
+                  <div className="flex flex-col items-center mb-3">
+                    <div className="bg-white rounded-xl p-2 shadow-lg">
+                      <img
+                        src={upiQrUrl}
+                        alt="UPI QR Code"
+                        className="w-48 h-48 object-contain"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-2">Scan with any UPI app to pay</p>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between bg-slatepanel-800 rounded-lg p-3">
                   <div>
                     <p className="text-sm font-bold text-white font-mono">{selected.upiId || '—'}</p>
