@@ -28,25 +28,27 @@ interface DashStats {
   total_transactions: number;
 }
 
-// admin_get_dashboard_stats RPC returns an array with one row:
-// either [{ ...stats }] (flat) or [{ admin_get_dashboard_stats: { ...stats } }] (nested)
+// admin_get_dashboard_stats RPC returns either:
+// flat: [{ total_users: ... }]  or  nested: [{ admin_get_dashboard_stats: { ... } }]
 function extractStats(data: unknown): DashStats | null {
   if (!data) return null;
   const arr = Array.isArray(data) ? data : [data];
   if (arr.length === 0) return null;
   const first = arr[0] as Record<string, unknown>;
-  // Nested: { admin_get_dashboard_stats: { ... } }
   if (first && typeof first === 'object' && 'admin_get_dashboard_stats' in first) {
     return first['admin_get_dashboard_stats'] as DashStats;
   }
-  // Flat: { total_users: ..., total_deposits: ..., ... }
   if (first && typeof first === 'object' && 'total_users' in first) {
     return first as DashStats;
   }
   return null;
 }
 
-export default function DashboardOverviewTab() {
+interface Props {
+  onNavigate: (tab: string) => void;
+}
+
+export default function DashboardOverviewTab({ onNavigate }: Props) {
   const staffSessionId = useStaffSession();
   const [stats, setStats] = useState<DashStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -55,7 +57,6 @@ export default function DashboardOverviewTab() {
   const [transactions, setTransactions] = useState<SupabaseTransaction[]>([]);
   const [profiles, setProfiles] = useState<SupabaseProfile[]>([]);
 
-  // Safe permission check — only call when we have a valid staffSessionId
   const hasPermission = (key: Parameters<typeof cms.hasPermission>[1]) => {
     if (!staffSessionId) return false;
     try { return cms.hasPermission(staffSessionId, key); } catch { return false; }
@@ -71,9 +72,7 @@ export default function DashboardOverviewTab() {
     try {
       const { data, error } = await supabase.rpc('admin_get_dashboard_stats');
       if (error) throw error;
-      const statsData = extractStats(data);
-      setStats(statsData);
-
+      setStats(extractStats(data));
       if (canSeeRequests) {
         const [txns, users] = await Promise.all([supabaseGetTransactions(), supabaseGetUsers()]);
         setTransactions(txns);
@@ -94,7 +93,6 @@ export default function DashboardOverviewTab() {
       .channel('dashboard_overview_rt')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, () => { void load(); })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'profiles' }, () => { void load(); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bets' }, () => { void load(); })
       .subscribe((status) => { setRealtimeConnected(status === 'SUBSCRIBED'); });
     return () => { void supabase.removeChannel(channel); };
   }, [load]);
@@ -143,7 +141,7 @@ export default function DashboardOverviewTab() {
 
       {loading && !stats ? (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          {Array.from({ length: 12 }).map((_, i) => (
+          {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="panel p-4 h-24 animate-pulse bg-slatepanel-800" />
           ))}
         </div>
@@ -173,7 +171,7 @@ export default function DashboardOverviewTab() {
             </div>
           )}
 
-          {/* New Requests notification */}
+          {/* New Requests */}
           {canSeeRequests && (
             <div>
               <div className="flex items-center justify-between mb-2">
@@ -185,7 +183,7 @@ export default function DashboardOverviewTab() {
                     </span>
                   )}
                 </h3>
-                <button onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'requests' }))}
+                <button onClick={() => onNavigate('requests')}
                   className="flex items-center gap-1 text-[11px] font-semibold text-violet-300 hover:text-violet-200">
                   Go to Requests tab <ArrowRight className="w-3 h-3" />
                 </button>
@@ -220,16 +218,16 @@ export default function DashboardOverviewTab() {
             <h3 className="text-sm font-display font-bold text-white mb-3">Quick Actions</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
               {canSeeFinance && (
-                <QuickAction label="Finance Overview"  icon={TrendingUp}   onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'finance' }))} />
+                <QuickAction label="Finance Overview"  icon={TrendingUp}   onClick={() => onNavigate('finance')} />
               )}
               {canSeeRequests && (
-                <QuickAction label="Pending Requests"  icon={Clock}        badge={(stats.pending_deposits ?? 0) + (stats.pending_withdrawals ?? 0)} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'requests' }))} />
+                <QuickAction label="Pending Requests"  icon={Clock}        badge={(stats.pending_deposits ?? 0) + (stats.pending_withdrawals ?? 0)} onClick={() => onNavigate('requests')} />
               )}
               {canSeeUsers && (
-                <QuickAction label="All Users"         icon={Users}        onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'users' }))} />
+                <QuickAction label="All Users"         icon={Users}        onClick={() => onNavigate('users')} />
               )}
               {canSeeTickets && (
-                <QuickAction label="Support Tickets"   icon={CheckCircle2} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'tickets' }))} />
+                <QuickAction label="Support Tickets"   icon={CheckCircle2} onClick={() => onNavigate('tickets')} />
               )}
             </div>
           </div>
