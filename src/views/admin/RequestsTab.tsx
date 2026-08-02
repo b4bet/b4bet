@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Banknote, TrendingDown, CheckCircle2, XCircle, Clock, Loader2,
-  FileText, Search, Calendar, RefreshCw, History,
+  FileText, Search, Calendar, RefreshCw, History, User,
 } from 'lucide-react';
 import { cms } from '../../lib/cms';
 import { supabaseGetTransactions, supabaseGetUsers, type SupabaseTransaction, type SupabaseProfile } from '../../lib/supabaseIntegration';
@@ -22,37 +22,41 @@ function statusChip(status: string) {
   }
 }
 
+/** Parse the nested details JSON string if present, return an object */
+function parseDetails(raw: unknown): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    return typeof raw === 'string'
+      ? (JSON.parse(raw) as Record<string, unknown>)
+      : (raw as Record<string, unknown>);
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Extract UPI ID from transaction metadata.
- * Handles multiple storage formats:
- * 1. txnMeta.destination  — set by UpiWithdrawalModal via cms.submitWithdrawal
- * 2. txnMeta.upi_id       — legacy field
- * 3. txnMeta.details      — JSON string or object with upiId/upi_id inside
- *    e.g. details = '{"amount":"506","upiId":"8564007777@fam"}'
+ * Handles: destination, upi_id, and details JSON with upiId/upi_id.
  */
 function extractUpiId(txnMeta: Record<string, unknown>): string {
-  // Direct fields first
   const direct = (txnMeta.destination as string) || (txnMeta.upi_id as string) || (txnMeta.account as string);
   if (direct) return direct;
+  const d = parseDetails(txnMeta.details);
+  return (d.upiId as string) || (d.upi_id as string) || (d.destination as string) || '';
+}
 
-  // Parse details — may be a JSON string or an object
-  const rawDetails = txnMeta.details;
-  if (rawDetails) {
-    try {
-      const parsed: Record<string, unknown> =
-        typeof rawDetails === 'string' ? (JSON.parse(rawDetails) as Record<string, unknown>) : (rawDetails as Record<string, unknown>);
-      const fromDetails = (parsed.upiId as string) || (parsed.upi_id as string) || (parsed.destination as string);
-      if (fromDetails) return fromDetails;
-    } catch {
-      // details is a plain string description, not JSON — ignore
-    }
-  }
-
-  return '';
+/**
+ * Extract UPI account name from transaction metadata.
+ * Handles: upiName at top level or inside details JSON.
+ */
+function extractUpiName(txnMeta: Record<string, unknown>): string {
+  const direct = (txnMeta.upiName as string) || (txnMeta.account_name as string);
+  if (direct) return direct;
+  const d = parseDetails(txnMeta.details);
+  return (d.upiName as string) || (d.account_name as string) || '';
 }
 
 type Period = 'all' | 'day' | 'week' | 'month' | 'year' | 'custom';
-// 'cancel' replaces 'reject' — cancels request and refunds withdrawal to user wallet
 type ActMode = 'accept' | 'cancel';
 type ActState = { id: string; mode: ActMode } | null;
 
@@ -86,7 +90,6 @@ export default function RequestsTab() {
     } finally { setLoading(false); }
   }, []);
 
-  // user_id (uuid) -> 6-digit account_id lookup
   const accountIdMap = useMemo(() => {
     const map: Record<string, string> = {};
     for (const p of profiles) if (p.id && p.account_id) map[p.id] = p.account_id;
@@ -116,11 +119,9 @@ export default function RequestsTab() {
   const pendingDep = transactions.filter((t) => t.type === 'deposit'    && (t.status === 'pending' || t.status === 'processing')).length;
   const pendingWd  = transactions.filter((t) => t.type === 'withdrawal' && (t.status === 'pending' || t.status === 'processing')).length;
 
-  // Needs action vs finalized (read-only history)
   const queueItems   = useMemo(() => filtered.filter((t) => t.status === 'pending' || t.status === 'processing'), [filtered]);
   const historyItems = useMemo(() => filtered.filter((t) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'), [filtered]);
 
-  // ── Actions ──
   const handleAccept = async (id: string) => {
     const txn = transactions.find((t) => t.id === id);
     if (!txn) { alert('Could not find this request in the loaded list. Try Refresh.'); return; }
@@ -155,7 +156,6 @@ export default function RequestsTab() {
         return;
       } finally { setUpdatingId(null); }
     } else {
-      // Cancel: refunds withdrawal amount to user wallet in Supabase
       const reason = inputVal.trim() || undefined;
       setUpdatingId(id);
       try {
@@ -188,7 +188,6 @@ export default function RequestsTab() {
         </button>
       </div>
 
-      {/* Deposit / Withdrawal tabs */}
       <div className="flex gap-2">
         <button onClick={() => setView('deposit')}
           className={`flex-1 px-3 py-2 rounded-xl border text-sm font-semibold flex items-center justify-center gap-2 transition-colors ${
@@ -206,14 +205,12 @@ export default function RequestsTab() {
         </button>
       </div>
 
-      {/* Search */}
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
         <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search user, amount, ID..."
           className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-9 pr-4 py-2 text-sm text-white outline-none" />
       </div>
 
-      {/* Split: items needing action vs finalized history */}
       {loading ? (
         <div className="text-center text-slate-500 py-8"><Loader2 className="w-5 h-5 animate-spin mx-auto mb-2" />Loading from Supabase…</div>
       ) : filtered.length === 0 ? (
@@ -223,7 +220,6 @@ export default function RequestsTab() {
         </div>
       ) : (
         <>
-          {/* Pending Actions — needs admin action */}
           <div className="space-y-2">
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5" />Pending Actions ({queueItems.length})
@@ -231,13 +227,10 @@ export default function RequestsTab() {
             {queueItems.length === 0 ? (
               <div className="text-xs text-slate-500 italic px-1">Nothing waiting on you right now.</div>
             ) : (
-              <div className="space-y-2">
-                {queueItems.map((t) => renderCard(t, true))}
-              </div>
+              <div className="space-y-2">{queueItems.map((t) => renderCard(t, true))}</div>
             )}
           </div>
 
-          {/* Period filter — placed directly above History */}
           <div className="space-y-2 pt-1">
             <div className="flex flex-wrap gap-1.5">
               {PERIODS.map((p) => (
@@ -253,20 +246,17 @@ export default function RequestsTab() {
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5">
                   <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  <input type="date" value={fromDate}
-                    onChange={(e) => setFromDate(e.target.value)} className="bg-transparent text-xs text-white outline-none" />
+                  <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="bg-transparent text-xs text-white outline-none" />
                 </div>
                 <span className="text-slate-500 text-xs">to</span>
                 <div className="flex items-center gap-1.5 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5">
                   <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  <input type="date" value={toDate}
-                    onChange={(e) => setToDate(e.target.value)} className="bg-transparent text-xs text-white outline-none" />
+                  <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="bg-transparent text-xs text-white outline-none" />
                 </div>
               </div>
             )}
           </div>
 
-          {/* History — finalized, read-only */}
           <div className="space-y-2">
             <div className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
               <History className="w-3.5 h-3.5" />History ({historyItems.length})
@@ -274,9 +264,7 @@ export default function RequestsTab() {
             {historyItems.length === 0 ? (
               <div className="text-xs text-slate-500 italic px-1">No finalized {view} requests in this period.</div>
             ) : (
-              <div className="space-y-2">
-                {historyItems.map((t) => renderCard(t, false))}
-              </div>
+              <div className="space-y-2">{historyItems.map((t) => renderCard(t, false))}</div>
             )}
           </div>
         </>
@@ -293,9 +281,8 @@ export default function RequestsTab() {
     const txnMeta         = (t.metadata as Record<string, unknown>) ?? {};
     const accountId       = t.user_id ? (accountIdMap[t.user_id] ?? '—') : '—';
     const depositMethod   = (txnMeta.method as string) || 'Manual';
-
-    // Extract UPI ID — checks destination, upi_id, and details JSON
     const upiId           = extractUpiId(txnMeta);
+    const upiName         = extractUpiName(txnMeta);
     const utr             = meta?.utr || (txnMeta.utr as string | undefined);
     const reason          = meta?.reason || (txnMeta.reason as string | undefined);
 
@@ -313,17 +300,29 @@ export default function RequestsTab() {
           </div>
         </div>
 
-        {/* Row 2: UPI ID — withdrawal only, shown prominently */}
+        {/* Withdrawal: UPI ID + Account Name box */}
         {t.type === 'withdrawal' && (
-          <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2">
-            <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-0.5">UPI ID / Destination</div>
-            <div className={`text-sm font-mono font-semibold break-all ${upiId ? 'text-amber-300' : 'text-red-400'}`}>
-              {upiId || '⚠ Not provided'}
+          <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 space-y-2">
+            {/* UPI ID */}
+            <div>
+              <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-0.5">UPI ID / Destination</div>
+              <div className={`text-sm font-mono font-semibold break-all ${upiId ? 'text-amber-300' : 'text-red-400'}`}>
+                {upiId || '⚠ Not provided'}
+              </div>
+            </div>
+            {/* Account Name */}
+            <div className="border-t border-slate-700/40 pt-2">
+              <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-0.5 flex items-center gap-1">
+                <User className="w-3 h-3" />Account Name
+              </div>
+              <div className={`text-sm font-semibold ${upiName ? 'text-sky-300' : 'text-slate-500 italic'}`}>
+                {upiName || 'Not provided'}
+              </div>
             </div>
           </div>
         )}
 
-        {/* Row 3: UTR (if already approved) */}
+        {/* UTR (if already approved) */}
         {utr && (
           <div className="text-[10px] text-slate-400">
             <span className="text-slate-500">UTR: </span>
@@ -331,7 +330,7 @@ export default function RequestsTab() {
           </div>
         )}
 
-        {/* Row 4: Cancellation reason */}
+        {/* Cancellation reason */}
         {reason && (
           <div className="text-[10px] text-orange-400">
             <span className="text-slate-500">Reason: </span>{reason}
@@ -349,10 +348,14 @@ export default function RequestsTab() {
               </button>
             )}
             {t.status === 'processing' && (
-              <button onClick={() => { setActing({ id: t.id, mode: 'accept' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold hover:text-emerald-200">Approve (UTR)</button>
+              <button onClick={() => { setActing({ id: t.id, mode: 'accept' }); setInputVal(''); }}
+                className="px-3 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold hover:text-emerald-200">
+                Approve (UTR)
+              </button>
             )}
             {!isActing && (
-              <button onClick={() => { setActing({ id: t.id, mode: 'cancel' }); setInputVal(''); }} className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/40 text-red-400 text-[10px] font-semibold hover:text-red-300 flex items-center gap-1">
+              <button onClick={() => { setActing({ id: t.id, mode: 'cancel' }); setInputVal(''); }}
+                className="px-3 py-1.5 rounded-lg bg-red-500/20 border border-red-500/40 text-red-400 text-[10px] font-semibold hover:text-red-300 flex items-center gap-1">
                 <XCircle className="w-3 h-3" />Cancel
               </button>
             )}
@@ -365,10 +368,12 @@ export default function RequestsTab() {
             <input type="text" value={inputVal} onChange={(e) => setInputVal(e.target.value)}
               placeholder={acting?.mode === 'accept' ? 'UTR / Transaction ID (required)' : 'Reason for cancellation (optional)'}
               className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white outline-none" autoFocus />
-            <button onClick={() => void handleSubmit()} className="px-3 py-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1">
+            <button onClick={() => void handleSubmit()}
+              className="px-3 py-2 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-semibold flex items-center gap-1">
               <CheckCircle2 className="w-3.5 h-3.5" /> Save
             </button>
-            <button onClick={clearAct} className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 text-[10px] font-semibold flex items-center gap-1">
+            <button onClick={clearAct}
+              className="px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-slate-400 text-[10px] font-semibold flex items-center gap-1">
               <XCircle className="w-3.5 h-3.5" /> Cancel
             </button>
           </div>
