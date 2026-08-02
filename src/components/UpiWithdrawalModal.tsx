@@ -51,7 +51,7 @@ export default function UpiWithdrawalModal({ open, onClose }: Props) {
       cms.toast({ title: 'Insufficient balance', body: `Available: ${store.currency}${balance.toFixed(2)}`, kind: 'alert' });
       return;
     }
-    // Pass details as JSON string so extractUpiId() and extractUpiName() can parse it
+    // Store as JSON in details so admin panel can parse upiName
     const details = JSON.stringify({ upiId: upiId.trim(), upiName: upiName.trim(), amount: String(amt) });
     cms.submitWithdrawal(user, amt, upiId.trim(), details);
     setSubmitted(true);
@@ -101,13 +101,13 @@ export default function UpiWithdrawalModal({ open, onClose }: Props) {
               />
             </div>
 
-            {/* UPI Account Name */}
+            {/* Account Name */}
             <div>
               <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Account Name (as on UPI)</label>
               <input
                 value={upiName}
                 onChange={(e) => setUpiName(e.target.value)}
-                placeholder="e.g. Rafik Shak"
+                placeholder="e.g. Rahul Kumar"
                 className="input w-full py-3 text-base"
               />
               <p className="text-[10px] text-slate-500 mt-1">Enter the name exactly as registered on your UPI account.</p>
