@@ -274,8 +274,10 @@ export default function PaymentMethodsTab() {
                         )}
                         {m.kind === 'upi' && (
                           <>
-                            <span className="text-slate-500">UPI ID:</span><span className="text-slate-300">{(m.details.upiId as string) || '—'}</span>
-                            <span className="text-slate-500">Display:</span><span className="text-slate-300">{(m.details.upiDisplayName as string) || '—'}</span>
+                            <span className="text-slate-500">{m.flow === 'withdrawal' ? 'Payout UPI:' : 'UPI ID:'}</span>
+                            <span className="text-slate-300">{(m.details.upiId as string) || '—'}</span>
+                            <span className="text-slate-500">{m.flow === 'withdrawal' ? 'Holder Name:' : 'Display:'}</span>
+                            <span className="text-slate-300">{(m.details.upiDisplayName as string) || '—'}</span>
                           </>
                         )}
                         {m.kind === 'crypto' && cryptos.map((cc) => (
@@ -387,16 +389,25 @@ export default function PaymentMethodsTab() {
               {d.kind === 'upi' && (
                 <div className="space-y-3 panel-inner p-3 rounded-xl">
                   <h4 className="text-xs font-semibold text-neon-300 flex items-center gap-1.5"><Smartphone className="w-3.5 h-3.5" /> UPI Details</h4>
+                  {d.flow === 'withdrawal' && (
+                    <p className="text-[10px] text-amberx-300 bg-amberx-500/10 border border-amberx-500/20 rounded-lg px-2 py-1.5">
+                      ⚠ Withdrawal UPI — Enter <strong>your (admin's) payout UPI ID</strong> where you will send money to users. Users will enter their own UPI ID when requesting a withdrawal.
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="text-[10px] uppercase text-slate-500 font-semibold">UPI ID (VPA)</label>
+                      <label className="text-[10px] uppercase text-slate-500 font-semibold">
+                        {d.flow === 'withdrawal' ? 'Payout UPI ID (Admin)' : 'UPI ID (VPA)'}
+                      </label>
                       <input value={(d.details.upiId as string) || ''} onChange={(e) => setEditing({ ...editing, draft: { ...d, details: { ...d.details, upiId: e.target.value } } })}
-                        placeholder="merchant@okhdfc" className="input mt-1 w-full" />
+                        placeholder={d.flow === 'withdrawal' ? 'yourname@upi' : 'merchant@okhdfc'} className="input mt-1 w-full" />
                     </div>
                     <div>
-                      <label className="text-[10px] uppercase text-slate-500 font-semibold">Display Name</label>
+                      <label className="text-[10px] uppercase text-slate-500 font-semibold">
+                        {d.flow === 'withdrawal' ? 'Account Holder Name' : 'Display Name'}
+                      </label>
                       <input value={(d.details.upiDisplayName as string) || ''} onChange={(e) => setEditing({ ...editing, draft: { ...d, details: { ...d.details, upiDisplayName: e.target.value } } })}
-                        placeholder="PhonePe / GPay" className="input mt-1 w-full" />
+                        placeholder={d.flow === 'withdrawal' ? 'e.g. Raj Kumar' : 'PhonePe / GPay'} className="input mt-1 w-full" />
                     </div>
                   </div>
                 </div>
