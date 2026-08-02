@@ -36,6 +36,7 @@ import { startAllPersistentGameEngines } from './lib/persistentGameEngine';
 import { useStaffSession } from './lib/cmsHooks';
 import { cms } from './lib/cms';
 import { auth } from './lib/auth';
+import type { AuthSession } from './lib/auth';
 import { supabase } from './integrations/supabase/client';
 
 interface MaintenanceConfig {
@@ -135,7 +136,9 @@ export default function App() {
   const [supportChatOpen, setSupportChatOpen] = useState(false);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authModalMode, setAuthModalMode] = useState<AuthModalMode>('login');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  // Initialise from auth.isLoggedIn() so page-reload restores state instantly
+  // from localStorage without waiting for Supabase's async getSession().
+  const [isLoggedIn, setIsLoggedIn] = useState(() => auth.isLoggedIn());
   const [maintenance, setMaintenance] = useState<MaintenanceConfig | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -178,16 +181,42 @@ export default function App() {
     return off;
   }, []);
 
+  // PRIMARY auth sync: listen to the auth bus — fires immediately on
+  // login, signup, and logout from the auth manager (same source Header uses).
+  // This is more reliable than onAuthStateChange for the signup flow because
+  // auth.register() emits the bus synchronously before Supabase's async event.
   useEffect(() => {
+    const off = bus.on(Topics.AuthState, (session: unknown) => {
+      setIsLoggedIn((session as AuthSession | null) !== null);
+    });
+    return off;
+  }, []);
+
+  // SECONDARY auth sync: handle Supabase-initiated session changes (e.g. token
+  // expiry). We intentionally do NOT call auth.logout() here to avoid a
+  // circular signOut → SIGNED_OUT → signOut loop.
+  useEffect(() => {
+    // Also validate the current Supabase session on mount as a safety net.
     supabase.auth.getSession().then(({ data: { session } }) => {
-      setIsLoggedIn(!!session);
+      if (!session && auth.isLoggedIn()) {
+        // Supabase has no valid session but our local store thinks we're logged
+        // in — force a clean logout so state is consistent.
+        void auth.logout();
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        auth.logout();
-        setIsLoggedIn(false);
+        // Only trigger logout through the auth manager if it hasn't already
+        // handled this (e.g. explicit user logout). auth.logout() emits the
+        // bus which will update isLoggedIn via the bus listener above.
+        if (auth.isLoggedIn()) {
+          void auth.logout();
+        } else {
+          setIsLoggedIn(false);
+        }
       } else if (session) {
+        // Belt-and-suspenders: if bus somehow missed the signin event, sync now.
         setIsLoggedIn(true);
       }
     });
