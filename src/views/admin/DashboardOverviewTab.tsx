@@ -28,6 +28,24 @@ interface DashStats {
   total_transactions: number;
 }
 
+// admin_get_dashboard_stats RPC returns an array with one row:
+// either [{ ...stats }] (flat) or [{ admin_get_dashboard_stats: { ...stats } }] (nested)
+function extractStats(data: unknown): DashStats | null {
+  if (!data) return null;
+  const arr = Array.isArray(data) ? data : [data];
+  if (arr.length === 0) return null;
+  const first = arr[0] as Record<string, unknown>;
+  // Nested: { admin_get_dashboard_stats: { ... } }
+  if (first && typeof first === 'object' && 'admin_get_dashboard_stats' in first) {
+    return first['admin_get_dashboard_stats'] as DashStats;
+  }
+  // Flat: { total_users: ..., total_deposits: ..., ... }
+  if (first && typeof first === 'object' && 'total_users' in first) {
+    return first as DashStats;
+  }
+  return null;
+}
+
 export default function DashboardOverviewTab() {
   const staffSessionId = useStaffSession();
   const [stats, setStats] = useState<DashStats | null>(null);
@@ -40,7 +58,7 @@ export default function DashboardOverviewTab() {
   // Safe permission check — only call when we have a valid staffSessionId
   const hasPermission = (key: Parameters<typeof cms.hasPermission>[1]) => {
     if (!staffSessionId) return false;
-    return cms.hasPermission(staffSessionId, key);
+    try { return cms.hasPermission(staffSessionId, key); } catch { return false; }
   };
 
   const canSeeRequests = hasPermission('requests');
@@ -51,17 +69,15 @@ export default function DashboardOverviewTab() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const tasks: Promise<unknown>[] = [supabase.rpc('admin_get_dashboard_stats')];
-      if (canSeeRequests) tasks.push(supabaseGetTransactions(), supabaseGetUsers());
-      const results = await Promise.all(tasks);
-      const { data, error } = results[0] as { data: DashStats | DashStats[]; error: Error | null };
+      const { data, error } = await supabase.rpc('admin_get_dashboard_stats');
       if (error) throw error;
-      // admin_get_dashboard_stats may return array or object depending on Supabase version
-      const statsData = Array.isArray(data) ? (data[0] as DashStats) : (data as DashStats);
+      const statsData = extractStats(data);
       setStats(statsData);
+
       if (canSeeRequests) {
-        setTransactions((results[1] as SupabaseTransaction[]) ?? []);
-        setProfiles((results[2] as SupabaseProfile[]) ?? []);
+        const [txns, users] = await Promise.all([supabaseGetTransactions(), supabaseGetUsers()]);
+        setTransactions(txns);
+        setProfiles(users);
       }
       setLastRefresh(new Date());
     } catch (e) {
@@ -137,10 +153,10 @@ export default function DashboardOverviewTab() {
           <div>
             <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Users</h3>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <StatCard label="Total Users"   value={stats.total_users.toString()}  icon={Users}       color="text-neon-300"        sub="Registered profiles" />
-              <StatCard label="Active Users"  value={stats.active_users.toString()} icon={Activity}    color="text-emeraldwin-300" sub="Not banned" />
-              <StatCard label="Banned Users"  value={stats.banned_users.toString()} icon={ShieldAlert} color="text-coral-300"       sub="Restricted accounts" highlight={stats.banned_users > 0} />
-              <StatCard label="Total Txns"    value={stats.total_transactions.toString()} icon={BarChart3} color="text-blue-300"   sub="All transactions" />
+              <StatCard label="Total Users"   value={String(stats.total_users ?? 0)}  icon={Users}       color="text-neon-300"        sub="Registered profiles" />
+              <StatCard label="Active Users"  value={String(stats.active_users ?? 0)} icon={Activity}    color="text-emeraldwin-300" sub="Not banned" />
+              <StatCard label="Banned Users"  value={String(stats.banned_users ?? 0)} icon={ShieldAlert} color="text-coral-300"       sub="Restricted accounts" highlight={(stats.banned_users ?? 0) > 0} />
+              <StatCard label="Total Txns"    value={String(stats.total_transactions ?? 0)} icon={BarChart3} color="text-blue-300"   sub="All transactions" />
             </div>
           </div>
 
@@ -149,10 +165,10 @@ export default function DashboardOverviewTab() {
             <div>
               <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold mb-2">Finance</h3>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                <StatCard label="Total Deposits"      value={fmt(stats.total_deposits)}     icon={TrendingUp}   color="text-emeraldwin-300" sub="Approved" />
-                <StatCard label="Total Withdrawals"   value={fmt(stats.total_withdrawals)}  icon={TrendingDown} color="text-coral-300"      sub="Approved" />
-                <StatCard label="Pending Deposits"    value={stats.pending_deposits.toString()}   icon={Clock} color="text-amber-300"     sub="Awaiting approval" highlight={stats.pending_deposits > 0} />
-                <StatCard label="Pending Withdrawals" value={stats.pending_withdrawals.toString()} icon={Clock} color="text-amber-300"    sub="Awaiting approval" highlight={stats.pending_withdrawals > 0} />
+                <StatCard label="Total Deposits"      value={fmt(stats.total_deposits ?? 0)}     icon={TrendingUp}   color="text-emeraldwin-300" sub="Approved" />
+                <StatCard label="Total Withdrawals"   value={fmt(stats.total_withdrawals ?? 0)}  icon={TrendingDown} color="text-coral-300"      sub="Approved" />
+                <StatCard label="Pending Deposits"    value={String(stats.pending_deposits ?? 0)}   icon={Clock} color="text-amber-300"     sub="Awaiting approval" highlight={(stats.pending_deposits ?? 0) > 0} />
+                <StatCard label="Pending Withdrawals" value={String(stats.pending_withdrawals ?? 0)} icon={Clock} color="text-amber-300"    sub="Awaiting approval" highlight={(stats.pending_withdrawals ?? 0) > 0} />
               </div>
             </div>
           )}
@@ -163,9 +179,9 @@ export default function DashboardOverviewTab() {
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-xs uppercase tracking-wider text-slate-500 font-semibold flex items-center gap-1.5">
                   <Bell className="w-3.5 h-3.5 text-amber-400" /> New Requests
-                  {(stats.pending_deposits + stats.pending_withdrawals) > 0 && (
+                  {((stats.pending_deposits ?? 0) + (stats.pending_withdrawals ?? 0)) > 0 && (
                     <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold grid place-items-center">
-                      {stats.pending_deposits + stats.pending_withdrawals}
+                      {(stats.pending_deposits ?? 0) + (stats.pending_withdrawals ?? 0)}
                     </span>
                   )}
                 </h3>
@@ -207,7 +223,7 @@ export default function DashboardOverviewTab() {
                 <QuickAction label="Finance Overview"  icon={TrendingUp}   onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'finance' }))} />
               )}
               {canSeeRequests && (
-                <QuickAction label="Pending Requests"  icon={Clock}        badge={stats.pending_deposits + stats.pending_withdrawals} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'requests' }))} />
+                <QuickAction label="Pending Requests"  icon={Clock}        badge={(stats.pending_deposits ?? 0) + (stats.pending_withdrawals ?? 0)} onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'requests' }))} />
               )}
               {canSeeUsers && (
                 <QuickAction label="All Users"         icon={Users}        onClick={() => window.dispatchEvent(new CustomEvent('admin-tab', { detail: 'users' }))} />
