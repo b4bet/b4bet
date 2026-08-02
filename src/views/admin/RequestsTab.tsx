@@ -15,11 +15,18 @@ function fmtDate(s: string) {
 function statusChip(status: string) {
   switch (status) {
     case 'completed':  return { cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30', label: 'Accepted' };
+    case 'approved':   return { cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30', label: 'Approved' };
     case 'processing': return { cls: 'bg-blue-500/15 text-blue-300 border-blue-500/30',         label: 'Processing' };
     case 'failed':     return { cls: 'bg-red-500/15 text-red-300 border-red-500/30',             label: 'Failed' };
     case 'cancelled':  return { cls: 'bg-orange-500/15 text-orange-300 border-orange-500/30',   label: 'Cancelled' };
+    case 'rejected':   return { cls: 'bg-red-500/15 text-red-300 border-red-500/30',             label: 'Rejected' };
     default:           return { cls: 'bg-amber-500/15 text-amber-300 border-amber-500/30',       label: 'Pending' };
   }
+}
+
+/** Terminal statuses — these show in History (read-only), not in Pending Actions */
+function isTerminalStatus(status: string): boolean {
+  return ['completed', 'approved', 'failed', 'cancelled', 'rejected'].includes(status);
 }
 
 /** Parse the nested details JSON string if present, return an object */
@@ -73,7 +80,7 @@ export default function RequestsTab() {
   const [loading, setLoading]           = useState(true);
   const [view, setView]                 = useState<'deposit' | 'withdrawal'>('deposit');
   const [query, setQuery]               = useState('');
-  const [period, setPeriod]             = useState<Period>('day');
+  const [period, setPeriod]             = useState<Period>('all');
   const [fromDate, setFromDate]         = useState('');
   const [toDate, setToDate]             = useState('');
   const [acting, setActing]             = useState<ActState>(null);
@@ -116,11 +123,12 @@ export default function RequestsTab() {
     return (t.user_id ?? '').toLowerCase().includes(q) || acc.toLowerCase().includes(q) || t.id.toLowerCase().includes(q) || t.status.toLowerCase().includes(q) || String(t.amount).includes(q);
   }), [transactions, view, cutoff, endCutoff, query, accountIdMap]);
 
-  const pendingDep = transactions.filter((t) => t.type === 'deposit'    && (t.status === 'pending' || t.status === 'processing')).length;
-  const pendingWd  = transactions.filter((t) => t.type === 'withdrawal' && (t.status === 'pending' || t.status === 'processing')).length;
+  const pendingDep = transactions.filter((t) => t.type === 'deposit'    && !isTerminalStatus(t.status)).length;
+  const pendingWd  = transactions.filter((t) => t.type === 'withdrawal' && !isTerminalStatus(t.status)).length;
 
-  const queueItems   = useMemo(() => filtered.filter((t) => t.status === 'pending' || t.status === 'processing'), [filtered]);
-  const historyItems = useMemo(() => filtered.filter((t) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled'), [filtered]);
+  // Pending = needs action; History = finalized (terminal status)
+  const queueItems   = useMemo(() => filtered.filter((t) => !isTerminalStatus(t.status)), [filtered]);
+  const historyItems = useMemo(() => filtered.filter((t) =>  isTerminalStatus(t.status)), [filtered]);
 
   const handleAccept = async (id: string) => {
     const txn = transactions.find((t) => t.id === id);
@@ -216,7 +224,7 @@ export default function RequestsTab() {
       ) : filtered.length === 0 ? (
         <div className="text-center text-slate-500 py-8">
           <FileText className="w-8 h-8 mx-auto mb-2 opacity-30" />
-          No {view} requests in this period.
+          No {view} requests found.
         </div>
       ) : (
         <>
@@ -231,6 +239,7 @@ export default function RequestsTab() {
             )}
           </div>
 
+          {/* Period filter */}
           <div className="space-y-2 pt-1">
             <div className="flex flex-wrap gap-1.5">
               {PERIODS.map((p) => (
@@ -276,7 +285,7 @@ export default function RequestsTab() {
   function renderCard(t: SupabaseTransaction, showActions: boolean) {
     const { cls, label }  = statusChip(t.status);
     const isActing        = acting?.id === t.id;
-    const isTerminal      = t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled';
+    const isTerminal      = isTerminalStatus(t.status);
     const meta            = localMeta[t.id];
     const txnMeta         = (t.metadata as Record<string, unknown>) ?? {};
     const accountId       = t.user_id ? (accountIdMap[t.user_id] ?? '—') : '—';
@@ -300,17 +309,15 @@ export default function RequestsTab() {
           </div>
         </div>
 
-        {/* Withdrawal: UPI ID + Account Name box */}
+        {/* Withdrawal: UPI ID + Account Name */}
         {t.type === 'withdrawal' && (
           <div className="bg-slate-800/60 border border-slate-700/50 rounded-lg px-3 py-2 space-y-2">
-            {/* UPI ID */}
             <div>
               <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-0.5">UPI ID / Destination</div>
               <div className={`text-sm font-mono font-semibold break-all ${upiId ? 'text-amber-300' : 'text-red-400'}`}>
                 {upiId || '⚠ Not provided'}
               </div>
             </div>
-            {/* Account Name */}
             <div className="border-t border-slate-700/40 pt-2">
               <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider mb-0.5 flex items-center gap-1">
                 <User className="w-3 h-3" />Account Name
@@ -322,7 +329,7 @@ export default function RequestsTab() {
           </div>
         )}
 
-        {/* UTR (if already approved) */}
+        {/* UTR */}
         {utr && (
           <div className="text-[10px] text-slate-400">
             <span className="text-slate-500">UTR: </span>
@@ -330,7 +337,7 @@ export default function RequestsTab() {
           </div>
         )}
 
-        {/* Cancellation reason */}
+        {/* Reason */}
         {reason && (
           <div className="text-[10px] text-orange-400">
             <span className="text-slate-500">Reason: </span>{reason}
@@ -362,7 +369,7 @@ export default function RequestsTab() {
           </div>
         )}
 
-        {/* Inline input for UTR / cancel reason */}
+        {/* Inline input */}
         {showActions && isActing && (
           <div className="flex items-center gap-2">
             <input type="text" value={inputVal} onChange={(e) => setInputVal(e.target.value)}
