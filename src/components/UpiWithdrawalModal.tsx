@@ -13,9 +13,11 @@ interface Props {
 export default function UpiWithdrawalModal({ open, onClose }: Props) {
   const session = useAuth();
   const balance = useBalance();
-  const html = useWithdrawalHtml();
-  const [upiId, setUpiId] = useState('');
-  const [amount, setAmount] = useState('');
+  const html    = useWithdrawalHtml();
+
+  const [upiId,     setUpiId]     = useState('');
+  const [upiName,   setUpiName]   = useState('');
+  const [amount,    setAmount]    = useState('');
   const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => {
@@ -23,6 +25,7 @@ export default function UpiWithdrawalModal({ open, onClose }: Props) {
       setSubmitted(false);
       setAmount('');
       setUpiId('');
+      setUpiName('');
     }
   }, [open]);
 
@@ -36,6 +39,10 @@ export default function UpiWithdrawalModal({ open, onClose }: Props) {
       cms.toast({ title: 'UPI ID required', body: 'Enter your UPI ID.', kind: 'alert' });
       return;
     }
+    if (!upiName.trim()) {
+      cms.toast({ title: 'Account name required', body: 'Enter the name registered on your UPI.', kind: 'alert' });
+      return;
+    }
     if (!amt || amt <= 0) {
       cms.toast({ title: 'Enter amount', body: 'Amount must be greater than 0.', kind: 'alert' });
       return;
@@ -44,58 +51,86 @@ export default function UpiWithdrawalModal({ open, onClose }: Props) {
       cms.toast({ title: 'Insufficient balance', body: `Available: ${store.currency}${balance.toFixed(2)}`, kind: 'alert' });
       return;
     }
-    cms.submitWithdrawal(user, amt, upiId.trim());
+    // Pass details as JSON string so extractUpiId() and extractUpiName() can parse it
+    const details = JSON.stringify({ upiId: upiId.trim(), upiName: upiName.trim(), amount: String(amt) });
+    cms.submitWithdrawal(user, amt, upiId.trim(), details);
     setSubmitted(true);
   };
 
   return (
-    <div className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center p-0 pointer-events-none bg-black/50 sm:bg-transparent">
-      <div className="pointer-events-auto w-full h-screen sm:w-full sm:max-w-sm sm:h-[90vh] bg-slatepanel-900 border-none sm:border border-borderline-900 sm:rounded-2xl shadow-2xl animate-slide-up flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="bg-slatepanel-900 border border-borderline-900 rounded-2xl w-full max-w-sm flex flex-col overflow-hidden shadow-2xl">
+
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-borderline-900 flex-shrink-0">
-          <h3 className="font-display font-bold text-white flex items-center gap-2">
-            <Wallet className="w-4 h-4 text-coral-400" /> UPI Withdrawal
-          </h3>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg bg-slatepanel-800 border border-borderline-900 grid place-items-center hover:border-neon-400/60">
-            <X className="w-4 h-4 text-slate-300" />
-          </button>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-borderline-900">
+          <div className="flex items-center gap-2">
+            <Wallet className="w-5 h-5 text-neon-400" />
+            <span className="font-bold text-white">UPI Withdrawal</span>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
         </div>
 
         {submitted ? (
-          <div className="p-6 text-center space-y-3 flex-1 flex flex-col items-center justify-center">
-            <div className="w-14 h-14 mx-auto rounded-full bg-emeraldwin-500/15 border border-emeraldwin-500/40 grid place-items-center">
-              <CheckCircle2 className="w-7 h-7 text-emeraldwin-400" />
-            </div>
-            <p className="font-display font-bold text-white">Request Submitted</p>
-            <p className="text-xs text-slate-400">Your withdrawal request is pending admin approval.</p>
-            <button onClick={onClose} className="btn-primary w-full py-2.5">Done</button>
+          <div className="flex flex-col items-center justify-center gap-3 p-8 text-center">
+            <CheckCircle2 className="w-12 h-12 text-emerald-400" />
+            <div className="font-bold text-white text-lg">Request Submitted</div>
+            <div className="text-slate-400 text-sm">Your withdrawal request is pending admin approval.</div>
+            <button onClick={onClose} className="mt-2 px-6 py-2 rounded-xl bg-neon-500/20 border border-neon-400/40 text-neon-300 font-semibold text-sm">Done</button>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col p-6 overflow-hidden">
-            <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-4">Select withdrawal method</p>
-            <div className="flex-1 overflow-y-auto scrollbar-thin">
-              {/* Admin editable HTML */}
-              <div className="bg-white text-black rounded-xl text-xs overflow-hidden mb-4" dangerouslySetInnerHTML={{ __html: html }} />
+          <div className="flex-1 flex flex-col p-6 overflow-hidden gap-4">
+            <p className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Select withdrawal method</p>
 
-              <div className="panel p-3 flex items-center justify-between mb-4">
-                <span className="text-xs text-slate-400">Available Balance</span>
-                <span className="font-display font-bold text-emeraldwin-400">{store.currency}{balance.toFixed(2)}</span>
-              </div>
+            {/* Admin editable HTML */}
+            <div className="text-sm text-slate-300" dangerouslySetInnerHTML={{ __html: html }} />
 
-              <div className="space-y-4">
-                <div>
-                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">UPI ID (VPA)</label>
-                  <input value={upiId} onChange={(e) => setUpiId(e.target.value)} placeholder="yourname@upi" className="input w-full py-3 text-base" />
-                </div>
-                <div>
-                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Amount</label>
-                  <input type="number" inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" className="input w-full py-3 text-base" />
-                </div>
-                <button onClick={submit} className="btn-coral w-full py-4 flex items-center justify-center gap-2 text-base font-semibold">
-                  <Send className="w-5 h-5" /> Request Withdrawal
-                </button>
-              </div>
+            {/* Balance */}
+            <div className="flex items-center justify-between bg-slate-800/60 rounded-xl px-4 py-2.5 border border-slate-700/50">
+              <span className="text-xs text-slate-400">Available Balance</span>
+              <span className="font-bold text-white">{store.currency}{balance.toFixed(2)}</span>
             </div>
+
+            {/* UPI ID */}
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">UPI ID (VPA)</label>
+              <input
+                value={upiId}
+                onChange={(e) => setUpiId(e.target.value)}
+                placeholder="yourname@upi"
+                className="input w-full py-3 text-base"
+              />
+            </div>
+
+            {/* UPI Account Name */}
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Account Name (as on UPI)</label>
+              <input
+                value={upiName}
+                onChange={(e) => setUpiName(e.target.value)}
+                placeholder="e.g. Rafik Shak"
+                className="input w-full py-3 text-base"
+              />
+              <p className="text-[10px] text-slate-500 mt-1">Enter the name exactly as registered on your UPI account.</p>
+            </div>
+
+            {/* Amount */}
+            <div>
+              <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Amount</label>
+              <input
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="0.00"
+                type="number"
+                className="input w-full py-3 text-base"
+              />
+            </div>
+
+            <button
+              onClick={submit}
+              className="w-full py-3 rounded-xl bg-neon-500/20 border border-neon-400/40 text-neon-300 font-bold flex items-center justify-center gap-2 hover:bg-neon-500/30 transition-colors"
+            >
+              <Send className="w-4 h-4" /> Request Withdrawal
+            </button>
           </div>
         )}
       </div>
