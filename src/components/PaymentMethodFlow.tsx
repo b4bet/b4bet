@@ -211,7 +211,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }
   };
 
-  // Custom copy toast — no browser alert
+  // Custom copy toast — no browser alert, only shows "Copy" text
   const copyToClipboard = (text: string) => {
     navigator.clipboard?.writeText(text).then(() => {
       if (copyTimer.current) clearTimeout(copyTimer.current);
@@ -220,7 +220,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     }).catch(() => {});
   };
 
-  // Copy toast element
+  // Minimal copy toast — just "Copy" word, no subtitle
   const copyToastEl = (
     <div
       style={{
@@ -235,27 +235,13 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       }}
     >
       <div style={{
-        background: 'linear-gradient(135deg,#0f2820,#0d1f17)',
-        border: '1.5px solid rgba(16,185,129,0.5)',
-        borderRadius: 14,
-        padding: '12px 22px',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 0 1px rgba(16,185,129,0.1)',
+        background: 'rgba(16,185,129,0.18)',
+        border: '1.5px solid rgba(16,185,129,0.55)',
+        borderRadius: 10,
+        padding: '8px 20px',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
       }}>
-        <div style={{
-          width: 30, height: 30, borderRadius: '50%',
-          background: 'rgba(16,185,129,0.2)',
-          border: '1.5px solid rgba(16,185,129,0.5)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        }}>
-          <CheckCircle2 style={{ width: 15, height: 15, color: '#34d399' }} />
-        </div>
-        <div>
-          <p style={{ color: '#fff', fontWeight: 700, fontSize: 13, margin: 0 }}>Copied!</p>
-          <p style={{ color: '#6ee7b7', fontSize: 11, margin: '1px 0 0' }}>Clipboard me copy ho gaya</p>
-        </div>
+        <p style={{ color: '#34d399', fontWeight: 700, fontSize: 14, margin: 0, letterSpacing: 0.3 }}>Copy</p>
       </div>
     </div>
   );
@@ -370,11 +356,10 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   // ── Form page ─────────────────────────────────────────────────────────────
   const limits = getEffectiveLimits();
 
-  // Get QR URL — check qrDataUrl first, then qrImageUrl (admin stores it as qrImageUrl in details)
+  // Get QR URL — check qrDataUrl (mapped from qrImageUrl in account_details) first, then customData JSON
   const upiQrUrl: string | undefined = (() => {
     if (selected.kind !== 'upi' || flow !== 'deposit') return undefined;
     if (selected.qrDataUrl) return selected.qrDataUrl;
-    // Fallback: check customData JSON for qrImageUrl (set by admin PaymentMethodsTab)
     if (selected.customData) {
       try { const obj = JSON.parse(selected.customData) as { qrImageUrl?: string }; if (obj.qrImageUrl) return obj.qrImageUrl; } catch { /* ignore */ }
     }
@@ -424,7 +409,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
                   <QrCode className="w-3.5 h-3.5" /> Pay to this UPI
                 </h4>
 
-                {/* QR Code from Supabase storage */}
+                {/* QR Code */}
                 {upiQrUrl && (
                   <div className="flex flex-col items-center mb-3">
                     <div className="bg-white rounded-xl p-2 shadow-lg">
