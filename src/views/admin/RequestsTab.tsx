@@ -22,6 +22,35 @@ function statusChip(status: string) {
   }
 }
 
+/**
+ * Extract UPI ID from transaction metadata.
+ * Handles multiple storage formats:
+ * 1. txnMeta.destination  — set by UpiWithdrawalModal via cms.submitWithdrawal
+ * 2. txnMeta.upi_id       — legacy field
+ * 3. txnMeta.details      — JSON string or object with upiId/upi_id inside
+ *    e.g. details = '{"amount":"506","upiId":"8564007777@fam"}'
+ */
+function extractUpiId(txnMeta: Record<string, unknown>): string {
+  // Direct fields first
+  const direct = (txnMeta.destination as string) || (txnMeta.upi_id as string) || (txnMeta.account as string);
+  if (direct) return direct;
+
+  // Parse details — may be a JSON string or an object
+  const rawDetails = txnMeta.details;
+  if (rawDetails) {
+    try {
+      const parsed: Record<string, unknown> =
+        typeof rawDetails === 'string' ? (JSON.parse(rawDetails) as Record<string, unknown>) : (rawDetails as Record<string, unknown>);
+      const fromDetails = (parsed.upiId as string) || (parsed.upi_id as string) || (parsed.destination as string);
+      if (fromDetails) return fromDetails;
+    } catch {
+      // details is a plain string description, not JSON — ignore
+    }
+  }
+
+  return '';
+}
+
 type Period = 'all' | 'day' | 'week' | 'month' | 'year' | 'custom';
 // 'cancel' replaces 'reject' — cancels request and refunds withdrawal to user wallet
 type ActMode = 'accept' | 'cancel';
@@ -263,13 +292,10 @@ export default function RequestsTab() {
     const meta            = localMeta[t.id];
     const txnMeta         = (t.metadata as Record<string, unknown>) ?? {};
     const accountId       = t.user_id ? (accountIdMap[t.user_id] ?? '—') : '—';
-
-    // For deposit: show payment method. For withdrawal: show UPI ID / destination.
     const depositMethod   = (txnMeta.method as string) || 'Manual';
-    const upiId           = (txnMeta.destination as string)
-                          || (txnMeta.upi_id as string)
-                          || (txnMeta.account as string)
-                          || '';
+
+    // Extract UPI ID — checks destination, upi_id, and details JSON
+    const upiId           = extractUpiId(txnMeta);
     const utr             = meta?.utr || (txnMeta.utr as string | undefined);
     const reason          = meta?.reason || (txnMeta.reason as string | undefined);
 
