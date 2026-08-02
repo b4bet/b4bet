@@ -4,11 +4,31 @@ import { supabase } from '@/integrations/supabase/client';
 
 type EmailType = 'welcome' | 'depositSuccess' | 'withdrawalStatus' | 'forgotPassword';
 
+// Per-email-type enabled/disabled state. Loaded from Supabase settings key 'email_enabled'.
+// Defaults to all enabled.
+const emailEnabled: Record<EmailType, boolean> = {
+  welcome: true,
+  depositSuccess: true,
+  withdrawalStatus: true,
+  forgotPassword: true,
+};
+
+export function setEmailEnabled(type: EmailType, enabled: boolean) {
+  emailEnabled[type] = enabled;
+}
+
+export function getEmailEnabled(): Record<EmailType, boolean> {
+  return { ...emailEnabled };
+}
+
 async function sendEmail(
   type: EmailType,
   recipient: { to: string } | { userId: string },
   variables: Record<string, string>,
 ): Promise<void> {
+  // Respect the on/off toggle set by admin
+  if (!emailEnabled[type]) return;
+
   try {
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string || '';
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string || '';
