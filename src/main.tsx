@@ -3,6 +3,7 @@ import App from './App';
 import './index.css';
 import './patches/dynamicPagesFix';
 import './lib/cms_staff_patch'; // ensures cms.loginStaff / cms.logoutStaff are always available
+import './lib/cms_missing_methods_patch'; // restores methods deleted in 30f1ced (isGeoBlocked etc.)
 
 // Wait for maintenance guard to give the green light before mounting React.
 // The guard in index.html sets window.__b4betReady = true when maintenance is OFF.
