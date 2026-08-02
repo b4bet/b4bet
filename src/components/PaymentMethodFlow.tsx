@@ -28,6 +28,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
   const [amount, setAmount] = useState('');
   const [utr, setUtr] = useState('');
   const [destination, setDestination] = useState('');
+  const [upiName, setUpiName] = useState('');
   const [details, setDetails] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [popup, setPopup] = useState<PopupState | null>(null);
@@ -66,6 +67,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
       setAmount('');
       setUtr('');
       setDestination('');
+      setUpiName('');
       setDetails('');
       setSubmitting(false);
     }
@@ -116,6 +118,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     setAmount('');
     setUtr('');
     setDestination('');
+    setUpiName('');
     setDetails('');
     setSelectedCrypto(null);
     setSubmitting(false);
@@ -135,6 +138,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
     if (flow === 'withdrawal' && amt > balance) { showPopup('Insufficient Balance', `Available: ${store.currency}${balance.toFixed(2)}`); return; }
 
     if (selected.kind === 'upi' && flow === 'withdrawal' && !destination.trim()) { showPopup('UPI ID Required', 'Enter your UPI ID.'); return; }
+    if (selected.kind === 'upi' && flow === 'withdrawal' && !upiName.trim()) { showPopup('Account Name Required', 'Enter the name registered on your UPI.'); return; }
     if (selected.kind === 'bank' && flow === 'withdrawal' && !destination.trim()) { showPopup('Account Details Required', 'Enter your bank account number.'); return; }
     if (selected.kind === 'crypto') {
       if (!selectedCrypto) { showPopup('Select Currency', 'Please select a crypto currency.'); return; }
@@ -150,6 +154,7 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
 
       if (selected.kind === 'upi') {
         if (destination.trim()) destDetails['upiId'] = destination.trim();
+        if (upiName.trim()) destDetails['upiName'] = upiName.trim();
       } else if (selected.kind === 'bank') {
         if (destination.trim()) { destDetails['accountNumber'] = destination.trim(); destDetails['ifsc'] = details.trim(); }
       } else if (selected.kind === 'crypto' && selectedCrypto) {
@@ -385,10 +390,17 @@ export default function PaymentMethodFlow({ flow, open, onClose }: Props) {
               </div>
             )}
             {flow === 'withdrawal' && (
-              <div>
-                <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Your UPI ID (VPA)</label>
-                <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="yourname@upi" className="input w-full py-3" />
-              </div>
+              <>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Your UPI ID (VPA) <span className="text-coral-400">*</span></label>
+                  <input value={destination} onChange={(e) => setDestination(e.target.value)} placeholder="e.g. 9876543210@upi" className="input w-full py-3" />
+                </div>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold block mb-2">Account Holder Name <span className="text-coral-400">*</span></label>
+                  <input value={upiName} onChange={(e) => setUpiName(e.target.value)} placeholder="e.g. Rahul Kumar" className="input w-full py-3" />
+                  <p className="text-[10px] text-slate-500 mt-1">Enter the exact name linked to your UPI ID</p>
+                </div>
+              </>
             )}
             {flow === 'deposit' && (
               <div>
